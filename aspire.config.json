@@ -1,0 +1,5 @@
+{
+  "appHost": {
+    "path": "pr-timeline-app.AppHost/pr-timeline-app.AppHost.csproj"
+  }
+}
