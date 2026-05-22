@@ -30,6 +30,16 @@ public sealed class GitHubApiSmokeTests(WebApplicationFactory<Program> factory)
     }
 
     [Fact]
+    public async Task LoginStartRejectsNonBrowserMutationRequest()
+    {
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsync("/api/github/login/start", content: null);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
     public async Task PullListRejectsInvalidRepositoryWithoutCallingGitHub()
     {
         using var client = factory.CreateClient();

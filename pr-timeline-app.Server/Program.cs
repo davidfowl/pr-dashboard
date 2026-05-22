@@ -4,8 +4,6 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Microsoft.AspNetCore.Diagnostics;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Caching.Memory;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -14,195 +12,19 @@ builder.AddServiceDefaults();
 
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
-builder.Services.AddMemoryCache();
-builder.Services.AddSingleton<GitHubTokenProvider>();
-builder.Services.AddSingleton<GitHubOAuthDeviceFlow>();
-
-builder.Services.AddHttpClient<GitHubClient>(httpClient =>
-{
-    httpClient.BaseAddress = new Uri("https://api.github.com/");
-
-    // GitHub REST API requires a User-Agent and recommends this version header.
-    // https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api
-    httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("pr-timeline-app", "1.0"));
-    httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-    httpClient.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
-});
-
-builder.Services.AddHttpClient<GitHubOAuthDeviceFlow>(httpClient =>
-{
-    httpClient.BaseAddress = new Uri("https://github.com/");
-    httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("pr-timeline-app", "1.0"));
-    httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-});
+builder.Services.AddGitHubApiServices();
 
 var app = builder.Build();
 
-app.UseExceptionHandler(exceptionApp =>
-{
-    exceptionApp.Run(async context =>
-    {
-        var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
-
-        if (exception is GitHubApiException gitHubException)
-        {
-            context.Response.StatusCode = (int)gitHubException.StatusCode;
-            await Results.Problem(
-                title: "GitHub API request failed",
-                detail: gitHubException.Message,
-                statusCode: (int)gitHubException.StatusCode)
-                .ExecuteAsync(context);
-            return;
-        }
-
-        context.Response.StatusCode = StatusCodes.Status500InternalServerError;
-        await Results.Problem(
-            title: "Unexpected server error",
-            detail: "The local backend hit an unexpected error while processing the request.",
-            statusCode: StatusCodes.Status500InternalServerError)
-            .ExecuteAsync(context);
-    });
-});
+app.UseGitHubApiExceptionHandler();
 
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
-var api = app.MapGroup("/api/github");
-
-api.MapGet("auth-status", async (GitHubTokenProvider tokenProvider, GitHubClient gitHub, CancellationToken cancellationToken) =>
-{
-    var token = await tokenProvider.GetTokenAsync(cancellationToken);
-    var login = token is null ? null : await gitHub.GetCurrentUserLoginAsync(cancellationToken);
-    return Results.Ok(new AuthStatusResponse(
-        Authenticated: token is not null,
-        Configured: GitHubOAuthDeviceFlow.IsConfigured,
-        CanLogin: GitHubOAuthDeviceFlow.IsConfigured,
-        Source: token?.Source,
-        Login: login,
-        Message: token is null
-            ? GitHubOAuthDeviceFlow.IsConfigured
-                ? "Sign in with GitHub to let the dashboard call the GitHub API."
-                : "Set GITHUB_CLIENT_ID for GitHub login, or set GITHUB_TOKEN/GH_TOKEN, or run `gh auth login`."
-            : token.Source == "oauth"
-                ? "Signed in with GitHub for this local session."
-                : "GitHub API token is available to the local backend."));
-});
-
-api.MapPost("login/start", async (
-    HttpContext context,
-    GitHubOAuthDeviceFlow deviceFlow,
-    CancellationToken cancellationToken) =>
-{
-    if (!IsBrowserMutationRequest(context))
-    {
-        return Results.StatusCode(StatusCodes.Status403Forbidden);
-    }
-
-    if (!GitHubOAuthDeviceFlow.IsConfigured)
-    {
-        return Results.Problem(
-            title: "GitHub login is not configured",
-            detail: "Set GITHUB_CLIENT_ID to a GitHub OAuth App client ID with Device Flow enabled.",
-            statusCode: StatusCodes.Status400BadRequest);
-    }
-
-    return Results.Ok(await deviceFlow.StartAsync(cancellationToken));
-});
-
-api.MapPost("login/poll", async (
-    HttpContext context,
-    GitHubOAuthDeviceFlow deviceFlow,
-    CancellationToken cancellationToken) =>
-{
-    if (!IsBrowserMutationRequest(context))
-    {
-        return Results.StatusCode(StatusCodes.Status403Forbidden);
-    }
-
-    return Results.Ok(await deviceFlow.PollAsync(cancellationToken));
-});
-
-api.MapPost("logout", (HttpContext context, GitHubTokenProvider tokenProvider) =>
-{
-    if (!IsBrowserMutationRequest(context))
-    {
-        return Results.StatusCode(StatusCodes.Status403Forbidden);
-    }
-
-    tokenProvider.Logout();
-    return Results.Ok(new { authenticated = false });
-});
-
-static bool IsBrowserMutationRequest(HttpContext context)
-{
-    if (!context.Request.HasJsonContentType())
-    {
-        return false;
-    }
-
-    var origin = context.Request.Headers.Origin.ToString();
-    return string.IsNullOrEmpty(origin)
-        || Uri.TryCreate(origin, UriKind.Absolute, out var uri)
-        && (uri.IsLoopback || uri.Host.Equals(context.Request.Host.Host, StringComparison.OrdinalIgnoreCase));
-}
-
-api.MapGet("pulls", async (
-    [FromQuery] string? repo,
-    [FromQuery] string? state,
-    GitHubClient gitHub,
-    CancellationToken cancellationToken) =>
-{
-    if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
-    {
-        return Results.ValidationProblem(new Dictionary<string, string[]>
-        {
-            ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
-        });
-    }
-
-    var normalizedState = string.IsNullOrWhiteSpace(state) ? "open" : state.Trim().ToLowerInvariant();
-    if (normalizedState is not ("open" or "closed" or "all"))
-    {
-        return Results.ValidationProblem(new Dictionary<string, string[]>
-        {
-            ["state"] = ["State must be open, closed, or all."]
-        });
-    }
-
-    var pulls = await gitHub.GetPullRequestsAsync(repositoryName, normalizedState, cancellationToken);
-    return Results.Ok(new PullRequestListResponse(repositoryName.ToString(), pulls));
-});
-
-api.MapGet("pulls/{number:int}/timeline", async (
-    int number,
-    [FromQuery] string? repo,
-    GitHubClient gitHub,
-    CancellationToken cancellationToken) =>
-{
-    if (number <= 0)
-    {
-        return Results.ValidationProblem(new Dictionary<string, string[]>
-        {
-            ["number"] = ["Pull request number must be greater than zero."]
-        });
-    }
-
-    if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
-    {
-        return Results.ValidationProblem(new Dictionary<string, string[]>
-        {
-            ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
-        });
-    }
-
-    var pullRequest = await gitHub.GetPullRequestDetailsAsync(repositoryName, number, cancellationToken);
-    var timeline = await gitHub.GetPullRequestTimelineAsync(repositoryName, number, cancellationToken);
-    var stats = TimelineStats.Create(pullRequest, timeline);
-
-    return Results.Ok(new TimelineResponse(repositoryName.ToString(), number, stats, timeline));
-});
+app.MapGitHubAuthRoutes();
+app.MapGitHubPullRequestRoutes();
 
 app.MapDefaultEndpoints();
 
