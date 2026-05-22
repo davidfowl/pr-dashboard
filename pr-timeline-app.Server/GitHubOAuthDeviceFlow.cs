@@ -1,4 +1,5 @@
-using System.Text.Json;
+using System.Net.Http.Json;
+using System.Text.Json.Serialization.Metadata;
 
 sealed class GitHubOAuthDeviceFlow(HttpClient httpClient, GitHubTokenProvider tokenProvider)
 {
@@ -29,10 +30,12 @@ sealed class GitHubOAuthDeviceFlow(HttpClient httpClient, GitHubTokenProvider to
                     ["scope"] = Scope
                 }),
                 cancellationToken);
-            using var document = await ReadOAuthJsonAsync(response, cancellationToken);
-            var root = document.RootElement;
+            var result = await ReadOAuthJsonAsync(
+                response,
+                GitHubJsonSerializerContext.Default.DeviceCodeResponseDto,
+                cancellationToken);
 
-            if (root.TryGetProperty("error", out var error))
+            if (!string.IsNullOrWhiteSpace(result.Error))
             {
                 return new DeviceLoginResponse(
                     Status: "error",
@@ -41,16 +44,16 @@ sealed class GitHubOAuthDeviceFlow(HttpClient httpClient, GitHubTokenProvider to
                     VerificationUriComplete: null,
                     IntervalSeconds: 5,
                     ExpiresAt: null,
-                    Message: OAuthErrorMessage(error.GetString(), root));
+                    Message: OAuthErrorMessage(result.Error, result.ErrorDescription));
             }
 
             current = new DeviceLoginState(
-                DeviceCode: root.GetProperty("device_code").GetString() ?? "",
-                UserCode: root.GetProperty("user_code").GetString() ?? "",
-                VerificationUri: root.GetProperty("verification_uri").GetString() ?? "https://github.com/login/device",
-                VerificationUriComplete: root.TryGetProperty("verification_uri_complete", out var complete) ? complete.GetString() : null,
-                IntervalSeconds: root.TryGetProperty("interval", out var interval) ? interval.GetInt32() : 5,
-                ExpiresAt: DateTimeOffset.UtcNow.AddSeconds(root.GetProperty("expires_in").GetInt32()));
+                DeviceCode: result.DeviceCode ?? "",
+                UserCode: result.UserCode ?? "",
+                VerificationUri: result.VerificationUri ?? "https://github.com/login/device",
+                VerificationUriComplete: result.VerificationUriComplete,
+                IntervalSeconds: result.Interval == 0 ? 5 : result.Interval,
+                ExpiresAt: DateTimeOffset.UtcNow.AddSeconds(result.ExpiresIn));
 
             return current.ToResponse("pending", "Enter this code at GitHub to finish signing in.");
         }
@@ -92,18 +95,19 @@ sealed class GitHubOAuthDeviceFlow(HttpClient httpClient, GitHubTokenProvider to
                     ["grant_type"] = "urn:ietf:params:oauth:grant-type:device_code"
                 }),
                 cancellationToken);
-            using var document = await ReadOAuthJsonAsync(response, cancellationToken);
-            var root = document.RootElement;
+            var result = await ReadOAuthJsonAsync(
+                response,
+                GitHubJsonSerializerContext.Default.OAuthTokenResponseDto,
+                cancellationToken);
 
-            if (root.TryGetProperty("access_token", out var accessToken)
-                && accessToken.GetString() is { Length: > 0 } token)
+            if (!string.IsNullOrWhiteSpace(result.AccessToken))
             {
-                tokenProvider.SetOAuthToken(token);
+                tokenProvider.SetOAuthToken(result.AccessToken);
                 current = null;
                 return new DeviceLoginResponse("authorized", null, null, null, 5, null, "Signed in with GitHub.");
             }
 
-            var error = root.TryGetProperty("error", out var errorProperty) ? errorProperty.GetString() : "authorization_pending";
+            var error = result.Error ?? "authorization_pending";
             if (error == "slow_down")
             {
                 current = current with { IntervalSeconds = current.IntervalSeconds + 5 };
@@ -120,8 +124,8 @@ sealed class GitHubOAuthDeviceFlow(HttpClient httpClient, GitHubTokenProvider to
                 "expired_token" => "expired",
                 _ => error ?? "pending"
             };
-            return current?.ToResponse(status, OAuthErrorMessage(error, root))
-                ?? new DeviceLoginResponse(status, null, null, null, 5, null, OAuthErrorMessage(error, root));
+            return current?.ToResponse(status, OAuthErrorMessage(error, result.ErrorDescription))
+                ?? new DeviceLoginResponse(status, null, null, null, 5, null, OAuthErrorMessage(error, result.ErrorDescription));
         }
         finally
         {
@@ -129,14 +133,17 @@ sealed class GitHubOAuthDeviceFlow(HttpClient httpClient, GitHubTokenProvider to
         }
     }
 
-    private static async Task<JsonDocument> ReadOAuthJsonAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    private static async Task<T> ReadOAuthJsonAsync<T>(
+        HttpResponseMessage response,
+        JsonTypeInfo<T> jsonTypeInfo,
+        CancellationToken cancellationToken)
     {
         response.EnsureSuccessStatusCode();
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        return await response.Content.ReadFromJsonAsync(jsonTypeInfo, cancellationToken)
+            ?? throw new InvalidOperationException("GitHub OAuth returned an empty response.");
     }
 
-    private static string OAuthErrorMessage(string? error, JsonElement root) =>
+    private static string OAuthErrorMessage(string? error, string? errorDescription) =>
         error switch
         {
             "authorization_pending" => "Waiting for GitHub authorization.",
@@ -144,9 +151,7 @@ sealed class GitHubOAuthDeviceFlow(HttpClient httpClient, GitHubTokenProvider to
             "expired_token" => "The GitHub login code expired.",
             "access_denied" => "GitHub login was canceled.",
             "device_flow_disabled" => "Enable Device Flow on the GitHub OAuth App used by GITHUB_CLIENT_ID.",
-            _ => root.TryGetProperty("error_description", out var description)
-                ? description.GetString() ?? "GitHub login failed."
-                : "GitHub login failed."
+            _ => errorDescription ?? "GitHub login failed."
         };
 
     private sealed record DeviceLoginState(

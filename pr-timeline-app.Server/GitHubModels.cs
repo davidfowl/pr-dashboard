@@ -1,5 +1,6 @@
 using System.Net;
-using System.Text.Json;
+using System.Globalization;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 
 readonly partial record struct RepositoryName(string Owner, string Name)
@@ -56,40 +57,28 @@ record PullRequestSummary(
     IReadOnlyList<string> RequestedReviewers,
     ReviewStatus Review)
 {
-    public static PullRequestSummary FromJson(JsonElement element) =>
+    public static PullRequestSummary FromDto(GitHubPullRequestDto pullRequest) =>
         new(
-            element.GetProperty("number").GetInt32(),
-            element.GetProperty("title").GetString() ?? "",
-            element.GetProperty("state").GetString() ?? "",
-            element.GetProperty("draft").GetBoolean(),
-            GetNestedString(element, "user", "login") ?? "unknown",
-            element.GetProperty("html_url").GetString() ?? "",
-            element.GetProperty("created_at").GetDateTimeOffset(),
-            element.GetProperty("updated_at").GetDateTimeOffset(),
-            element.GetProperty("labels")
-                .EnumerateArray()
-                .Select(label => label.GetProperty("name").GetString())
+            pullRequest.Number,
+            pullRequest.Title ?? "",
+            pullRequest.State ?? "",
+            pullRequest.Draft,
+            pullRequest.User?.Login ?? "unknown",
+            pullRequest.HtmlUrl ?? "",
+            pullRequest.CreatedAt,
+            pullRequest.UpdatedAt,
+            pullRequest.Labels
+                .Select(label => label.Name)
                 .Where(label => !string.IsNullOrWhiteSpace(label))
                 .Select(label => label!)
                 .ToArray(),
-            element.GetProperty("requested_reviewers")
-                .EnumerateArray()
-                .Select(reviewer => reviewer.GetProperty("login").GetString())
-                .Concat(element.GetProperty("requested_teams")
-                    .EnumerateArray()
-                    .Select(team => team.GetProperty("name").GetString()))
+            pullRequest.RequestedReviewers
+                .Select(reviewer => reviewer.Login)
+                .Concat(pullRequest.RequestedTeams.Select(team => team.Name))
                 .Where(reviewer => !string.IsNullOrWhiteSpace(reviewer))
                 .Select(reviewer => reviewer!)
                 .ToArray(),
             ReviewStatus.Waiting);
-
-    private static string? GetNestedString(JsonElement element, string propertyName, string nestedPropertyName) =>
-        element.TryGetProperty(propertyName, out var nested)
-        && nested.ValueKind == JsonValueKind.Object
-        && nested.TryGetProperty(nestedPropertyName, out var nestedValue)
-        && nestedValue.ValueKind == JsonValueKind.String
-            ? nestedValue.GetString()
-            : null;
 }
 
 record ReviewStatus(
@@ -113,19 +102,11 @@ record ReviewStatus(
 
 record ReviewEvent(string Actor, string State, DateTimeOffset SubmittedAt)
 {
-    public static ReviewEvent FromJson(JsonElement element) =>
+    public static ReviewEvent FromDto(GitHubReviewDto review) =>
         new(
-            Actor: GetNestedString(element, "user", "login") ?? "unknown",
-            State: element.GetProperty("state").GetString() ?? "UNKNOWN",
-            SubmittedAt: element.GetProperty("submitted_at").GetDateTimeOffset());
-
-    private static string? GetNestedString(JsonElement element, string propertyName, string nestedPropertyName) =>
-        element.TryGetProperty(propertyName, out var nested)
-        && nested.ValueKind == JsonValueKind.Object
-        && nested.TryGetProperty(nestedPropertyName, out var nestedValue)
-        && nestedValue.ValueKind == JsonValueKind.String
-            ? nestedValue.GetString()
-            : null;
+            Actor: review.User?.Login ?? "unknown",
+            State: review.State ?? "UNKNOWN",
+            SubmittedAt: review.SubmittedAt);
 }
 
 record PullRequestDetails(
@@ -134,27 +115,12 @@ record PullRequestDetails(
     DateTimeOffset? MergedAt,
     int CommitCount)
 {
-    public static PullRequestDetails FromJson(JsonElement element) =>
+    public static PullRequestDetails FromDto(GitHubPullRequestDto pullRequest) =>
         new(
-            element.GetProperty("created_at").GetDateTimeOffset(),
-            GetNestedString(element, "user", "login") ?? "unknown",
-            GetNullableDate(element, "merged_at"),
-            element.GetProperty("commits").GetInt32());
-
-    private static DateTimeOffset? GetNullableDate(JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out var value)
-        && value.ValueKind == JsonValueKind.String
-        && value.TryGetDateTimeOffset(out var date)
-            ? date
-            : null;
-
-    private static string? GetNestedString(JsonElement element, string propertyName, string nestedPropertyName) =>
-        element.TryGetProperty(propertyName, out var nested)
-        && nested.ValueKind == JsonValueKind.Object
-        && nested.TryGetProperty(nestedPropertyName, out var nestedValue)
-        && nestedValue.ValueKind == JsonValueKind.String
-            ? nestedValue.GetString()
-            : null;
+            pullRequest.CreatedAt,
+            pullRequest.User?.Login ?? "unknown",
+            pullRequest.MergedAt,
+            pullRequest.Commits);
 }
 
 record TimelineResponse(string Repository, int Number, TimelineStats Stats, IReadOnlyList<TimelineItem> Items);
@@ -312,49 +278,49 @@ record TimelineItem(
     string? Body,
     string? HtmlUrl)
 {
-    public static TimelineItem FromJson(JsonElement element)
+    public static TimelineItem FromDto(GitHubTimelineItemDto item)
     {
-        var eventName = GetString(element, "event") ?? "event";
-        var occurredAt = GetDate(element, "created_at")
-            ?? GetDate(element, "submitted_at")
-            ?? GetDate(element, "committed_at")
-            ?? GetNestedDate(element, "author", "date")
-            ?? GetNestedDate(element, "committer", "date")
+        var eventName = item.Event ?? "event";
+        var occurredAt = item.CreatedAt
+            ?? item.SubmittedAt
+            ?? item.CommittedAt
+            ?? item.Author?.Date
+            ?? item.Committer?.Date
             ?? DateTimeOffset.MinValue;
-        var actor = GetNestedString(element, "actor", "login")
-            ?? GetNestedString(element, "user", "login")
-            ?? GetNestedString(element, "author", "login")
-            ?? GetNestedString(element, "author", "name")
-            ?? GetNestedString(element, "committer", "login")
-            ?? GetNestedString(element, "committer", "name")
+        var actor = item.Actor?.Login
+            ?? item.User?.Login
+            ?? item.Author?.Login
+            ?? item.Author?.Name
+            ?? item.Committer?.Login
+            ?? item.Committer?.Name
             ?? "unknown";
 
         return new TimelineItem(
-            Id: GetString(element, "id") ?? GetString(element, "sha") ?? $"{eventName}-{occurredAt.ToUnixTimeMilliseconds()}",
+            Id: item.Id?.ToString(CultureInfo.InvariantCulture) ?? item.Sha ?? $"{eventName}-{occurredAt.ToUnixTimeMilliseconds()}",
             Event: eventName,
             Actor: actor,
             OccurredAt: occurredAt,
-            State: GetString(element, "state"),
-            Summary: BuildSummary(element, eventName, actor),
-            Body: GetString(element, "body"),
-            HtmlUrl: GetString(element, "html_url"));
+            State: item.State,
+            Summary: BuildSummary(item, eventName, actor),
+            Body: item.Body,
+            HtmlUrl: item.HtmlUrl);
     }
 
-    private static string BuildSummary(JsonElement element, string eventName, string actor)
+    private static string BuildSummary(GitHubTimelineItemDto item, string eventName, string actor)
     {
         var normalizedEvent = eventName.Replace('_', ' ');
         return eventName switch
         {
             "commented" => $"{actor} commented",
-            "committed" => $"{actor} pushed commit {ShortSha(GetString(element, "sha") ?? GetString(element, "commit_id"))}",
-            "reviewed" => $"{actor} reviewed with state {GetString(element, "state") ?? "unknown"}",
-            "review_requested" => $"{actor} requested review from {GetNestedString(element, "requested_reviewer", "login") ?? GetNestedString(element, "requested_team", "name") ?? "someone"}",
+            "committed" => $"{actor} pushed commit {ShortSha(item.Sha ?? item.CommitId)}",
+            "reviewed" => $"{actor} reviewed with state {item.State ?? "unknown"}",
+            "review_requested" => $"{actor} requested review from {item.RequestedReviewer?.Login ?? item.RequestedTeam?.Name ?? "someone"}",
             "ready_for_review" => $"{actor} marked the PR ready for review",
             "converted_to_draft" => $"{actor} converted the PR to draft",
-            "labeled" => $"{actor} added label {GetNestedString(element, "label", "name") ?? "unknown"}",
-            "unlabeled" => $"{actor} removed label {GetNestedString(element, "label", "name") ?? "unknown"}",
-            "assigned" => $"{actor} assigned {GetNestedString(element, "assignee", "login") ?? "someone"}",
-            "unassigned" => $"{actor} unassigned {GetNestedString(element, "assignee", "login") ?? "someone"}",
+            "labeled" => $"{actor} added label {item.Label?.Name ?? "unknown"}",
+            "unlabeled" => $"{actor} removed label {item.Label?.Name ?? "unknown"}",
+            "assigned" => $"{actor} assigned {item.Assignee?.Login ?? "someone"}",
+            "unassigned" => $"{actor} unassigned {item.Assignee?.Login ?? "someone"}",
             "cross-referenced" => $"{actor} cross-referenced another issue or PR",
             "renamed" => $"{actor} renamed the title",
             "closed" => $"{actor} closed the PR",
@@ -367,43 +333,102 @@ record TimelineItem(
     private static string ShortSha(string? sha) => string.IsNullOrWhiteSpace(sha)
         ? "unknown"
         : sha[..Math.Min(7, sha.Length)];
+}
 
-    private static string? GetString(JsonElement element, string propertyName)
-    {
-        if (!element.TryGetProperty(propertyName, out var value))
-        {
-            return null;
-        }
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
+[JsonSerializable(typeof(DeviceCodeResponseDto))]
+[JsonSerializable(typeof(GitHubActorDto))]
+[JsonSerializable(typeof(GitHubErrorDto))]
+[JsonSerializable(typeof(GitHubPullRequestDto))]
+[JsonSerializable(typeof(GitHubPullRequestDto[]))]
+[JsonSerializable(typeof(GitHubReviewDto[]))]
+[JsonSerializable(typeof(GitHubTimelineItemDto[]))]
+[JsonSerializable(typeof(OAuthTokenResponseDto))]
+partial class GitHubJsonSerializerContext : JsonSerializerContext;
 
-        return value.ValueKind switch
-        {
-            JsonValueKind.String => value.GetString(),
-            JsonValueKind.Number => value.GetRawText(),
-            _ => null
-        };
-    }
+sealed class GitHubActorDto
+{
+    public string? Login { get; init; }
+    public string? Name { get; init; }
+    public DateTimeOffset? Date { get; init; }
+}
 
-    private static DateTimeOffset? GetDate(JsonElement element, string propertyName) =>
-        element.TryGetProperty(propertyName, out var value)
-        && value.ValueKind == JsonValueKind.String
-        && value.TryGetDateTimeOffset(out var date)
-            ? date
-            : null;
+sealed class GitHubErrorDto
+{
+    public string? Message { get; init; }
+}
 
-    private static DateTimeOffset? GetNestedDate(JsonElement element, string propertyName, string nestedPropertyName) =>
-        element.TryGetProperty(propertyName, out var nested)
-        && nested.ValueKind == JsonValueKind.Object
-        && nested.TryGetProperty(nestedPropertyName, out var nestedValue)
-        && nestedValue.ValueKind == JsonValueKind.String
-        && nestedValue.TryGetDateTimeOffset(out var date)
-            ? date
-            : null;
+sealed class GitHubLabelDto
+{
+    public string? Name { get; init; }
+}
 
-    private static string? GetNestedString(JsonElement element, string propertyName, string nestedPropertyName) =>
-        element.TryGetProperty(propertyName, out var nested)
-        && nested.ValueKind == JsonValueKind.Object
-        && nested.TryGetProperty(nestedPropertyName, out var nestedValue)
-        && nestedValue.ValueKind == JsonValueKind.String
-            ? nestedValue.GetString()
-            : null;
+sealed class GitHubTeamDto
+{
+    public string? Name { get; init; }
+}
+
+sealed class GitHubPullRequestDto
+{
+    public int Number { get; init; }
+    public string? Title { get; init; }
+    public string? State { get; init; }
+    public bool Draft { get; init; }
+    public GitHubActorDto? User { get; init; }
+    public string? HtmlUrl { get; init; }
+    public DateTimeOffset CreatedAt { get; init; }
+    public DateTimeOffset UpdatedAt { get; init; }
+    public GitHubLabelDto[] Labels { get; init; } = [];
+    public GitHubActorDto[] RequestedReviewers { get; init; } = [];
+    public GitHubTeamDto[] RequestedTeams { get; init; } = [];
+    public DateTimeOffset? MergedAt { get; init; }
+    public int Commits { get; init; }
+}
+
+sealed class GitHubReviewDto
+{
+    public GitHubActorDto? User { get; init; }
+    public string? State { get; init; }
+    public DateTimeOffset SubmittedAt { get; init; }
+}
+
+sealed class GitHubTimelineItemDto
+{
+    public long? Id { get; init; }
+    public string? Sha { get; init; }
+    public string? CommitId { get; init; }
+    public string? Event { get; init; }
+    public GitHubActorDto? Actor { get; init; }
+    public GitHubActorDto? User { get; init; }
+    public GitHubActorDto? Author { get; init; }
+    public GitHubActorDto? Committer { get; init; }
+    public DateTimeOffset? CreatedAt { get; init; }
+    public DateTimeOffset? SubmittedAt { get; init; }
+    public DateTimeOffset? CommittedAt { get; init; }
+    public string? State { get; init; }
+    public string? Body { get; init; }
+    public string? HtmlUrl { get; init; }
+    public GitHubActorDto? RequestedReviewer { get; init; }
+    public GitHubTeamDto? RequestedTeam { get; init; }
+    public GitHubLabelDto? Label { get; init; }
+    public GitHubActorDto? Assignee { get; init; }
+}
+
+sealed class DeviceCodeResponseDto
+{
+    public string? DeviceCode { get; init; }
+    public string? UserCode { get; init; }
+    public string? VerificationUri { get; init; }
+    public string? VerificationUriComplete { get; init; }
+    public int Interval { get; init; }
+    public int ExpiresIn { get; init; }
+    public string? Error { get; init; }
+    public string? ErrorDescription { get; init; }
+}
+
+sealed class OAuthTokenResponseDto
+{
+    public string? AccessToken { get; init; }
+    public string? Error { get; init; }
+    public string? ErrorDescription { get; init; }
 }

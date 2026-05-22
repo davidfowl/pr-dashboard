@@ -1,7 +1,8 @@
 using System.Net;
 using System.Net.Http.Headers;
-using System.Text.Json;
+using System.Net.Http.Json;
 using System.Text.RegularExpressions;
+using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.Caching.Memory;
 
 sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tokenProvider, IMemoryCache cache)
@@ -13,11 +14,11 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         return await cache.GetOrCreateAsync($"current-user:{tokenProvider.AuthGeneration}", async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);
-            using var document = await SendGitHubRequestAsync("user", cancellationToken);
-            return document.RootElement.TryGetProperty("login", out var login)
-                && login.ValueKind == JsonValueKind.String
-                ? login.GetString()
-                : null;
+            var user = await SendGitHubRequestAsync(
+                "user",
+                GitHubJsonSerializerContext.Default.GitHubActorDto,
+                cancellationToken);
+            return user.Login;
         });
     }
 
@@ -31,10 +32,11 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         {
             entry.AbsoluteExpirationRelativeToNow = CacheDuration;
             var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls?state={Uri.EscapeDataString(state)}&sort=updated&direction=desc&per_page=30";
-            using var document = await SendGitHubRequestAsync(url, cancellationToken);
-
-            var pullRequests = document.RootElement.EnumerateArray()
-                .Select(PullRequestSummary.FromJson)
+            var pullRequests = (await SendGitHubRequestAsync(
+                    url,
+                    GitHubJsonSerializerContext.Default.GitHubPullRequestDtoArray,
+                    cancellationToken))
+                .Select(PullRequestSummary.FromDto)
                 .ToArray();
 
             var reviewTasks = pullRequests.ToDictionary(
@@ -58,12 +60,13 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         return await cache.GetOrCreateAsync(cacheKey, async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = CacheDuration;
-            using var document = await SendGitHubRequestAsync(
+            var reviews = await SendGitHubRequestAsync(
                 $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}/reviews?per_page=100",
+                GitHubJsonSerializerContext.Default.GitHubReviewDtoArray,
                 cancellationToken);
 
-            var humanReviews = document.RootElement.EnumerateArray()
-                .Select(ReviewEvent.FromJson)
+            var humanReviews = reviews
+                .Select(ReviewEvent.FromDto)
                 .Where(review => !IsBotActor(review.Actor))
                 .OrderBy(review => review.SubmittedAt)
                 .ToArray();
@@ -107,24 +110,22 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             // the mixed event stream behind the GitHub.com PR timeline UI.
             // https://docs.github.com/en/rest/issues/timeline
             var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues/{number}/timeline?per_page=100";
-            var elements = new List<JsonElement>();
+            var items = new List<GitHubTimelineItemDto>();
 
             for (var page = 0; page < 3 && url is not null; page++)
             {
                 using var response = await SendAuthorizedRequestAsync(url, cancellationToken);
-                var document = await ReadGitHubJsonAsync(response, cancellationToken);
+                var pageItems = await ReadGitHubJsonAsync(
+                    response,
+                    GitHubJsonSerializerContext.Default.GitHubTimelineItemDtoArray,
+                    cancellationToken);
 
-                foreach (var element in document.RootElement.EnumerateArray())
-                {
-                    elements.Add(element.Clone());
-                }
-
-                document.Dispose();
+                items.AddRange(pageItems);
                 url = GetNextPageUrl(response);
             }
 
-            return elements
-                .Select(TimelineItem.FromJson)
+            return items
+                .Select(TimelineItem.FromDto)
                 .OrderBy(item => item.OccurredAt)
                 .ToArray();
         }) ?? [];
@@ -139,18 +140,22 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         return await cache.GetOrCreateAsync(cacheKey, async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = CacheDuration;
-            using var document = await SendGitHubRequestAsync(
+            var pullRequest = await SendGitHubRequestAsync(
                 $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}",
+                GitHubJsonSerializerContext.Default.GitHubPullRequestDto,
                 cancellationToken);
 
-            return PullRequestDetails.FromJson(document.RootElement);
+            return PullRequestDetails.FromDto(pullRequest);
         }) ?? throw new GitHubApiException(HttpStatusCode.NotFound, $"Pull request #{number} was not found.");
     }
 
-    private async Task<JsonDocument> SendGitHubRequestAsync(string url, CancellationToken cancellationToken)
+    private async Task<T> SendGitHubRequestAsync<T>(
+        string url,
+        JsonTypeInfo<T> jsonTypeInfo,
+        CancellationToken cancellationToken)
     {
         using var response = await SendAuthorizedRequestAsync(url, cancellationToken);
-        return await ReadGitHubJsonAsync(response, cancellationToken);
+        return await ReadGitHubJsonAsync(response, jsonTypeInfo, cancellationToken);
     }
 
     private async Task<HttpResponseMessage> SendAuthorizedRequestAsync(string url, CancellationToken cancellationToken)
@@ -169,7 +174,10 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         return await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
     }
 
-    private static async Task<JsonDocument> ReadGitHubJsonAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    private static async Task<T> ReadGitHubJsonAsync<T>(
+        HttpResponseMessage response,
+        JsonTypeInfo<T> jsonTypeInfo,
+        CancellationToken cancellationToken)
     {
         if (!response.IsSuccessStatusCode)
         {
@@ -177,20 +185,19 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             throw new GitHubApiException(response.StatusCode, message);
         }
 
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        return await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        return await response.Content.ReadFromJsonAsync(jsonTypeInfo, cancellationToken)
+            ?? throw new GitHubApiException(response.StatusCode, "GitHub API returned an empty response.");
     }
 
     private static async Task<string> ReadGitHubErrorMessageAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
-        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+        var error = await response.Content.ReadFromJsonAsync(
+            GitHubJsonSerializerContext.Default.GitHubErrorDto,
+            cancellationToken);
 
-        if (document.RootElement.TryGetProperty("message", out var messageElement)
-            && messageElement.ValueKind == JsonValueKind.String
-            && messageElement.GetString() is { Length: > 0 } message)
+        if (!string.IsNullOrWhiteSpace(error?.Message))
         {
-            return $"GitHub API returned {(int)response.StatusCode}: {message}";
+            return $"GitHub API returned {(int)response.StatusCode}: {error.Message}";
         }
 
         return $"GitHub API returned {(int)response.StatusCode}.";
