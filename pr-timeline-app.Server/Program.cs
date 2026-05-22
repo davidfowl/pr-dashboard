@@ -210,6 +210,8 @@ app.UseFileServer();
 
 app.Run();
 
+public partial class Program;
+
 sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tokenProvider, IMemoryCache cache)
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);

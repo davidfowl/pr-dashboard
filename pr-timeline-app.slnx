@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="pr-timeline-app.Server/pr-timeline-app.Server.csproj" />
+  <Project Path="pr-timeline-app.Tests/pr-timeline-app.Tests.csproj" />
 </Solution>

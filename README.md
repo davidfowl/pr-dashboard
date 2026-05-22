@@ -28,3 +28,11 @@ To enable in-app GitHub login, set `GITHUB_CLIENT_ID` to a GitHub OAuth App clie
 dotnet build pr-timeline-app.slnx
 npm --prefix frontend run build -- --mode development
 ```
+
+## Verify
+
+Run the full local regression check before and after backend refactors:
+
+```bash
+./scripts/verify.sh
+```
