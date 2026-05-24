@@ -87,6 +87,8 @@ dotnet test pr-timeline-app.slnx --no-build
 
 The AppHost is configured with an Azure Container Apps environment named `aca`. In publish/deploy mode, the ASP.NET Core server is the public entrypoint and serves the built Vite frontend from `wwwroot`.
 
+The generated Container Apps deployment uses the Consumption workload profile and allows the server app to scale to zero replicas when idle. This keeps idle compute cost low while preserving the same public endpoint, with the tradeoff that the first request after an idle period can wait for a cold start.
+
 Create a GitHub OAuth App before deploying. For a manual deployment, authenticate with Azure CLI and provide the Azure target plus GitHub OAuth parameters:
 
 ```bash

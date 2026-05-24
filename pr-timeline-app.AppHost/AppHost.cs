@@ -6,7 +6,11 @@ builder.AddAzureContainerAppEnvironment("aca");
 
 var server = builder.AddProject<Projects.pr_timeline_app_Server>("server")
     .WithHttpHealthCheck("/health")
-    .WithExternalHttpEndpoints();
+    .WithExternalHttpEndpoints()
+    .PublishAsAzureContainerApp((_, app) =>
+    {
+        app.Template.Scale.MinReplicas = 0;
+    });
 
 if (builder.ExecutionContext.IsPublishMode)
 {
