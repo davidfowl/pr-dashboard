@@ -198,10 +198,18 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         return await cache.GetOrCreateAsync(cacheKey, async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = CacheDuration;
-            var issue = await SendGitHubRequestAsync(
-                $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues/{number}",
-                GitHubJsonSerializerContext.Default.GitHubIssueDto,
-                cancellationToken);
+            GitHubIssueDto issue;
+            try
+            {
+                issue = await SendGitHubRequestAsync(
+                    $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues/{number}",
+                    GitHubJsonSerializerContext.Default.GitHubIssueDto,
+                    cancellationToken);
+            }
+            catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+            {
+                return null;
+            }
 
             return issue.PullRequest is null
                 ? LinkedIssueSummary.FromDto(repositoryName, issue)
