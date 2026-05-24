@@ -27,6 +27,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\pr-timeline-app.AppHost\pr-timeline-app.AppHost.csproj" />
+    <ProjectReference Include="..\pr-timeline-app.Server\pr-timeline-app.Server.csproj" />
   </ItemGroup>
 
 </Project>
