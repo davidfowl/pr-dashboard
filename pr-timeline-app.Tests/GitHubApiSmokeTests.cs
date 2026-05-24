@@ -3,38 +3,8 @@ using System.Text.Json;
 
 namespace pr_timeline_app.Tests;
 
-public sealed class GitHubApiSmokeTests : IAsyncLifetime
+public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<AppHostFixture>
 {
-    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
-    private DistributedApplication? app;
-    private HttpClient? client;
-
-    public async Task InitializeAsync()
-    {
-        var cancellationToken = CancellationToken.None;
-        var appHost = await DistributedApplicationTestingBuilder
-            .CreateAsync<Projects.pr_timeline_app_AppHost>(["IncludeFrontend=false"], cancellationToken);
-
-        app = await appHost.BuildAsync(cancellationToken)
-            .WaitAsync(DefaultTimeout, cancellationToken);
-        await app.StartAsync(cancellationToken)
-            .WaitAsync(DefaultTimeout, cancellationToken);
-        await app.ResourceNotifications.WaitForResourceHealthyAsync("server", cancellationToken)
-            .WaitAsync(DefaultTimeout, cancellationToken);
-
-        client = app.CreateHttpClient("server");
-    }
-
-    public async Task DisposeAsync()
-    {
-        client?.Dispose();
-
-        if (app is not null)
-        {
-            await app.DisposeAsync().AsTask();
-        }
-    }
-
     [Fact]
     public async Task AuthStatusReportsLoggedOutAfterLocalLogout()
     {
@@ -95,5 +65,44 @@ public sealed class GitHubApiSmokeTests : IAsyncLifetime
         Assert.Contains("greater than zero", numberErrors[0].GetString());
     }
 
-    private HttpClient Client => client ?? throw new InvalidOperationException("Test app was not initialized.");
+    private HttpClient Client => fixture.Client;
+}
+
+public sealed class AppHostFixture : IAsyncLifetime
+{
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(2);
+    private DistributedApplication? app;
+    private HttpClient? client;
+
+    public HttpClient Client => client ?? throw new InvalidOperationException("Test app was not initialized.");
+
+    public async Task InitializeAsync()
+    {
+        var cancellationToken = CancellationToken.None;
+        var appHost = await DistributedApplicationTestingBuilder
+            .CreateAsync<Projects.pr_timeline_app_AppHost>(["IncludeFrontend=false"], cancellationToken);
+
+        app = await appHost.BuildAsync(cancellationToken)
+            .WaitAsync(DefaultTimeout, cancellationToken);
+
+        // GitHub-hosted runners can be much slower to initialize the Aspire test host than a
+        // developer machine. Start the AppHost once per test class so startup cost and DCP
+        // initialization happen once, then give health checks a CI-sized timeout.
+        await app.StartAsync(cancellationToken)
+            .WaitAsync(DefaultTimeout, cancellationToken);
+        await app.ResourceNotifications.WaitForResourceHealthyAsync("server", cancellationToken)
+            .WaitAsync(DefaultTimeout, cancellationToken);
+
+        client = app.CreateHttpClient("server");
+    }
+
+    public async Task DisposeAsync()
+    {
+        client?.Dispose();
+
+        if (app is not null)
+        {
+            await app.DisposeAsync().AsTask();
+        }
+    }
 }
