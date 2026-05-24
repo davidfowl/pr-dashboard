@@ -18,16 +18,16 @@ The frontend is served at <http://localhost:5173/>. API requests are proxied to 
 
 ## GitHub authentication
 
-The app can use an existing local token from `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`.
+In development, the app can use an existing local token from `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`. To use in-app GitHub login locally, set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` on the server.
 
-To enable in-app GitHub login, create a GitHub OAuth App and set both values before starting the AppHost:
+Outside development, GitHub OAuth is required. Create a GitHub OAuth App and provide both publish/deploy parameters:
 
 ```bash
-export GITHUB_CLIENT_ID=...
-export GITHUB_CLIENT_SECRET=...
+export Parameters__github_client_id=...
+export Parameters__github_client_secret=...
 ```
 
-Configure the OAuth App callback URL to the backend callback path, for example `https://localhost:<server-port>/signin-github` for the local server URL shown by Aspire.
+Configure the OAuth App callback URL to the backend callback path, for example `https://<app-host>/signin-github`.
 
 ## Build
 

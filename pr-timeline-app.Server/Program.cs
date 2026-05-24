@@ -4,7 +4,7 @@ builder.AddServiceDefaults();
 
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
-builder.Services.AddGitHubApiServices();
+builder.Services.AddGitHubApiServices(builder.Environment);
 
 var app = builder.Build();
 

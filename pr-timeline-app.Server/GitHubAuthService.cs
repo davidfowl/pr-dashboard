@@ -1,4 +1,4 @@
-sealed class GitHubAuthService(GitHubTokenProvider tokenProvider, GitHubClient gitHub)
+sealed class GitHubAuthService(GitHubTokenProvider tokenProvider, GitHubClient gitHub, IHostEnvironment environment)
 {
     public async Task<AuthStatusResponse> GetStatusAsync(CancellationToken cancellationToken)
     {
@@ -14,7 +14,9 @@ sealed class GitHubAuthService(GitHubTokenProvider tokenProvider, GitHubClient g
             Message: token is null
                 ? GitHubOAuthConfiguration.IsConfigured
                     ? "Sign in with GitHub to let the dashboard call the GitHub API."
-                    : "Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET for GitHub login, or set GITHUB_TOKEN/GH_TOKEN, or run `gh auth login`."
+                    : environment.IsDevelopment()
+                        ? "Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET for GitHub login, or set GITHUB_TOKEN/GH_TOKEN, or run `gh auth login`."
+                        : "GitHub login is not configured. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET."
                 : token.Source == "oauth"
                     ? "Signed in with GitHub for this local session."
                     : "GitHub API token is available to the local backend.");

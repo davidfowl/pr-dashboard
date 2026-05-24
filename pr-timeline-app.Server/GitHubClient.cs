@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.Caching.Memory;
 
-sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tokenProvider, IMemoryCache cache)
+sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tokenProvider, IMemoryCache cache, IHostEnvironment environment)
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
 
@@ -170,7 +170,9 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         {
             throw new GitHubApiException(
                 HttpStatusCode.Unauthorized,
-                "GitHub authentication is required. Set GITHUB_TOKEN or GH_TOKEN, or run `gh auth login`.");
+                environment.IsDevelopment()
+                    ? "GitHub authentication is required. Set GITHUB_TOKEN or GH_TOKEN, run `gh auth login`, or sign in with GitHub."
+                    : "GitHub authentication is required. Sign in with GitHub.");
         }
 
         var request = new HttpRequestMessage(HttpMethod.Get, url);

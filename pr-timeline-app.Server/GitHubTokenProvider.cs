@@ -4,7 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Authentication;
 
-sealed class GitHubTokenProvider(IHttpContextAccessor httpContextAccessor)
+sealed class GitHubTokenProvider(IHttpContextAccessor httpContextAccessor, IHostEnvironment environment)
 {
     private readonly SemaphoreSlim semaphore = new(1, 1);
     private TokenResult? cachedGitHubCliToken;
@@ -27,7 +27,7 @@ sealed class GitHubTokenProvider(IHttpContextAccessor httpContextAccessor)
             return new TokenResult(accessToken, "oauth");
         }
 
-        if (suppressFallback)
+        if (suppressFallback || !environment.IsDevelopment())
         {
             return null;
         }

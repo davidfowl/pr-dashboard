@@ -4,8 +4,16 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 
 public static class GitHubServiceCollectionExtensions
 {
-    public static IServiceCollection AddGitHubApiServices(this IServiceCollection services)
+    public static IServiceCollection AddGitHubApiServices(this IServiceCollection services, IHostEnvironment environment)
     {
+        ArgumentNullException.ThrowIfNull(environment);
+
+        if (!environment.IsDevelopment() && !GitHubOAuthConfiguration.IsConfigured)
+        {
+            throw new InvalidOperationException(
+                "GitHub OAuth must be configured outside Development. Set GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET.");
+        }
+
         services.AddHttpContextAccessor();
         services.AddMemoryCache();
         services.AddScoped<GitHubAuthService>();
