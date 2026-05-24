@@ -1,0 +1,73 @@
+name: Deploy to Azure Container Apps
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy with Aspire
+    runs-on: ubuntu-latest
+    environment: production
+
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      DOTNET_NOLOGO: true
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: preview
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Aspire CLI
+        run: |
+          curl -sSL https://aspire.dev/install.sh | bash -s -- --version 13.4.0-preview.1.26273.3
+          echo "$HOME/.aspire/bin" >> "$GITHUB_PATH"
+
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci --no-audit --no-fund
+
+      - name: Build
+        run: dotnet build pr-timeline-app.slnx --nologo
+
+      - name: Test
+        run: dotnet test pr-timeline-app.slnx --no-build --nologo
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy with Aspire
+        run: aspire deploy --apphost pr-timeline-app.AppHost/pr-timeline-app.AppHost.csproj --environment Production --non-interactive
+        env:
+          Azure__SubscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          Azure__Location: ${{ vars.AZURE_LOCATION }}
+          Azure__ResourceGroup: ${{ vars.AZURE_RESOURCE_GROUP }}
+          Parameters__github_client_id: ${{ vars.OAUTH_GITHUB_CLIENT_ID }}
+          Parameters__github_client_secret: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}

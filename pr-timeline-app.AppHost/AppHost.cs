@@ -2,6 +2,8 @@ using Microsoft.Extensions.Configuration;
 
 var builder = DistributedApplication.CreateBuilder(args);
 
+builder.AddAzureContainerAppEnvironment("aca");
+
 var server = builder.AddProject<Projects.pr_timeline_app_Server>("server")
     .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints();
@@ -20,9 +22,13 @@ if (builder.Configuration.GetValue("IncludeFrontend", true))
 {
     var webfrontend = builder.AddViteApp("webfrontend", "../frontend")
         .WithHttpEndpoint(port: 5173)
-        .WithExternalHttpEndpoints()
         .WithReference(server)
         .WaitFor(server);
+
+    if (builder.ExecutionContext.IsRunMode)
+    {
+        webfrontend.WithExternalHttpEndpoints();
+    }
 
     server.PublishWithContainerFiles(webfrontend, "wwwroot");
 }
