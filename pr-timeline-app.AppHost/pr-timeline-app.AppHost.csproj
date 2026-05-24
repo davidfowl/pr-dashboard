@@ -9,8 +9,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.Azure.AppContainers" Version="13.4.0-preview.1.26273.3" />
-    <PackageReference Include="Aspire.Hosting.JavaScript" Version="13.4.0-preview.1.26271.17" />
+    <PackageReference Include="Aspire.Hosting.Azure.AppContainers" />
+    <PackageReference Include="Aspire.Hosting.JavaScript" />
   </ItemGroup>
 
   <ItemGroup>
