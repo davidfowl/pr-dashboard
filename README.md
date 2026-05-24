@@ -1,39 +1,93 @@
 # PR Timeline App
 
-Local Aspire app for triaging GitHub pull requests across the Aspire repos. The dashboard highlights the PRs that need attention, prioritizes older review debt, and provides signal-focused timeline details instead of a raw comment reader.
+Aspire-powered GitHub PR dashboard for the Aspire team to triage pull requests across the Aspire repos. The dashboard loads one or more repositories, ranks review work by urgency, personalizes a "For me" queue when signed in, and shows timeline details that are easier to scan than a raw GitHub comment stream.
+
+By default the UI watches:
+
+- `microsoft/aspire`
+- `microsoft/aspire.dev`
+- `microsoft/dcp`
+
+You can replace those with any comma-separated `owner/repo` list in the dashboard.
 
 ## Projects
 
-- `pr-timeline-app.AppHost/` - Aspire AppHost that runs the backend and Vite frontend.
-- `pr-timeline-app.Server/` - ASP.NET Core API proxy for GitHub PR data, review state, timelines, and GitHub Device Flow login.
+- `pr-timeline-app.AppHost/` - Aspire AppHost that coordinates the backend and Vite frontend for development, publishes the frontend into the backend for deployment, and defines the Azure Container Apps environment.
+- `pr-timeline-app.Server/` - ASP.NET Core API for GitHub pull requests, review state, timelines, OAuth login, development token fallback, and published static files.
 - `frontend/` - React/Vite dashboard UI.
+- `pr-timeline-app.Tests/` - Aspire-backed smoke tests for authentication and API validation.
+
+## Prerequisites
+
+- .NET 10 SDK preview
+- Aspire CLI from the dev channel
+- Node.js `20.19+`, `22.12+`, or newer
+- Optional for local development: GitHub CLI (`gh`) authenticated with `gh auth login`
+- Required for manual Azure deployment: Azure CLI
 
 ## Run locally
 
+Install frontend dependencies once:
+
 ```bash
-aspire run --apphost pr-timeline-app.AppHost/pr-timeline-app.AppHost.csproj
+npm --prefix frontend ci
 ```
 
-The frontend is served at <http://localhost:5173/>. API requests are proxied to the server through the Aspire-provided `SERVER_HTTP` or `SERVER_HTTPS` environment variable.
+Start the app with Aspire:
+
+```bash
+aspire start
+```
+
+The AppHost path is configured in `aspire.config.json`. The Vite frontend is served at <http://localhost:5173/>. API requests under `/api` are proxied to the ASP.NET Core server through the Aspire-provided `SERVER_HTTPS` or `SERVER_HTTP` environment variable. The server endpoint is also shown in the Aspire dashboard.
 
 ## GitHub authentication
 
-In development, the app can use an existing local token from `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`. To use in-app GitHub login locally, set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` on the server.
+In development, the backend can call GitHub with:
 
-Outside development, GitHub OAuth is required. Create a GitHub OAuth App and provide both publish/deploy parameters:
+1. An in-app OAuth session, when `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are set.
+2. `GITHUB_TOKEN`.
+3. `GH_TOKEN`.
+4. `gh auth token`.
+
+Outside Development, OAuth is required and the server fails startup unless `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` are configured. The OAuth callback path is `/signin-github`, for example `https://<app-host>/signin-github`.
+
+The app requests the `repo` and `read:org` scopes.
+
+## API endpoints
+
+- `GET /api/github/auth-status`
+- `GET /api/github/login?returnUrl=/...`
+- `POST /api/github/logout`
+- `GET /api/github/pulls?repo=owner/repo&state=open|closed|all`
+- `GET /api/github/pulls/{number}/timeline?repo=owner/repo`
+
+If `repo` is omitted, the backend defaults to `microsoft/aspire`.
+
+## Build and lint
 
 ```bash
-export Parameters__github_client_id=...
-export Parameters__github_client_secret=...
+npm --prefix frontend ci
+npm --prefix frontend run lint
+npm --prefix frontend run build
+
+dotnet restore pr-timeline-app.slnx
+dotnet build pr-timeline-app.slnx --no-restore
 ```
 
-Configure the OAuth App callback URL to the backend callback path, for example `https://<app-host>/signin-github`.
+## Aspire smoke tests
+
+The test project contains Aspire-backed smoke tests for authentication and API validation. They start the AppHost with the frontend disabled.
+
+```bash
+dotnet test pr-timeline-app.slnx --no-build
+```
 
 ## Deploy to Azure Container Apps
 
-The AppHost is configured with an Azure Container Apps environment named `aca`. The ASP.NET Core server is the public production entrypoint and serves the built Vite frontend from `wwwroot`.
+The AppHost is configured with an Azure Container Apps environment named `aca`. In publish/deploy mode, the ASP.NET Core server is the public entrypoint and serves the built Vite frontend from `wwwroot`.
 
-For a manual deployment, authenticate with Azure CLI and provide the Azure target plus GitHub OAuth parameters:
+Create a GitHub OAuth App before deploying. For a manual deployment, authenticate with Azure CLI and provide the Azure target plus GitHub OAuth parameters:
 
 ```bash
 az login
@@ -44,14 +98,14 @@ export Azure__ResourceGroup=<resource-group>
 export Parameters__github_client_id=<oauth-app-client-id>
 export Parameters__github_client_secret=<oauth-app-client-secret>
 
-aspire deploy --apphost pr-timeline-app.AppHost/pr-timeline-app.AppHost.csproj
+aspire deploy
 ```
 
-After the first deploy prints the Container App URL, update the GitHub OAuth App callback URL to `https://<aca-fqdn>/signin-github`, then test sign-in.
+After the first deploy prints the Container App URL, update the GitHub OAuth App callback URL to `https://<aca-fqdn>/signin-github`, then redeploy or restart the app and test sign-in.
 
 ## Automated deployment
 
-The `.github/workflows/deploy.yml` workflow deploys to Azure Container Apps on every push to `main` and can also be run manually.
+The `.github/workflows/deploy.yml` workflow deploys to Azure Container Apps after the `CI` workflow succeeds on `main`. It can also be run manually.
 
 Configure a GitHub Environment named `production` with these values:
 
@@ -74,10 +128,3 @@ audience: api://AzureADTokenExchange
 ```
 
 Grant that identity `Contributor` and `User Access Administrator` on the deployment resource group so Aspire can provision resources and role assignments.
-
-## Build
-
-```bash
-dotnet build pr-timeline-app.slnx
-npm --prefix frontend run build -- --mode development
-```
