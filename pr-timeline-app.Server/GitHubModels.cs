@@ -46,6 +46,8 @@ record PullRequestSummary(
     DateTimeOffset UpdatedAt,
     IReadOnlyList<string> Labels,
     IReadOnlyList<string> RequestedReviewers,
+    string? Milestone,
+    IReadOnlyList<LinkedIssueSummary> LinkedIssues,
     ReviewStatus Review)
 {
     public static PullRequestSummary FromDto(GitHubPullRequestDto pullRequest) =>
@@ -69,7 +71,31 @@ record PullRequestSummary(
                 .Where(reviewer => !string.IsNullOrWhiteSpace(reviewer))
                 .Select(reviewer => reviewer!)
                 .ToArray(),
+            pullRequest.Milestone?.Title,
+            [],
             ReviewStatus.Waiting);
+}
+
+record LinkedIssueSummary(
+    string Repository,
+    int Number,
+    string Title,
+    string? Milestone,
+    IReadOnlyList<string> Labels,
+    string HtmlUrl)
+{
+    public static LinkedIssueSummary FromDto(RepositoryName repositoryName, GitHubIssueDto issue) =>
+        new(
+            repositoryName.ToString(),
+            issue.Number,
+            issue.Title ?? "",
+            issue.Milestone?.Title,
+            issue.Labels
+                .Select(label => label.Name)
+                .Where(label => !string.IsNullOrWhiteSpace(label))
+                .Select(label => label!)
+                .ToArray(),
+            issue.HtmlUrl ?? "");
 }
 
 record ReviewStatus(
@@ -329,6 +355,9 @@ record TimelineItem(
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(GitHubActorDto))]
 [JsonSerializable(typeof(GitHubErrorDto))]
+[JsonSerializable(typeof(GitHubIssueDto))]
+[JsonSerializable(typeof(GitHubIssuePullRequestDto))]
+[JsonSerializable(typeof(GitHubMilestoneDto))]
 [JsonSerializable(typeof(GitHubPullRequestDto))]
 [JsonSerializable(typeof(GitHubPullRequestDto[]))]
 [JsonSerializable(typeof(GitHubReviewDto[]))]
@@ -357,6 +386,26 @@ sealed class GitHubTeamDto
     public string? Name { get; init; }
 }
 
+sealed class GitHubMilestoneDto
+{
+    public string? Title { get; init; }
+}
+
+sealed class GitHubIssuePullRequestDto
+{
+    public string? Url { get; init; }
+}
+
+sealed class GitHubIssueDto
+{
+    public int Number { get; init; }
+    public string? Title { get; init; }
+    public string? HtmlUrl { get; init; }
+    public GitHubLabelDto[] Labels { get; init; } = [];
+    public GitHubMilestoneDto? Milestone { get; init; }
+    public GitHubIssuePullRequestDto? PullRequest { get; init; }
+}
+
 sealed class GitHubPullRequestDto
 {
     public int Number { get; init; }
@@ -365,11 +414,13 @@ sealed class GitHubPullRequestDto
     public bool Draft { get; init; }
     public GitHubActorDto? User { get; init; }
     public string? HtmlUrl { get; init; }
+    public string? Body { get; init; }
     public DateTimeOffset CreatedAt { get; init; }
     public DateTimeOffset UpdatedAt { get; init; }
     public GitHubLabelDto[] Labels { get; init; } = [];
     public GitHubActorDto[] RequestedReviewers { get; init; } = [];
     public GitHubTeamDto[] RequestedTeams { get; init; } = [];
+    public GitHubMilestoneDto? Milestone { get; init; }
     public DateTimeOffset? MergedAt { get; init; }
     public int Commits { get; init; }
 }

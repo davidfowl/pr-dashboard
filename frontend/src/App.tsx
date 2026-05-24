@@ -20,6 +20,9 @@ import { readJson } from './utils/http';
 import {
   createActivityModel,
   createAttentionBuckets,
+  createAutomationPullRequests,
+  createCommunityPullRequests,
+  createDeveloperPullRequestCounts,
   createForMeItems,
   createTeamMetrics,
   createTimelineStory,
@@ -63,6 +66,9 @@ function App() {
 
   const repoAccent = useMemo(() => colorForText(activeRepo), [activeRepo]);
   const teamMetrics = useMemo(() => createTeamMetrics(pullRequests), [pullRequests]);
+  const developerPullRequestCounts = useMemo(() => createDeveloperPullRequestCounts(pullRequests), [pullRequests]);
+  const automationPullRequests = useMemo(() => createAutomationPullRequests(pullRequests), [pullRequests]);
+  const communityPullRequests = useMemo(() => createCommunityPullRequests(pullRequests), [pullRequests]);
   const attentionBuckets = useMemo(() => createAttentionBuckets(pullRequests), [pullRequests]);
   const forMeItems = useMemo(
     () => createForMeItems(pullRequests, authStatus?.login),
@@ -270,6 +276,9 @@ function App() {
             pullRequests={pullRequests}
             error={error}
             teamMetrics={teamMetrics}
+            developerPullRequestCounts={developerPullRequestCounts}
+            automationPullRequests={automationPullRequests}
+            communityPullRequests={communityPullRequests}
             attentionBuckets={attentionBuckets}
             forMeItems={forMeItems}
             login={authStatus?.login}

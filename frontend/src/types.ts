@@ -21,7 +21,18 @@ export type PullRequestSummary = {
   updatedAt: string;
   labels: string[];
   requestedReviewers: string[];
+  milestone?: string;
+  linkedIssues: LinkedIssueSummary[];
   review: ReviewStatus;
+};
+
+export type LinkedIssueSummary = {
+  repository: string;
+  number: number;
+  title: string;
+  milestone?: string;
+  labels: string[];
+  htmlUrl: string;
 };
 
 export type ReviewStatus = {
@@ -91,6 +102,13 @@ export type TeamMetrics = {
   reviewCoverage: number;
   waiting: number;
   idle: number;
+};
+
+export type DeveloperPullRequestCount = {
+  actor: string;
+  openPullRequestCount: number;
+  repositories: string[];
+  latestUpdatedAt?: string;
 };
 
 export type AttentionItem = {

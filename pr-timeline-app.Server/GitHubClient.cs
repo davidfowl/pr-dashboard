@@ -8,6 +8,7 @@ using Microsoft.Extensions.Caching.Memory;
 sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tokenProvider, IMemoryCache cache, IHostEnvironment environment)
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
+    private const int MaxLinkedIssuesPerPullRequest = 10;
 
     public async Task<string?> GetCurrentUserLoginAsync(CancellationToken cancellationToken)
     {
@@ -34,21 +35,30 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         {
             entry.AbsoluteExpirationRelativeToNow = CacheDuration;
             var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls?state={Uri.EscapeDataString(state)}&sort=updated&direction=desc&per_page=30";
-            var pullRequests = (await SendGitHubRequestAsync(
-                    url,
-                    GitHubJsonSerializerContext.Default.GitHubPullRequestDtoArray,
-                    cancellationToken))
+            var pullRequestDtos = await SendGitHubRequestAsync(
+                url,
+                GitHubJsonSerializerContext.Default.GitHubPullRequestDtoArray,
+                cancellationToken);
+            var pullRequests = pullRequestDtos
                 .Select(PullRequestSummary.FromDto)
                 .ToArray();
 
             var reviewTasks = pullRequests.ToDictionary(
                 pullRequest => pullRequest.Number,
                 pullRequest => GetReviewStatusAsync(repositoryName, pullRequest.Number, cancellationToken));
+            var linkedIssueTasks = pullRequestDtos.ToDictionary(
+                pullRequest => pullRequest.Number,
+                pullRequest => GetLinkedIssuesAsync(repositoryName, pullRequest.Body, cancellationToken));
 
             await Task.WhenAll(reviewTasks.Values);
+            await Task.WhenAll(linkedIssueTasks.Values);
 
             return pullRequests
-                .Select(pullRequest => pullRequest with { Review = reviewTasks[pullRequest.Number].Result })
+                .Select(pullRequest => pullRequest with
+                {
+                    LinkedIssues = linkedIssueTasks[pullRequest.Number].Result,
+                    Review = reviewTasks[pullRequest.Number].Result
+                })
                 .ToArray();
         }) ?? [];
     }
@@ -154,6 +164,51 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         }) ?? throw new GitHubApiException(HttpStatusCode.NotFound, $"Pull request #{number} was not found.");
     }
 
+    private async Task<IReadOnlyList<LinkedIssueSummary>> GetLinkedIssuesAsync(
+        RepositoryName repositoryName,
+        string? body,
+        CancellationToken cancellationToken)
+    {
+        var references = FindLinkedIssueReferences(repositoryName, body);
+        if (references.Count == 0)
+        {
+            return [];
+        }
+
+        var issueTasks = references
+            .Select(reference => GetIssueAsync(reference.RepositoryName, reference.Number, cancellationToken))
+            .ToArray();
+
+        await Task.WhenAll(issueTasks);
+
+        return issueTasks
+            .Select(task => task.Result)
+            .Where(issue => issue is not null)
+            .Select(issue => issue!)
+            .ToArray();
+    }
+
+    private async Task<LinkedIssueSummary?> GetIssueAsync(
+        RepositoryName repositoryName,
+        int number,
+        CancellationToken cancellationToken)
+    {
+        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
+        var cacheKey = $"issue:{authCacheKey}:{repositoryName}:{number}";
+        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheDuration;
+            var issue = await SendGitHubRequestAsync(
+                $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues/{number}",
+                GitHubJsonSerializerContext.Default.GitHubIssueDto,
+                cancellationToken);
+
+            return issue.PullRequest is null
+                ? LinkedIssueSummary.FromDto(repositoryName, issue)
+                : null;
+        });
+    }
+
     private async Task<T> SendGitHubRequestAsync<T>(
         string url,
         JsonTypeInfo<T> jsonTypeInfo,
@@ -238,8 +293,63 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         return null;
     }
 
+    private static IReadOnlyList<IssueReference> FindLinkedIssueReferences(RepositoryName repositoryName, string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            return [];
+        }
+
+        var references = new Dictionary<string, IssueReference>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (Match match in GitHubIssueUrlRegex().Matches(body))
+        {
+            AddIssueReference(references, repositoryName, match);
+        }
+
+        foreach (Match match in IssueReferenceRegex().Matches(body))
+        {
+            AddIssueReference(references, repositoryName, match);
+        }
+
+        return references.Values
+            .Take(MaxLinkedIssuesPerPullRequest)
+            .ToArray();
+    }
+
+    private static void AddIssueReference(
+        IDictionary<string, IssueReference> references,
+        RepositoryName defaultRepositoryName,
+        Match match)
+    {
+        if (!int.TryParse(match.Groups["number"].Value, out var number) || number <= 0)
+        {
+            return;
+        }
+
+        var repositoryName = defaultRepositoryName;
+        if (match.Groups["owner"] is { Success: true } owner
+            && match.Groups["repo"] is { Success: true } repo
+            && !string.IsNullOrWhiteSpace(owner.Value)
+            && !string.IsNullOrWhiteSpace(repo.Value)
+            && RepositoryName.TryParse($"{owner.Value}/{repo.Value}", out var parsedRepositoryName))
+        {
+            repositoryName = parsedRepositoryName;
+        }
+
+        references[$"{repositoryName}#{number}"] = new IssueReference(repositoryName, number);
+    }
+
     [GeneratedRegex("<(?<url>[^>]+)>;\\s*rel=\"(?<rel>[^\"]+)\"")]
     private static partial Regex LinkHeaderRegex();
+
+    [GeneratedRegex("https://github\\.com/(?<owner>[A-Za-z0-9._-]+)/(?<repo>[A-Za-z0-9._-]+)/issues/(?<number>[1-9][0-9]*)", RegexOptions.IgnoreCase)]
+    private static partial Regex GitHubIssueUrlRegex();
+
+    [GeneratedRegex("(?<![A-Za-z0-9._/-])(?:(?<owner>[A-Za-z0-9._-]+)/(?<repo>[A-Za-z0-9._-]+))?#(?<number>[1-9][0-9]*)\\b")]
+    private static partial Regex IssueReferenceRegex();
+
+    private readonly record struct IssueReference(RepositoryName RepositoryName, int Number);
 
     private static bool IsBotActor(string actor) =>
         actor.EndsWith("[bot]", StringComparison.OrdinalIgnoreCase)

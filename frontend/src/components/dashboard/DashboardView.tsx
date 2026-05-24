@@ -1,14 +1,15 @@
 import type { FormEventHandler } from 'react';
 import type {
   AttentionBucket,
+  DeveloperPullRequestCount,
   PickItem,
   PullRequestSummary,
   PullState,
   TeamMetrics,
 } from '../../types';
-import AttentionBoard from './AttentionBoard';
 import DashboardFilters from './DashboardFilters';
 import ForMePanel from './ForMePanel';
+import QueueOverview from './QueueOverview';
 import TeamMetricsStrip from './TeamMetricsStrip';
 
 type DashboardViewProps = {
@@ -18,6 +19,9 @@ type DashboardViewProps = {
   pullRequests: PullRequestSummary[];
   error: string | null;
   teamMetrics: TeamMetrics;
+  developerPullRequestCounts: DeveloperPullRequestCount[];
+  automationPullRequests: PullRequestSummary[];
+  communityPullRequests: PullRequestSummary[];
   attentionBuckets: AttentionBucket[];
   forMeItems: PickItem[];
   login?: string;
@@ -34,6 +38,9 @@ function DashboardView({
   pullRequests,
   error,
   teamMetrics,
+  developerPullRequestCounts,
+  automationPullRequests,
+  communityPullRequests,
   attentionBuckets,
   forMeItems,
   login,
@@ -48,7 +55,7 @@ function DashboardView({
         <section className="panel queue-panel" aria-label="Review queue">
           {pullRequests.length > 0 && <TeamMetricsStrip metrics={teamMetrics} />}
 
-          {pullRequests.length > 0 && (
+          {forMeItems.length > 0 && (
             <ForMePanel
               items={forMeItems}
               login={login}
@@ -56,9 +63,12 @@ function DashboardView({
             />
           )}
 
-          {attentionBuckets.length > 0 && (
-            <AttentionBoard
-              buckets={attentionBuckets}
+          {pullRequests.length > 0 && (
+            <QueueOverview
+              counts={developerPullRequestCounts}
+              automationPullRequests={automationPullRequests}
+              communityPullRequests={communityPullRequests}
+              attentionBuckets={attentionBuckets}
               onSelectPullRequest={onSelectPullRequest}
             />
           )}
