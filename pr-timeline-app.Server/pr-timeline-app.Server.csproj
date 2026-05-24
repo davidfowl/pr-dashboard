@@ -17,4 +17,8 @@
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Runtime" />
   </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="pr-timeline-app.Tests" />
+  </ItemGroup>
 </Project>

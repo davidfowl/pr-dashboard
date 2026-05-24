@@ -16,10 +16,12 @@ if (builder.ExecutionContext.IsPublishMode)
 {
     var githubClientId = builder.AddParameter("github-client-id");
     var githubClientSecret = builder.AddParameter("github-client-secret", secret: true);
+    var gitCommitSha = builder.AddParameter("git-commit-sha");
 
     server
         .WithEnvironment("GITHUB_CLIENT_ID", githubClientId)
-        .WithEnvironment("GITHUB_CLIENT_SECRET", githubClientSecret);
+        .WithEnvironment("GITHUB_CLIENT_SECRET", githubClientSecret)
+        .WithEnvironment("GIT_COMMIT_SHA", gitCommitSha);
 }
 
 if (builder.Configuration.GetValue("IncludeFrontend", true))

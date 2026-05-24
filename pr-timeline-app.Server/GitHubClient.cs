@@ -73,10 +73,20 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         return await cache.GetOrCreateAsync(cacheKey, async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = CacheDuration;
-            var reviews = await SendGitHubRequestAsync(
-                $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}/reviews?per_page=100",
-                GitHubJsonSerializerContext.Default.GitHubReviewDtoArray,
-                cancellationToken);
+            GitHubReviewDto[] reviews;
+            try
+            {
+                reviews = await SendGitHubRequestAsync(
+                    $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}/reviews?per_page=100",
+                    GitHubJsonSerializerContext.Default.GitHubReviewDtoArray,
+                    cancellationToken);
+            }
+            catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+            {
+                // Review status is enrichment-only. GitHub can return 404 when a PR becomes
+                // unavailable between the list and enrichment calls, so keep the PR visible.
+                return ReviewStatus.Waiting;
+            }
 
             var humanReviews = reviews
                 .Select(ReviewEvent.FromDto)
@@ -208,6 +218,8 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             }
             catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
             {
+                // Linked issues are enrichment-only. GitHub returns 404 for deleted, private, or
+                // accidentally parsed same-repo references, so skip them instead of failing the list.
                 return null;
             }
 

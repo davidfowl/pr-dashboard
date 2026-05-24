@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, FormEvent } from 'react';
 import './App.css';
+import AppInfo from './components/AppInfo';
 import AuthCard from './components/AuthCard';
 import DashboardView from './components/dashboard/DashboardView';
 import DetailView from './components/detail/DetailView';
@@ -303,6 +304,8 @@ function App() {
           />
         )}
       </main>
+
+      <AppInfo />
     </div>
   );
 }

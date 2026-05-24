@@ -43,6 +43,22 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
     }
 
     [Fact]
+    public async Task AppInfoReportsCommitSha()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var client = await GetClientAsync(cancellationToken);
+        using var response = await client.GetAsync("/api/app-info", cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        using var document = await JsonDocument.ParseAsync(
+            await response.Content.ReadAsStreamAsync(cancellationToken),
+            cancellationToken: cancellationToken);
+        Assert.NotEmpty(document.RootElement.GetProperty("commitSha").GetString() ?? "");
+        Assert.NotEmpty(document.RootElement.GetProperty("shortCommitSha").GetString() ?? "");
+        Assert.True(document.RootElement.TryGetProperty("commitUrl", out _));
+    }
+
+    [Fact]
     public async Task PullListRejectsInvalidRepositoryWithoutCallingGitHub()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

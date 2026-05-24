@@ -1,3 +1,9 @@
+export type AppInfoResponse = {
+  commitSha: string;
+  shortCommitSha: string;
+  commitUrl?: string;
+};
+
 export type AuthStatus = {
   authenticated: boolean;
   configured: boolean;
