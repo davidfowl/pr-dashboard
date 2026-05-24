@@ -73,10 +73,18 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         return await cache.GetOrCreateAsync(cacheKey, async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = CacheDuration;
-            var reviews = await SendGitHubRequestAsync(
-                $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}/reviews?per_page=100",
-                GitHubJsonSerializerContext.Default.GitHubReviewDtoArray,
-                cancellationToken);
+            GitHubReviewDto[] reviews;
+            try
+            {
+                reviews = await SendGitHubRequestAsync(
+                    $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}/reviews?per_page=100",
+                    GitHubJsonSerializerContext.Default.GitHubReviewDtoArray,
+                    cancellationToken);
+            }
+            catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+            {
+                return ReviewStatus.Waiting;
+            }
 
             var humanReviews = reviews
                 .Select(ReviewEvent.FromDto)
@@ -351,6 +359,12 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     [GeneratedRegex("<(?<url>[^>]+)>;\\s*rel=\"(?<rel>[^\"]+)\"")]
     private static partial Regex LinkHeaderRegex();
 
+    // PR bodies commonly use GitHub issue-closing/linking forms such as:
+    // "Fixes #123", "Closes dotnet/aspire#456", or
+    // "Resolves https://github.com/microsoft/aspire/issues/789".
+    // These issue references are documented by GitHub and are separate from pull request
+    // references, so the fetched issue metadata is ignored when GitHub reports it as a PR.
+    // https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue
     [GeneratedRegex("https://github\\.com/(?<owner>[A-Za-z0-9._-]+)/(?<repo>[A-Za-z0-9._-]+)/issues/(?<number>[1-9][0-9]*)", RegexOptions.IgnoreCase)]
     private static partial Regex GitHubIssueUrlRegex();
 
