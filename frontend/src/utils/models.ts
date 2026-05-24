@@ -1,10 +1,11 @@
-import { dayMs, hourMs } from '../constants';
+import { coreTeamMembers, currentRelease, dayMs, hourMs } from '../constants';
 import type {
   ActivityMarker,
   ActivityModel,
   AttentionBucket,
   AttentionItem,
   AttentionSignal,
+  DeveloperPullRequestCount,
   DeveloperStats,
   PickItem,
   PullRequestSummary,
@@ -79,6 +80,60 @@ export function createTeamMetrics(pullRequests: PullRequestSummary[]): TeamMetri
         && Date.now() - new Date(pullRequest.updatedAt).getTime() >= 2 * dayMs,
     ).length,
   };
+}
+
+export function createDeveloperPullRequestCounts(pullRequests: PullRequestSummary[]): DeveloperPullRequestCount[] {
+  const coreTeamKeys = new Set(coreTeamMembers.map(actorIdentityKey));
+  const pullRequestsByDeveloper = new Map<string, PullRequestSummary[]>(
+    coreTeamMembers.map((member) => [actorIdentityKey(member), []]),
+  );
+
+  for (const pullRequest of pullRequests) {
+    if (pullRequest.state !== 'open') {
+      continue;
+    }
+
+    const authorKey = actorIdentityKey(pullRequest.author);
+    if (coreTeamKeys.has(authorKey)) {
+      pullRequestsByDeveloper.get(authorKey)?.push(pullRequest);
+    }
+  }
+
+  return coreTeamMembers
+    .map((member) => {
+      const developerPullRequests = pullRequestsByDeveloper.get(actorIdentityKey(member)) ?? [];
+      const repositories = [...new Set(developerPullRequests.map((pullRequest) => pullRequest.repository))]
+        .sort((first, second) => first.localeCompare(second));
+      const latestUpdatedAt = developerPullRequests
+        .map((pullRequest) => pullRequest.updatedAt)
+        .sort((first, second) => new Date(second).getTime() - new Date(first).getTime())[0];
+
+      return {
+        actor: member,
+        openPullRequestCount: developerPullRequests.length,
+        repositories,
+        latestUpdatedAt,
+      };
+    })
+    .sort((first, second) =>
+      second.openPullRequestCount - first.openPullRequestCount
+      || first.actor.localeCompare(second.actor));
+}
+
+export function createCommunityPullRequests(pullRequests: PullRequestSummary[]): PullRequestSummary[] {
+  const coreTeamKeys = new Set(coreTeamMembers.map(actorIdentityKey));
+  return pullRequests
+    .filter((pullRequest) =>
+      pullRequest.state === 'open'
+      && !coreTeamKeys.has(actorIdentityKey(pullRequest.author))
+      && !isBotAuthor(pullRequest.author))
+    .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime());
+}
+
+export function createAutomationPullRequests(pullRequests: PullRequestSummary[]): PullRequestSummary[] {
+  return pullRequests
+    .filter((pullRequest) => pullRequest.state === 'open' && isBotAuthor(pullRequest.author))
+    .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime());
 }
 
 export function createForMeItems(pullRequests: PullRequestSummary[], login?: string): PickItem[] {
@@ -323,6 +378,10 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
   const pullRequest = item.pullRequest;
   const signals: AttentionSignal[] = [actionSignal(pullRequest)];
 
+  if (targetsCurrentRelease(pullRequest)) {
+    signals.push({ label: `release ${currentRelease}`, tone: 'danger' });
+  }
+
   if (isIdle(pullRequest)) {
     signals.push({ label: `idle ${formatAge(pullRequest.updatedAt)}`, tone: 'warning' });
   }
@@ -359,6 +418,27 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
   }
 
   return signals.slice(0, 7);
+}
+
+export function targetsCurrentRelease(pullRequest: PullRequestSummary) {
+  return [
+    pullRequest.title,
+    pullRequest.milestone,
+    ...pullRequest.labels,
+    ...pullRequest.linkedIssues.flatMap((issue) => [
+      issue.title,
+      issue.milestone,
+      ...issue.labels,
+    ]),
+  ].some((value) => value !== undefined && releaseSignalMatches(value, currentRelease));
+}
+
+function releaseSignalMatches(value: string, release: string) {
+  return new RegExp(`(^|[^0-9])${escapeRegExp(release)}([^0-9]|$)`, 'i').test(value);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function oldFirstSignal(pullRequest: PullRequestSummary): AttentionSignal | null {
