@@ -1,29 +1,24 @@
-name: Deploy to Azure Container Apps
+name: CI
 
 on:
-  workflow_dispatch:
-  workflow_run:
-    workflows:
-      - CI
-    types:
-      - completed
+  pull_request:
+    branches:
+      - main
+  push:
     branches:
       - main
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
-  group: deploy-production
-  cancel-in-progress: false
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  deploy:
-    name: Deploy with Aspire
+  test:
+    name: Build and test
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    environment: production
 
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: 1
@@ -76,21 +71,11 @@ jobs:
       - name: Install frontend dependencies
         run: npm --prefix frontend ci --no-audit --no-fund
 
+      - name: Restore
+        run: dotnet restore pr-timeline-app.slnx --nologo
+
       - name: Build
-        run: dotnet build pr-timeline-app.slnx --nologo
+        run: dotnet build pr-timeline-app.slnx --no-restore --nologo
 
-      - name: Azure login
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Deploy with Aspire
-        run: aspire deploy --apphost pr-timeline-app.AppHost/pr-timeline-app.AppHost.csproj --environment Production --non-interactive
-        env:
-          Azure__SubscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          Azure__Location: ${{ vars.AZURE_LOCATION }}
-          Azure__ResourceGroup: ${{ vars.AZURE_RESOURCE_GROUP }}
-          Parameters__github_client_id: ${{ vars.OAUTH_GITHUB_CLIENT_ID }}
-          Parameters__github_client_secret: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
+      - name: Test
+        run: dotnet test pr-timeline-app.slnx --no-build --nologo --logger "console;verbosity=detailed"
