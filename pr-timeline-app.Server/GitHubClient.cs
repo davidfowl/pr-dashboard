@@ -39,14 +39,18 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 url,
                 GitHubJsonSerializerContext.Default.GitHubPullRequestDtoArray,
                 cancellationToken);
-            var pullRequests = pullRequestDtos
+            var activePullRequestDtos = pullRequestDtos
+                .Where(pullRequest => !pullRequest.Draft)
+                .ToArray();
+
+            var pullRequests = activePullRequestDtos
                 .Select(PullRequestSummary.FromDto)
                 .ToArray();
 
             var reviewTasks = pullRequests.ToDictionary(
                 pullRequest => pullRequest.Number,
                 pullRequest => GetReviewStatusAsync(repositoryName, pullRequest.Number, cancellationToken));
-            var linkedIssueTasks = pullRequestDtos.ToDictionary(
+            var linkedIssueTasks = activePullRequestDtos.ToDictionary(
                 pullRequest => pullRequest.Number,
                 pullRequest => GetLinkedIssuesAsync(repositoryName, pullRequest.Body, cancellationToken));
 

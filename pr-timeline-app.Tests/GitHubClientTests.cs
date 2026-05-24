@@ -91,6 +91,58 @@ public sealed class GitHubClientTests
         Assert.Equal(0, pullRequest.Review.ReviewerCount);
     }
 
+    [Fact]
+    public async Task PullListExcludesDraftPullRequests()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=updated&direction=desc&per_page=30" => Json(
+                """
+                [
+                  {
+                    "number": 1,
+                    "title": "Work in progress",
+                    "state": "open",
+                    "body": null,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "draft": true,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": []
+                  },
+                  {
+                    "number": 2,
+                    "title": "Ready for review",
+                    "state": "open",
+                    "body": null,
+                    "created_at": "2026-01-03T00:00:00Z",
+                    "updated_at": "2026-01-04T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/2",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": []
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/2/reviews?per_page=100" => Json("[]"),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal(2, pullRequest.Number);
+        Assert.False(pullRequest.Draft);
+    }
+
     private static GitHubClient CreateClient(Func<string, HttpResponseMessage> route)
     {
         var httpClient = new HttpClient(new StubGitHubHandler(route))
