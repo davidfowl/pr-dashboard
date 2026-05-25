@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { AttentionBucket, PullRequestSummary } from '../../types';
 import { formatCount } from '../../utils/format';
-import PullRequestListItem from '../PullRequestListItem';
+import PullRequestList from '../PullRequestList';
 import TileDrilldown from './TileDrilldown';
 import type { DrilldownTile } from './TileDrilldown';
 
@@ -46,8 +46,8 @@ function AttentionBoard({ buckets, onSelectPullRequest }: AttentionBoardProps) {
         tiles={bucketTiles}
         onSelect={setSelectedBucketLabel}
         renderDetails={({ bucket }) => {
-          const visibleItems = bucket.items.slice(0, bucketItemLimit);
-          const hiddenCount = bucket.items.length - visibleItems.length;
+          const visibleCount = Math.min(bucket.items.length, bucketItemLimit);
+          const hiddenCount = bucket.items.length - visibleCount;
 
           return (
             <section className={`drilldown-panel attention-card ${bucket.tone}`} aria-label={`${bucket.label} pull requests`}>
@@ -58,23 +58,22 @@ function AttentionBoard({ buckets, onSelectPullRequest }: AttentionBoardProps) {
               <p>{bucket.summary} <em>{bucket.metric}</em></p>
               {hiddenCount > 0 && (
                 <p className="bucket-limit-note">
-                  Showing top {visibleItems.length} of {bucket.items.length}. Resolve these and the next ranked PRs will surface on refresh.
+                  Showing top {visibleCount} of {bucket.items.length}. Resolve these and the next ranked PRs will surface on refresh.
                 </p>
               )}
-              <div className="attention-list">
-                {visibleItems.map((item) => (
-                  <PullRequestListItem
-                    key={`${item.pullRequest.repository}-${item.pullRequest.number}`}
-                    pullRequest={item.pullRequest}
-                    onSelectPullRequest={onSelectPullRequest}
-                    signalProps={{
-                      leadingSignals: [{ label: item.reason, tone: bucket.tone }],
-                      excludeComputedLabels: [item.reason],
-                      computedSignalLimit: 4,
-                    }}
-                  />
-                ))}
-              </div>
+              <PullRequestList
+                entries={bucket.items.map((item) => ({
+                  pullRequest: item.pullRequest,
+                  bucketLabel: bucket.label,
+                  signalProps: {
+                    leadingSignals: [{ label: item.reason, tone: bucket.tone }],
+                    excludeComputedLabels: [item.reason],
+                    computedSignalLimit: 4,
+                  },
+                }))}
+                limit={bucketItemLimit}
+                onSelectPullRequest={onSelectPullRequest}
+              />
             </section>
           );
         }}

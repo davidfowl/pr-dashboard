@@ -59,6 +59,60 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListFollowsLinkedIssueRedirectsWithAuthorization()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                """
+                [
+                  {
+                    "number": 1,
+                    "title": "Update docs",
+                    "state": "open",
+                    "body": "Fixes dotnet/aspire#6279",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": []
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            "repos/dotnet/aspire/issues/6279" => Json(
+                """{ "message": "Moved Permanently" }""",
+                HttpStatusCode.MovedPermanently,
+                locationHeader: "https://api.github.com/repositories/696529789/issues/6279"),
+            "repositories/696529789/issues/6279" => Json(
+                """
+                {
+                  "number": 6279,
+                  "title": "Canonical issue",
+                  "html_url": "https://github.com/microsoft/aspire/issues/6279",
+                  "repository_url": "https://api.github.com/repos/microsoft/aspire",
+                  "labels": []
+                }
+                """),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        var linkedIssue = Assert.Single(pullRequest.LinkedIssues);
+        Assert.Equal("microsoft/aspire", linkedIssue.Repository);
+        Assert.Equal(6279, linkedIssue.Number);
+    }
+
+    [Fact]
     public async Task PullListTreatsMissingReviewsAsWaiting()
     {
         var client = CreateClient(path => path switch
@@ -292,7 +346,11 @@ public sealed class GitHubClientTests
         return context;
     }
 
-    private static HttpResponseMessage Json(string content, HttpStatusCode statusCode = HttpStatusCode.OK, string? linkHeader = null)
+    private static HttpResponseMessage Json(
+        string content,
+        HttpStatusCode statusCode = HttpStatusCode.OK,
+        string? linkHeader = null,
+        string? locationHeader = null)
     {
         var response = new HttpResponseMessage(statusCode)
         {
@@ -302,6 +360,11 @@ public sealed class GitHubClientTests
         if (linkHeader is not null)
         {
             response.Headers.Add("Link", linkHeader);
+        }
+
+        if (locationHeader is not null)
+        {
+            response.Headers.Location = new Uri(locationHeader);
         }
 
         return response;
