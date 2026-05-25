@@ -10,7 +10,6 @@ import type {
   PickItem,
   PullRequestSummary,
   SignalMilestone,
-  TeamMetrics,
   TimelineItem,
   TimelineStats,
   TimelineStoryEntry,
@@ -25,62 +24,10 @@ import {
   formatRelative,
 } from './format';
 
-function readinessForPullRequest(pullRequest: PullRequestSummary) {
-  const updatedAgeMs = Date.now() - new Date(pullRequest.updatedAt).getTime();
-  let readiness = 50;
-
-  if (pullRequest.review.state === 'approved') {
-    readiness += 25;
-  }
-
-  if (pullRequest.review.state === 'reviewed') {
-    readiness += 10;
-  }
-
-  if (pullRequest.review.state === 'changes_requested') {
-    readiness -= 20;
-  }
-
-  if (pullRequest.review.state === 'waiting') {
-    readiness -= 10;
-  }
-
-  if (pullRequest.draft) {
-    readiness -= 15;
-  }
-
-  if (updatedAgeMs <= 12 * hourMs) {
-    readiness += 10;
-  } else if (updatedAgeMs >= 2 * dayMs) {
-    readiness -= 15;
-  }
-
-  if (pullRequest.review.reviewerCount >= 3) {
-    readiness += 10;
-  }
-
-  if (pullRequest.review.approvalCount >= 2) {
-    readiness += 10;
-  }
-
-  return Math.max(0, Math.min(100, readiness));
-}
-
-export function createTeamMetrics(pullRequests: PullRequestSummary[]): TeamMetrics {
-  const readiness = pullRequests.map(readinessForPullRequest);
-  const reviewed = pullRequests.filter((pullRequest) => pullRequest.review.state !== 'waiting').length;
-  return {
-    averageReadiness:
-      readiness.length === 0 ? 0 : Math.round(readiness.reduce((total, value) => total + value, 0) / readiness.length),
-    reviewCoverage: pullRequests.length === 0 ? 0 : Math.round((reviewed / pullRequests.length) * 100),
-    waiting: pullRequests.filter((pullRequest) => pullRequest.review.state === 'waiting').length,
-    idle: pullRequests.filter(
-      (pullRequest) =>
-        pullRequest.state === 'open'
-        && Date.now() - new Date(pullRequest.updatedAt).getTime() >= 2 * dayMs,
-    ).length,
-  };
-}
+const approvedAgingMs = 2 * dayMs;
+const communityWaitMs = 12 * hourMs;
+const quickWinLineThreshold = 80;
+const quickWinFileThreshold = 3;
 
 export function createDeveloperPullRequestCounts(pullRequests: PullRequestSummary[]): DeveloperPullRequestCount[] {
   const coreTeamKeys = new Set(coreTeamMembers.map(actorIdentityKey));
@@ -89,7 +36,7 @@ export function createDeveloperPullRequestCounts(pullRequests: PullRequestSummar
   );
 
   for (const pullRequest of pullRequests) {
-    if (pullRequest.state !== 'open') {
+    if (pullRequest.state !== 'open' || isCommunityToolkitPullRequest(pullRequest)) {
       continue;
     }
 
@@ -120,22 +67,6 @@ export function createDeveloperPullRequestCounts(pullRequests: PullRequestSummar
       || first.actor.localeCompare(second.actor));
 }
 
-export function createCommunityPullRequests(pullRequests: PullRequestSummary[]): PullRequestSummary[] {
-  const coreTeamKeys = new Set(coreTeamMembers.map(actorIdentityKey));
-  return pullRequests
-    .filter((pullRequest) =>
-      pullRequest.state === 'open'
-      && !coreTeamKeys.has(actorIdentityKey(pullRequest.author))
-      && !isBotAuthor(pullRequest.author))
-    .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime());
-}
-
-export function createAutomationPullRequests(pullRequests: PullRequestSummary[]): PullRequestSummary[] {
-  return pullRequests
-    .filter((pullRequest) => pullRequest.state === 'open' && isBotAuthor(pullRequest.author))
-    .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime());
-}
-
 export function createForMeItems(pullRequests: PullRequestSummary[], login?: string): PickItem[] {
   if (!login) {
     return [];
@@ -146,7 +77,7 @@ export function createForMeItems(pullRequests: PullRequestSummary[], login?: str
     .map((pullRequest) => createPersonalPick(pullRequest, login))
     .filter((item): item is PickItem => item !== null)
     .sort((first, second) => pickScore(second) - pickScore(first))
-    .slice(0, 5);
+    .slice(0, 10);
 }
 
 function createPersonalPick(pullRequest: PullRequestSummary, login: string): PickItem | null {
@@ -194,11 +125,10 @@ function pickScore(item: PickItem) {
   if (item.pullRequest.review.state === 'waiting') score += 45;
   if (item.pullRequest.review.state === 'reviewed') score += 25;
   if (item.pullRequest.review.state === 'approved') score += 5;
-  if (isIdle(item.pullRequest)) score += 15;
   if (isBotAuthor(item.pullRequest.author)) score -= 120;
   return score
-    + Math.min(80, Math.floor(ageMs(item.pullRequest.createdAt) / dayMs) * 4)
-    + Math.min(20, Math.floor(updatedAgeMs(item.pullRequest) / dayMs));
+    + Math.min(3, Math.floor(ageMs(item.pullRequest.createdAt) / dayMs))
+    + Math.min(1, Math.floor(updatedAgeMs(item.pullRequest) / dayMs));
 }
 
 function pickReason(pullRequest: PullRequestSummary) {
@@ -225,10 +155,59 @@ function sameLogin(first: string, second: string) {
 export function createAttentionBuckets(pullRequests: PullRequestSummary[]): AttentionBucket[] {
   const buckets: AttentionBucket[] = [
     {
+      label: 'Approved but aging',
+      summary: 'Approved PRs that have been waiting to land for multiple days.',
+      tone: 'danger',
+      metric: 'land stale approvals',
+      items: [],
+    },
+    {
       label: 'Ready to merge',
-      summary: 'Approved and waiting on a maintainer or author to finish.',
+      summary: 'Recently approved and waiting on a maintainer or author to finish.',
       tone: 'success',
       metric: 'merge rate ↑',
+      items: [],
+    },
+    {
+      label: 'Re-review needed',
+      summary: 'A commit landed after human review, so the PR needs another look.',
+      tone: 'warning',
+      metric: 'finish loops',
+      items: [],
+    },
+    {
+      label: 'Docs',
+      summary: 'Generated aspire.dev docs PRs waiting on review.',
+      tone: 'accent',
+      metric: 'docs review',
+      items: [],
+    },
+    {
+      label: 'Community Toolkit',
+      summary: 'CommunityToolkit/Aspire PRs in the shared Aspire queue.',
+      tone: 'accent',
+      metric: 'toolkit review',
+      items: [],
+    },
+    {
+      label: 'Bots / automation',
+      summary: 'Automated PRs kept out of the human focus queue.',
+      tone: 'accent',
+      metric: 'automation lane',
+      items: [],
+    },
+    {
+      label: 'Community',
+      summary: 'Human-authored PRs from outside the core team.',
+      tone: 'accent',
+      metric: 'external contributors',
+      items: [],
+    },
+    {
+      label: 'Quick wins',
+      summary: 'Small unreviewed PRs that should be easy to drain before newer work.',
+      tone: 'success',
+      metric: 'drain queue',
       items: [],
     },
     {
@@ -274,45 +253,24 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
       pullRequest,
       reason: reviewSignal(pullRequest),
     });
+
+    if (isCommunityAuthor(pullRequest.author) && !isCommunityToolkitPullRequest(pullRequest)) {
+      bucketsByLabel.get('Community')?.items.push({
+        pullRequest,
+        reason: 'community',
+      });
+    }
   }
 
   for (const bucket of buckets) {
-    bucket.items.sort((first, second) => compareAttentionItems(bucket.label, first, second));
+    bucket.items.sort(compareAttentionItems);
   }
 
   return buckets.filter((bucket) => bucket.items.length > 0);
 }
 
-function compareAttentionItems(bucket: string, first: AttentionItem, second: AttentionItem) {
-  const priorityDiff = queuePriority(bucket, second.pullRequest) - queuePriority(bucket, first.pullRequest);
-  if (priorityDiff !== 0) {
-    return priorityDiff;
-  }
-
+function compareAttentionItems(first: AttentionItem, second: AttentionItem) {
   return new Date(first.pullRequest.createdAt).getTime() - new Date(second.pullRequest.createdAt).getTime();
-}
-
-function queuePriority(bucket: string, pullRequest: PullRequestSummary) {
-  const openDays = Math.floor(ageMs(pullRequest.createdAt) / dayMs);
-  const idleDays = Math.floor(updatedAgeMs(pullRequest) / dayMs);
-  const botPenalty = isBotAuthor(pullRequest.author) ? 120 : 0;
-
-  switch (bucket) {
-    case 'Ready to merge':
-      return 200 + openDays * 4 + ageDays(pullRequest.review.lastReviewedAt ?? pullRequest.updatedAt) * 3 - botPenalty;
-    case 'Needs review':
-      return 180 + openDays * 6 + idleDays - botPenalty;
-    case 'Review started':
-      return 160 + openDays * 4 + pullRequest.review.reviewerCount * 8 + pullRequest.review.commentedReviewCount - botPenalty;
-    case 'Author response':
-      return 220 + openDays * 3 + ageDays(pullRequest.review.lastReviewedAt ?? pullRequest.updatedAt) * 6 - botPenalty;
-    case 'Stalled':
-      return 170 + idleDays * 8 + openDays * 2 - botPenalty;
-    case 'Draft':
-      return openDays - botPenalty;
-    default:
-      return openDays - botPenalty;
-  }
 }
 
 function reviewBucketLabel(pullRequest: PullRequestSummary) {
@@ -320,8 +278,32 @@ function reviewBucketLabel(pullRequest: PullRequestSummary) {
     return 'Draft';
   }
 
+  if (isGeneratedDocsPullRequest(pullRequest)) {
+    return 'Docs';
+  }
+
+  if (isCommunityToolkitPullRequest(pullRequest)) {
+    return 'Community Toolkit';
+  }
+
+  if (isBotAuthor(pullRequest.author)) {
+    return 'Bots / automation';
+  }
+
+  if (isApprovedButAging(pullRequest)) {
+    return 'Approved but aging';
+  }
+
   if (pullRequest.review.state === 'approved') {
     return 'Ready to merge';
+  }
+
+  if (needsReReview(pullRequest)) {
+    return 'Re-review needed';
+  }
+
+  if (isQuickWin(pullRequest)) {
+    return 'Quick wins';
   }
 
   if (pullRequest.review.state === 'waiting') {
@@ -344,6 +326,39 @@ function reviewSignal(pullRequest: PullRequestSummary) {
     return 'Draft';
   }
 
+  const approvedAt = approvalAgeAt(pullRequest);
+  if (isApprovedButAging(pullRequest) && approvedAt) {
+    return `Approved ${formatAge(approvedAt)}`;
+  }
+
+  if (needsReReview(pullRequest)) {
+    return pullRequest.lastCommitAt
+      ? `Pushed ${formatAge(pullRequest.lastCommitAt)}`
+      : 'Pushed after review';
+  }
+
+  if (isGeneratedDocsPullRequest(pullRequest)) {
+    return 'docs-from-code';
+  }
+
+  if (isCommunityToolkitPullRequest(pullRequest)) {
+    return 'CommunityToolkit/Aspire';
+  }
+
+  if (isBotAuthor(pullRequest.author)) {
+    return 'bot';
+  }
+
+  if (isCommunityWaiting(pullRequest)) {
+    return pullRequest.review.state === 'waiting'
+      ? `Community · waiting ${formatAge(pullRequest.createdAt)}`
+      : `Community · idle ${formatAge(pullRequest.updatedAt)}`;
+  }
+
+  if (isQuickWin(pullRequest)) {
+    return reviewFootprint(pullRequest);
+  }
+
   if (pullRequest.review.state === 'changes_requested') {
     return 'Changes requested';
   }
@@ -363,12 +378,105 @@ function reviewSignal(pullRequest: PullRequestSummary) {
   return formatCount(pullRequest.review.reviewerCount, 'reviewer');
 }
 
+function isApprovedButAging(pullRequest: PullRequestSummary) {
+  const approvedAt = approvalAgeAt(pullRequest);
+  return pullRequest.review.state === 'approved'
+    && approvedAt != null
+    && ageMs(approvedAt) >= approvedAgingMs;
+}
+
+function approvalAgeAt(pullRequest: PullRequestSummary) {
+  return pullRequest.review.lastApprovedAt ?? pullRequest.review.lastReviewedAt;
+}
+
+function needsReReview(pullRequest: PullRequestSummary) {
+  return pullRequest.review.lastReviewedAt != null
+    && pullRequest.lastCommitAt != null
+    && (pullRequest.review.state === 'reviewed' || pullRequest.review.state === 'changes_requested')
+    && new Date(pullRequest.lastCommitAt).getTime() > new Date(pullRequest.review.lastReviewedAt).getTime();
+}
+
+function isGeneratedDocsPullRequest(pullRequest: PullRequestSummary) {
+  return pullRequest.repository.toLowerCase() === 'microsoft/aspire.dev'
+    && pullRequest.labels.some((label) => label.toLowerCase() === 'docs-from-code');
+}
+
+function isCommunityToolkitPullRequest(pullRequest: PullRequestSummary) {
+  return pullRequest.repository.toLowerCase() === 'communitytoolkit/aspire';
+}
+
+function isCommunityWaiting(pullRequest: PullRequestSummary) {
+  return isCommunityAuthor(pullRequest.author)
+    && (
+      (pullRequest.review.state === 'waiting' && ageMs(pullRequest.createdAt) >= communityWaitMs)
+      || (pullRequest.review.state === 'reviewed' && isIdle(pullRequest))
+    );
+}
+
+function isQuickWin(pullRequest: PullRequestSummary) {
+  const linesChanged = changedLineCount(pullRequest);
+  return pullRequest.review.state === 'waiting'
+    && !isBotAuthor(pullRequest.author)
+    && !targetsCurrentRelease(pullRequest)
+    && pullRequest.linkedIssues.length <= 1
+    && pullRequest.commitCount <= 2
+    && pullRequest.changedFiles > 0
+    && pullRequest.changedFiles <= quickWinFileThreshold
+    && linesChanged > 0
+    && linesChanged <= quickWinLineThreshold
+    && !isIdle(pullRequest);
+}
+
+function reviewFootprint(pullRequest: PullRequestSummary) {
+  const parts = [
+    pullRequest.changedFiles > 0 ? formatCount(pullRequest.changedFiles, 'file') : null,
+    changedLineCount(pullRequest) > 0 ? formatCount(changedLineCount(pullRequest), 'line') : null,
+    pullRequest.commitCount > 0 ? formatCount(pullRequest.commitCount, 'commit') : null,
+  ].filter(Boolean);
+
+  return parts.slice(0, 2).join(' · ') || 'size unknown';
+}
+
+function changedLineCount(pullRequest: PullRequestSummary) {
+  return pullRequest.additions + pullRequest.deletions;
+}
+
+function isCommunityAuthor(author: string) {
+  return !isBotAuthor(author)
+    && !coreTeamMembers.some((member) => actorIdentityKey(member) === actorIdentityKey(author));
+}
+
 export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
   const pullRequest = item.pullRequest;
   const signals: AttentionSignal[] = [actionSignal(pullRequest)];
 
   if (targetsCurrentRelease(pullRequest)) {
     signals.push({ label: `release ${currentRelease}`, tone: 'danger' });
+  }
+
+  const approvedAt = approvalAgeAt(pullRequest);
+  if (isApprovedButAging(pullRequest) && approvedAt) {
+    signals.push({ label: `approved ${formatAge(approvedAt)}`, tone: 'danger' });
+  }
+
+  if (needsReReview(pullRequest)) {
+    signals.push({ label: 'commit after review', tone: 'warning' });
+  }
+
+  if (isGeneratedDocsPullRequest(pullRequest)) {
+    signals.push({ label: 'docs', tone: 'accent' });
+  }
+
+  if (isCommunityToolkitPullRequest(pullRequest)) {
+    signals.push({ label: 'community toolkit', tone: 'accent' });
+  }
+
+  if (isCommunityWaiting(pullRequest)) {
+    signals.push({ label: 'community wait', tone: 'warning' });
+  }
+
+  if (isQuickWin(pullRequest)) {
+    signals.push({ label: 'quick win', tone: 'success' });
   }
 
   if (isIdle(pullRequest)) {
@@ -452,6 +560,30 @@ function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {
     return { label: 'draft', tone: 'muted' };
   }
 
+  if (isApprovedButAging(pullRequest)) {
+    return { label: 'land approval', tone: 'danger' };
+  }
+
+  if (needsReReview(pullRequest)) {
+    return { label: 're-review', tone: 'warning' };
+  }
+
+  if (isGeneratedDocsPullRequest(pullRequest)) {
+    return { label: 'docs review', tone: 'accent' };
+  }
+
+  if (isCommunityToolkitPullRequest(pullRequest)) {
+    return { label: 'toolkit review', tone: 'accent' };
+  }
+
+  if (isCommunityWaiting(pullRequest)) {
+    return { label: 'community wait', tone: 'warning' };
+  }
+
+  if (isQuickWin(pullRequest)) {
+    return { label: 'quick win', tone: 'success' };
+  }
+
   if (pullRequest.review.state === 'changes_requested') {
     return { label: 'author fix', tone: 'danger' };
   }
@@ -500,10 +632,6 @@ function updatedAgeMs(pullRequest: PullRequestSummary) {
 
 function ageMs(value: string) {
   return Date.now() - new Date(value).getTime();
-}
-
-function ageDays(value: string) {
-  return Math.floor(ageMs(value) / dayMs);
 }
 
 export function createTriageModel(

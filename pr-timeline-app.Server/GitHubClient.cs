@@ -8,6 +8,7 @@ using Microsoft.Extensions.Caching.Memory;
 sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tokenProvider, IMemoryCache cache, IHostEnvironment environment)
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
+    private const int PullRequestPageSize = 100;
     private const int MaxLinkedIssuesPerPullRequest = 10;
 
     public async Task<string?> GetCurrentUserLoginAsync(CancellationToken cancellationToken)
@@ -34,7 +35,9 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         return await cache.GetOrCreateAsync(cacheKey, async entry =>
         {
             entry.AbsoluteExpirationRelativeToNow = CacheDuration;
-            var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls?state={Uri.EscapeDataString(state)}&sort=updated&direction=desc&per_page=30";
+            var sort = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "created" : "updated";
+            var direction = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "asc" : "desc";
+            var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls?state={Uri.EscapeDataString(state)}&sort={sort}&direction={direction}&per_page={PullRequestPageSize}";
             var pullRequestDtos = await SendGitHubRequestAsync(
                 url,
                 GitHubJsonSerializerContext.Default.GitHubPullRequestDtoArray,
@@ -57,11 +60,41 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             await Task.WhenAll(reviewTasks.Values);
             await Task.WhenAll(linkedIssueTasks.Values);
 
+            var reviewsByPullRequest = reviewTasks.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value.Result);
+            var detailTasks = pullRequests
+                .Where(pullRequest => reviewsByPullRequest[pullRequest.Number].State == "waiting")
+                .ToDictionary(
+                    pullRequest => pullRequest.Number,
+                    pullRequest => GetPullRequestDetailsOrNullAsync(repositoryName, pullRequest.Number, cancellationToken));
+            var lastCommitTasks = pullRequests
+                .Where(pullRequest =>
+                    reviewsByPullRequest[pullRequest.Number] is { LastReviewedAt: not null } review
+                    && (review.State == "reviewed" || review.State == "changes_requested"))
+                .ToDictionary(
+                    pullRequest => pullRequest.Number,
+                    pullRequest => GetLastCommitAtAsync(repositoryName, pullRequest.Number, cancellationToken));
+
+            await Task.WhenAll(detailTasks.Values);
+            await Task.WhenAll(lastCommitTasks.Values);
+
             return pullRequests
-                .Select(pullRequest => pullRequest with
+                .Select(pullRequest =>
                 {
-                    LinkedIssues = linkedIssueTasks[pullRequest.Number].Result,
-                    Review = reviewTasks[pullRequest.Number].Result
+                    detailTasks.TryGetValue(pullRequest.Number, out var detailTask);
+                    lastCommitTasks.TryGetValue(pullRequest.Number, out var lastCommitTask);
+                    var details = detailTask?.Result;
+                    return pullRequest with
+                    {
+                        LinkedIssues = linkedIssueTasks[pullRequest.Number].Result,
+                        CommitCount = details?.CommitCount ?? pullRequest.CommitCount,
+                        Additions = details?.Additions ?? pullRequest.Additions,
+                        Deletions = details?.Deletions ?? pullRequest.Deletions,
+                        ChangedFiles = details?.ChangedFiles ?? pullRequest.ChangedFiles,
+                        LastCommitAt = lastCommitTask?.Result,
+                        Review = reviewsByPullRequest[pullRequest.Number]
+                    };
                 })
                 .ToArray();
         }) ?? [];
@@ -119,6 +152,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 ApprovalCount: humanReviews.Count(review => review.State == "APPROVED"),
                 ChangesRequestedCount: humanReviews.Count(review => review.State == "CHANGES_REQUESTED"),
                 CommentedReviewCount: humanReviews.Count(review => review.State == "COMMENTED"),
+                LastApprovedAt: humanReviews.LastOrDefault(review => review.State == "APPROVED")?.SubmittedAt,
                 LastReviewedAt: humanReviews.LastOrDefault()?.SubmittedAt);
         }) ?? ReviewStatus.Waiting;
     }
@@ -176,6 +210,65 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
 
             return PullRequestDetails.FromDto(pullRequest);
         }) ?? throw new GitHubApiException(HttpStatusCode.NotFound, $"Pull request #{number} was not found.");
+    }
+
+    private async Task<PullRequestDetails?> GetPullRequestDetailsOrNullAsync(
+        RepositoryName repositoryName,
+        int number,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await GetPullRequestDetailsAsync(repositoryName, number, cancellationToken);
+        }
+        catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            // Detail metrics are enrichment-only. Keep the PR visible if it disappears mid-refresh.
+            return null;
+        }
+    }
+
+    private async Task<DateTimeOffset?> GetLastCommitAtAsync(
+        RepositoryName repositoryName,
+        int number,
+        CancellationToken cancellationToken)
+    {
+        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
+        var cacheKey = $"commits:last:{authCacheKey}:{repositoryName}:{number}";
+        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheDuration;
+            var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}/commits?per_page=100";
+            var commits = new List<GitHubPullRequestCommitDto>();
+
+            for (var page = 0; page < 3 && url is not null; page++)
+            {
+                GitHubPullRequestCommitDto[] pageCommits;
+                using var response = await SendAuthorizedRequestAsync(url, cancellationToken);
+
+                try
+                {
+                    pageCommits = await ReadGitHubJsonAsync(
+                        response,
+                        GitHubJsonSerializerContext.Default.GitHubPullRequestCommitDtoArray,
+                        cancellationToken);
+                }
+                catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+                {
+                    // Commit recency is enrichment-only. Keep the PR in the list without it.
+                    return null;
+                }
+
+                commits.AddRange(pageCommits);
+                url = GetNextPageUrl(response);
+            }
+
+            return commits
+                .Select(commit => commit.Commit?.Committer?.Date ?? commit.Commit?.Author?.Date)
+                .Where(date => date is not null)
+                .OrderByDescending(date => date)
+                .FirstOrDefault();
+        });
     }
 
     private async Task<IReadOnlyList<LinkedIssueSummary>> GetLinkedIssuesAsync(

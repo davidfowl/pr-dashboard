@@ -5,12 +5,9 @@ import type {
   PickItem,
   PullRequestSummary,
   PullState,
-  TeamMetrics,
 } from '../../types';
 import DashboardFilters from './DashboardFilters';
-import ForMePanel from './ForMePanel';
 import QueueOverview from './QueueOverview';
-import TeamMetricsStrip from './TeamMetricsStrip';
 
 type DashboardViewProps = {
   repo: string;
@@ -18,10 +15,7 @@ type DashboardViewProps = {
   pullsLoading: boolean;
   pullRequests: PullRequestSummary[];
   error: string | null;
-  teamMetrics: TeamMetrics;
   developerPullRequestCounts: DeveloperPullRequestCount[];
-  automationPullRequests: PullRequestSummary[];
-  communityPullRequests: PullRequestSummary[];
   attentionBuckets: AttentionBucket[];
   forMeItems: PickItem[];
   login?: string;
@@ -37,10 +31,7 @@ function DashboardView({
   pullsLoading,
   pullRequests,
   error,
-  teamMetrics,
   developerPullRequestCounts,
-  automationPullRequests,
-  communityPullRequests,
   attentionBuckets,
   forMeItems,
   login,
@@ -53,22 +44,12 @@ function DashboardView({
     <>
       {(pullRequests.length > 0 || attentionBuckets.length > 0) && (
         <section className="panel queue-panel" aria-label="Review queue">
-          {pullRequests.length > 0 && <TeamMetricsStrip metrics={teamMetrics} />}
-
-          {forMeItems.length > 0 && (
-            <ForMePanel
-              items={forMeItems}
-              login={login}
-              onSelectPullRequest={onSelectPullRequest}
-            />
-          )}
-
           {pullRequests.length > 0 && (
             <QueueOverview
               counts={developerPullRequestCounts}
-              automationPullRequests={automationPullRequests}
-              communityPullRequests={communityPullRequests}
               attentionBuckets={attentionBuckets}
+              forMeItems={forMeItems}
+              login={login}
               onSelectPullRequest={onSelectPullRequest}
             />
           )}

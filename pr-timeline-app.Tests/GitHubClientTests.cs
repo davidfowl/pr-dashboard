@@ -20,7 +20,7 @@ public sealed class GitHubClientTests
     {
         var client = CreateClient(path => path switch
         {
-            "repos/example/repo/pulls?state=open&sort=updated&direction=desc&per_page=30" => Json(
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
                 """
                 [
                   {
@@ -40,6 +40,7 @@ public sealed class GitHubClientTests
                 ]
                 """),
             "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
             "repos/example/repo/issues/404" => Json("""{ "message": "Not Found" }""", HttpStatusCode.NotFound),
             _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
         });
@@ -51,6 +52,10 @@ public sealed class GitHubClientTests
 
         var pullRequest = Assert.Single(pullRequests);
         Assert.Empty(pullRequest.LinkedIssues);
+        Assert.Equal(1, pullRequest.CommitCount);
+        Assert.Equal(10, pullRequest.Additions);
+        Assert.Equal(2, pullRequest.Deletions);
+        Assert.Equal(1, pullRequest.ChangedFiles);
     }
 
     [Fact]
@@ -58,7 +63,7 @@ public sealed class GitHubClientTests
     {
         var client = CreateClient(path => path switch
         {
-            "repos/example/repo/pulls?state=open&sort=updated&direction=desc&per_page=30" => Json(
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
                 """
                 [
                   {
@@ -76,8 +81,9 @@ public sealed class GitHubClientTests
                     "requested_teams": []
                   }
                 ]
-                """),
+            """),
             "repos/example/repo/pulls/1/reviews?per_page=100" => Json("""{ "message": "Not Found" }""", HttpStatusCode.NotFound),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
             _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
         });
 
@@ -96,7 +102,7 @@ public sealed class GitHubClientTests
     {
         var client = CreateClient(path => path switch
         {
-            "repos/example/repo/pulls?state=open&sort=updated&direction=desc&per_page=30" => Json(
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
                 """
                 [
                   {
@@ -128,8 +134,9 @@ public sealed class GitHubClientTests
                     "requested_teams": []
                   }
                 ]
-                """),
+            """),
             "repos/example/repo/pulls/2/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/2" => Json(PullRequestDetailsJson(2)),
             _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
         });
 
@@ -141,6 +148,64 @@ public sealed class GitHubClientTests
         var pullRequest = Assert.Single(pullRequests);
         Assert.Equal(2, pullRequest.Number);
         Assert.False(pullRequest.Draft);
+    }
+
+    [Fact]
+    public async Task PullListIncludesLastCommitAfterReviewForReReviewSignals()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                """
+                [
+                  {
+                    "number": 1,
+                    "title": "Update feature",
+                    "state": "open",
+                    "body": null,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-03T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": []
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                """
+                [
+                  {
+                    "user": { "login": "reviewer" },
+                    "state": "COMMENTED",
+                    "submitted_at": "2026-01-02T00:00:00Z"
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/commits?per_page=100" => Json(
+                """
+                [
+                  {
+                    "commit": {
+                      "author": { "date": "2026-01-03T00:00:00Z" },
+                      "committer": { "date": "2026-01-03T00:00:00Z" }
+                    }
+                  }
+                ]
+                """),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("reviewed", pullRequest.Review.State);
+        Assert.Equal(DateTimeOffset.Parse("2026-01-03T00:00:00Z"), pullRequest.LastCommitAt);
     }
 
     private static GitHubClient CreateClient(Func<string, HttpResponseMessage> route)
@@ -173,6 +238,27 @@ public sealed class GitHubClientTests
         {
             Content = new StringContent(content, Encoding.UTF8, "application/json")
         };
+
+    private static string PullRequestDetailsJson(int number) =>
+        $$"""
+        {
+          "number": {{number}},
+          "title": "Ready for review",
+          "state": "open",
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-02T00:00:00Z",
+          "draft": false,
+          "user": { "login": "octocat" },
+          "html_url": "https://github.com/example/repo/pull/{{number}}",
+          "labels": [],
+          "requested_reviewers": [],
+          "requested_teams": [],
+          "commits": 1,
+          "additions": 10,
+          "deletions": 2,
+          "changed_files": 1
+        }
+        """;
 
     private sealed class StubGitHubHandler(Func<string, HttpResponseMessage> route) : HttpMessageHandler
     {

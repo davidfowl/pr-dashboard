@@ -29,6 +29,11 @@ export type PullRequestSummary = {
   requestedReviewers: string[];
   milestone?: string;
   linkedIssues: LinkedIssueSummary[];
+  commitCount: number;
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  lastCommitAt?: string | null;
   review: ReviewStatus;
 };
 
@@ -43,12 +48,13 @@ export type LinkedIssueSummary = {
 
 export type ReviewStatus = {
   state: 'waiting' | 'reviewed' | 'approved' | 'changes_requested';
-  latestState?: string;
+  latestState?: string | null;
   reviewerCount: number;
   approvalCount: number;
   changesRequestedCount: number;
   commentedReviewCount: number;
-  lastReviewedAt?: string;
+  lastApprovedAt?: string | null;
+  lastReviewedAt?: string | null;
 };
 
 export type PullRequestListResponse = {
@@ -101,13 +107,6 @@ export type TimelineResponse = {
   number: number;
   stats: TimelineStats;
   items: TimelineItem[];
-};
-
-export type TeamMetrics = {
-  averageReadiness: number;
-  reviewCoverage: number;
-  waiting: number;
-  idle: number;
 };
 
 export type DeveloperPullRequestCount = {
