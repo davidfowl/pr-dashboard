@@ -731,7 +731,7 @@ select:focus-visible {
 
 .attention-list button {
   display: grid;
-  grid-template-columns: 5rem 6rem minmax(0, 1fr) minmax(8rem, auto);
+  grid-template-columns: 5rem minmax(10rem, 14rem) minmax(0, 1fr) minmax(8rem, auto);
   column-gap: 0.75rem;
   row-gap: 0.35rem;
   align-items: start;

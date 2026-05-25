@@ -1,6 +1,5 @@
 import type { PullRequestSummary } from '../types';
 import { formatRelative } from '../utils/format';
-import { shortRepoName } from '../utils/routing';
 import PullRequestSignalPills from './PullRequestSignalPills';
 import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
 
@@ -21,7 +20,9 @@ function PullRequestListItem({
       onClick={() => onSelectPullRequest(pullRequest.repository, pullRequest)}
     >
       <span className="attention-pr-number">#{pullRequest.number}</span>
-      <span className="attention-pr-repo">{shortRepoName(pullRequest.repository)}</span>
+      <span className="attention-pr-repo" title={pullRequest.repository}>
+        {pullRequest.repository}
+      </span>
       <strong>{pullRequest.title}</strong>
       <span className="attention-pr-meta">
         {pullRequest.author} · updated {formatRelative(pullRequest.updatedAt)}

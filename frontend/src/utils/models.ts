@@ -29,6 +29,7 @@ const communityWaitMs = 12 * hourMs;
 const needsReviewFreshMs = 2 * dayMs;
 const quickWinLineThreshold = 80;
 const quickWinFileThreshold = 3;
+const approvedButAgingBucketLabel = 'Approved but aging';
 
 export function createDeveloperPullRequestCounts(pullRequests: PullRequestSummary[]): DeveloperPullRequestCount[] {
   const coreTeamKeys = new Set(coreTeamMembers.map(actorIdentityKey));
@@ -156,7 +157,7 @@ function sameLogin(first: string, second: string) {
 export function createAttentionBuckets(pullRequests: PullRequestSummary[]): AttentionBucket[] {
   const buckets: AttentionBucket[] = [
     {
-      label: 'Approved but aging',
+      label: approvedButAgingBucketLabel,
       summary: 'Approved PRs that have been waiting to land for multiple days.',
       tone: 'danger',
       metric: 'land stale approvals',
@@ -258,15 +259,7 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
     }
   }
 
-  for (const bucket of buckets) {
-    bucket.items.sort(compareAttentionItems);
-  }
-
   return buckets.filter((bucket) => bucket.items.length > 0);
-}
-
-function compareAttentionItems(first: AttentionItem, second: AttentionItem) {
-  return new Date(first.pullRequest.createdAt).getTime() - new Date(second.pullRequest.createdAt).getTime();
 }
 
 function reviewBucketLabels(pullRequest: PullRequestSummary) {
@@ -335,7 +328,7 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
 
   const approvedAt = approvalAgeAt(pullRequest);
   switch (bucketLabel) {
-    case 'Approved but aging':
+    case approvedButAgingBucketLabel:
       return approvedAt ? `Approved ${formatAge(approvedAt)}` : 'Approved';
     case 'Ready to merge':
       return `${formatCount(pullRequest.review.approvalCount, 'approval')}`;

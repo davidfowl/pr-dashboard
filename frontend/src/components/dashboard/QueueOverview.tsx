@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import { dayMs } from '../../constants';
 import type { AttentionBucket, AttentionItem, DeveloperPullRequestCount, PickItem, PullRequestSummary } from '../../types';
 import { colorForText, formatCount, formatRelative, initials } from '../../utils/format';
-import PullRequestListItem from '../PullRequestListItem';
+import PullRequestList from '../PullRequestList';
 import AttentionBoard from './AttentionBoard';
 
 type QueueOverviewProps = {
@@ -21,10 +21,9 @@ type FocusItem = AttentionItem & {
 
 const pullRequestListLimit = 10;
 const focusAgeLimitMs = 14 * dayMs;
-const recentlyUpdatedFocusWindowMs = 2 * dayMs;
 const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community']);
 const disqualifyingFocusBucketLabels = new Set(['Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community']);
-const focusBucketRank = new Map([
+const focusBucketRanks = new Map([
   ['Approved but aging', 0],
   ['Re-review needed', 1],
   ['Ready to merge', 2],
@@ -56,9 +55,7 @@ function QueueOverview({
           }))),
       blockedKeys,
     )
-      .filter((item) => isWithinFocusAgeLimit(item.pullRequest))
-      .sort(compareFocusItems)
-      .slice(0, pullRequestListLimit);
+      .filter((item) => isWithinFocusAgeLimit(item.pullRequest));
   }, [attentionBuckets]);
 
   const coreOpenCount = counts.reduce((total, count) => total + count.openPullRequestCount, 0);
@@ -134,26 +131,23 @@ function QueueOverview({
       <section className="focus-panel" aria-label="Focused attention queue">
         <div className="attention-card-header">
           <span>Needs attention</span>
-          <strong>{formatCount(focusItems.length, 'shown')}</strong>
+          <strong>{formatCount(Math.min(focusItems.length, pullRequestListLimit), 'shown')}</strong>
         </div>
         <p>Actionable PRs across the loaded repositories.</p>
 
-        <div className="attention-list">
-          {focusItems.length === 0 && (
-            <p className="empty-for-me">No recent non-automation PRs need attention in the current results.</p>
-          )}
-          {focusItems.map((item) => (
-            <PullRequestListItem
-              key={`${item.pullRequest.repository}-${item.pullRequest.number}`}
-              pullRequest={item.pullRequest}
-              onSelectPullRequest={onSelectPullRequest}
-              signalProps={{
-                leadingSignals: [{ label: item.bucketLabel, tone: item.bucketTone }],
-                computedSignalLimit: 4,
-              }}
-            />
-          ))}
-        </div>
+        <PullRequestList
+          entries={focusItems.map((item) => ({
+            pullRequest: item.pullRequest,
+            bucketLabel: item.bucketLabel,
+            signalProps: {
+              leadingSignals: [{ label: item.bucketLabel, tone: item.bucketTone }],
+              computedSignalLimit: 4,
+            },
+          }))}
+          limit={pullRequestListLimit}
+          emptyState="No recent non-automation PRs need attention in the current results."
+          onSelectPullRequest={onSelectPullRequest}
+        />
       </section>
 
       <section className="owner-drilldown" aria-label="Core team ownership breakdown">
@@ -176,10 +170,6 @@ function isWithinFocusAgeLimit(pullRequest: PullRequestSummary) {
   return Date.now() - new Date(pullRequest.createdAt).getTime() <= focusAgeLimitMs;
 }
 
-function isRecentlyUpdatedFocusItem(pullRequest: PullRequestSummary) {
-  return Date.now() - new Date(pullRequest.updatedAt).getTime() <= recentlyUpdatedFocusWindowMs;
-}
-
 function blockedFocusKeys(buckets: AttentionBucket[]) {
   return new Set(
     buckets
@@ -198,7 +188,7 @@ function dedupeFocusItems(items: FocusItem[], blockedKeys: Set<string>) {
     }
 
     const existing = itemsByPullRequest.get(key);
-    if (!existing || bucketRank(item.bucketLabel) < bucketRank(existing.bucketLabel)) {
+    if (!existing || focusBucketRank(item.bucketLabel) < focusBucketRank(existing.bucketLabel)) {
       itemsByPullRequest.set(key, item);
     }
   }
@@ -206,16 +196,8 @@ function dedupeFocusItems(items: FocusItem[], blockedKeys: Set<string>) {
   return [...itemsByPullRequest.values()];
 }
 
-function compareFocusItems(first: FocusItem, second: FocusItem) {
-  return Number(isRecentlyUpdatedFocusItem(second.pullRequest)) - Number(isRecentlyUpdatedFocusItem(first.pullRequest))
-    || bucketRank(first.bucketLabel) - bucketRank(second.bucketLabel)
-    || new Date(first.pullRequest.createdAt).getTime() - new Date(second.pullRequest.createdAt).getTime()
-    || first.pullRequest.repository.localeCompare(second.pullRequest.repository)
-    || first.pullRequest.number - second.pullRequest.number;
-}
-
-function bucketRank(label: string) {
-  return focusBucketRank.get(label) ?? Number.MAX_SAFE_INTEGER;
+function focusBucketRank(label: string) {
+  return focusBucketRanks.get(label) ?? Number.MAX_SAFE_INTEGER;
 }
 
 function pullRequestKey(pullRequest: PullRequestSummary) {

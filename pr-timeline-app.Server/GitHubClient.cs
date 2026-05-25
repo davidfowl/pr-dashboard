@@ -10,6 +10,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
     private const int PullRequestPageSize = 100;
     private const int MaxLinkedIssuesPerPullRequest = 10;
+    private const int MaxGitHubRedirects = 3;
 
     public async Task<string?> GetCurrentUserLoginAsync(CancellationToken cancellationToken)
     {
@@ -320,8 +321,14 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 return null;
             }
 
+            // Redirected issue lookups can start from old repo names like dotnet/aspire but return
+            // canonical repository metadata. Surface the canonical org/repo when GitHub provides it.
+            var issueRepositoryName = TryParseGitHubRepositoryApiUrl(issue.RepositoryUrl, out var parsedRepositoryName)
+                ? parsedRepositoryName
+                : repositoryName;
+
             return issue.PullRequest is null
-                ? LinkedIssueSummary.FromDto(repositoryName, issue)
+                ? LinkedIssueSummary.FromDto(issueRepositoryName, issue)
                 : null;
         });
     }
@@ -367,10 +374,23 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                     : "GitHub authentication is required. Sign in with GitHub.");
         }
 
-        var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Value);
+        // Follow GitHub API redirects ourselves so every redirected request gets the bearer token.
+        for (var redirectCount = 0; redirectCount <= MaxGitHubRedirects; redirectCount++)
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Value);
 
-        return await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            var response = await httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            if (!TryGetGitHubRedirectUrl(response, out var redirectUrl))
+            {
+                return response;
+            }
+
+            response.Dispose();
+            url = redirectUrl;
+        }
+
+        throw new GitHubApiException(HttpStatusCode.BadGateway, "GitHub API returned too many redirects.");
     }
 
     private static async Task<T> ReadGitHubJsonAsync<T>(
@@ -428,6 +448,53 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         }
 
         return null;
+    }
+
+    private static bool TryGetGitHubRedirectUrl(HttpResponseMessage response, out string redirectUrl)
+    {
+        redirectUrl = "";
+        var statusCode = (int)response.StatusCode;
+        if (statusCode < 300 || statusCode >= 400 || response.Headers.Location is not { } location)
+        {
+            return false;
+        }
+
+        if (location.IsAbsoluteUri)
+        {
+            if (!location.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase)
+                || !location.Host.Equals("api.github.com", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            redirectUrl = location.PathAndQuery.TrimStart('/');
+            return true;
+        }
+
+        redirectUrl = location.OriginalString.TrimStart('/');
+        return !string.IsNullOrWhiteSpace(redirectUrl);
+    }
+
+    private static bool TryParseGitHubRepositoryApiUrl(string? repositoryUrl, out RepositoryName repositoryName)
+    {
+        repositoryName = default;
+        if (string.IsNullOrWhiteSpace(repositoryUrl)
+            || !Uri.TryCreate(repositoryUrl, UriKind.Absolute, out var uri)
+            || !uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase)
+            || !uri.Host.Equals("api.github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var path = uri.AbsolutePath.Trim('/');
+        const string reposPrefix = "repos/";
+        if (!path.StartsWith(reposPrefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var repositoryPath = path[reposPrefix.Length..];
+        return RepositoryName.TryParse(repositoryPath, out repositoryName);
     }
 
     private static IReadOnlyList<IssueReference> FindLinkedIssueReferences(RepositoryName repositoryName, string? body)

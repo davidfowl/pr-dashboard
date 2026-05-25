@@ -51,6 +51,12 @@ public static class GitHubServiceCollectionExtensions
             httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("pr-timeline-app", "1.0"));
             httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
             httpClient.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
+        })
+        .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+        {
+            // GitHub redirects old repository names to canonical repository IDs. HttpClient drops
+            // Authorization when it auto-follows redirects, so GitHub sees the redirected request as anonymous.
+            AllowAutoRedirect = false
         });
 
         return services;

@@ -420,6 +420,7 @@ sealed class GitHubIssueDto
     public int Number { get; init; }
     public string? Title { get; init; }
     public string? HtmlUrl { get; init; }
+    public string? RepositoryUrl { get; init; }
     public GitHubLabelDto[] Labels { get; init; } = [];
     public GitHubMilestoneDto? Milestone { get; init; }
     public GitHubIssuePullRequestDto? PullRequest { get; init; }
