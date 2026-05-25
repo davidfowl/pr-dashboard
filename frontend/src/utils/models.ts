@@ -183,17 +183,6 @@ function createPersonalPick(pullRequest: PullRequestSummary, login: string): Pic
   return null;
 }
 
-export function createForMeSignals(item: PickItem): AttentionSignal[] {
-  const firstReason = item.reason.split(' · ')[0];
-  const signals = createAttentionSignals({ pullRequest: item.pullRequest, reason: item.reason })
-    .filter((signal) => signal.label !== item.action && signal.label !== actionSignal(item.pullRequest).label);
-
-  return dedupeSignals([
-    { label: firstReason, tone: 'accent' },
-    ...signals,
-  ]).slice(0, 7);
-}
-
 function pickScore(item: PickItem) {
   let score = item.personal ? 1000 : 0;
   if (item.action === 'Review this') score += 90;

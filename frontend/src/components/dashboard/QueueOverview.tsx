@@ -3,8 +3,9 @@ import type { CSSProperties } from 'react';
 import { currentRelease } from '../../constants';
 import type { AttentionBucket, AttentionItem, DeveloperPullRequestCount, PullRequestSummary } from '../../types';
 import { colorForText, formatCount, formatRelative, initials } from '../../utils/format';
-import { createAttentionSignals, targetsCurrentRelease } from '../../utils/models';
+import { targetsCurrentRelease } from '../../utils/models';
 import { shortRepoName } from '../../utils/routing';
+import PullRequestListItem from '../PullRequestListItem';
 import AttentionBoard from './AttentionBoard';
 
 type OwnerTab = 'core' | 'automation' | 'community';
@@ -123,33 +124,17 @@ function QueueOverview({
             <p className="empty-for-me">No human-authored open PRs need attention in the current results.</p>
           )}
           {focusItems.map((item) => (
-            <button
+            <PullRequestListItem
               key={`${item.pullRequest.repository}-${item.pullRequest.number}`}
-              type="button"
-              onClick={() => onSelectPullRequest(item.pullRequest.repository, item.pullRequest)}
-            >
-              <span className="attention-pr-number">#{item.pullRequest.number}</span>
-              <span className="attention-pr-repo">{shortRepoName(item.pullRequest.repository)}</span>
-              <strong>{item.pullRequest.title}</strong>
-              <span className="attention-pr-meta">
-                {item.pullRequest.author} · updated {formatRelative(item.pullRequest.updatedAt)}
-              </span>
-              <span className="attention-pr-signals">
-                <span className={`attention-signal ${item.bucketTone}`}>{item.bucketLabel}</span>
-                {item.releasePriority && (
-                  <span className="attention-signal danger">release {currentRelease}</span>
-                )}
-                <span className="attention-signal muted">{ownerLabel(item.ownership)}</span>
-                {createAttentionSignals(item)
-                  .filter((signal) => signal.label !== `release ${currentRelease}`)
-                  .slice(0, 4)
-                  .map((signal) => (
-                    <span key={signal.label} className={`attention-signal ${signal.tone ?? 'muted'}`}>
-                      {signal.label}
-                    </span>
-                  ))}
-              </span>
-            </button>
+              pullRequest={item.pullRequest}
+              onSelectPullRequest={onSelectPullRequest}
+              signalProps={{
+                leadingSignals: [{ label: item.bucketLabel, tone: item.bucketTone }],
+                trailingSignals: [{ label: ownerLabel(item.ownership), tone: 'muted' }],
+                computedSignalLimit: 4,
+                excludeComputedLabels: [ownerLabel(item.ownership)],
+              }}
+            />
           ))}
         </div>
       </section>
@@ -210,6 +195,7 @@ function QueueOverview({
             title="Bots / automation"
             emptyMessage="No bot or automation open PRs in the current results."
             pullRequests={automationPullRequests}
+            owner="automation"
             onSelectPullRequest={onSelectPullRequest}
           />
         )}
@@ -219,6 +205,7 @@ function QueueOverview({
             title="Community PRs"
             emptyMessage="No community open PRs in the current results."
             pullRequests={communityPullRequests}
+            owner="community"
             onSelectPullRequest={onSelectPullRequest}
           />
         )}
@@ -238,6 +225,7 @@ type PullRequestSectionProps = {
   title: string;
   emptyMessage: string;
   pullRequests: PullRequestSummary[];
+  owner: OwnerTab;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
 };
 
@@ -245,8 +233,11 @@ function PullRequestSection({
   title,
   emptyMessage,
   pullRequests,
+  owner,
   onSelectPullRequest,
 }: PullRequestSectionProps) {
+  const ownerSignal = { label: ownerLabel(owner), tone: 'muted' as const };
+
   return (
     <section className="drilldown-panel" aria-label={title}>
       <div className="attention-card-header">
@@ -259,28 +250,15 @@ function PullRequestSection({
           <p className="empty-for-me">{emptyMessage}</p>
         )}
         {pullRequests.map((pullRequest) => (
-          <button
+          <PullRequestListItem
             key={`${pullRequest.repository}-${pullRequest.number}`}
-            type="button"
-            onClick={() => onSelectPullRequest(pullRequest.repository, pullRequest)}
-          >
-            <span className="attention-pr-number">#{pullRequest.number}</span>
-            <span className="attention-pr-repo">{shortRepoName(pullRequest.repository)}</span>
-            <strong>{pullRequest.title}</strong>
-            <span className="attention-pr-meta">
-              {pullRequest.author} · updated {formatRelative(pullRequest.updatedAt)}
-            </span>
-            <span className="attention-pr-signals">
-              <span className={`attention-signal ${pullRequest.draft ? 'accent' : 'muted'}`}>
-                {pullRequest.draft ? 'draft' : 'open'}
-              </span>
-              {pullRequest.labels.slice(0, 2).map((label) => (
-                <span key={label} className="attention-signal accent">
-                  {label}
-                </span>
-              ))}
-            </span>
-          </button>
+            pullRequest={pullRequest}
+            onSelectPullRequest={onSelectPullRequest}
+            signalProps={{
+              trailingSignals: [ownerSignal],
+              excludeComputedLabels: [ownerSignal.label],
+            }}
+          />
         ))}
       </div>
     </section>
