@@ -26,6 +26,7 @@ import {
 
 const approvedAgingMs = 2 * dayMs;
 const communityWaitMs = 12 * hourMs;
+const needsReviewFreshMs = 2 * dayMs;
 const quickWinLineThreshold = 80;
 const quickWinFileThreshold = 3;
 
@@ -198,21 +199,21 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
     },
     {
       label: 'Community',
-      summary: 'Human-authored PRs from outside the core team.',
+      summary: 'External-contributor PRs kept out of the core-team focus lanes.',
       tone: 'accent',
       metric: 'external contributors',
       items: [],
     },
     {
       label: 'Quick wins',
-      summary: 'Small unreviewed PRs that should be easy to drain before newer work.',
+      summary: 'Small recently updated core-team PRs that should be easy to drain.',
       tone: 'success',
       metric: 'drain queue',
       items: [],
     },
     {
       label: 'Needs review',
-      summary: 'Ready PRs that have not had a human review yet.',
+      summary: 'Recently updated core-team PRs that have not had a human review yet.',
       tone: 'warning',
       metric: 'coverage ↑',
       items: [],
@@ -226,7 +227,7 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
     },
     {
       label: 'Stalled',
-      summary: 'Reviewed or discussed, then went quiet.',
+      summary: 'PRs that went quiet, including stale unreviewed work.',
       tone: 'warning',
       metric: 'idle ↓',
       items: [],
@@ -249,15 +250,10 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
   const bucketsByLabel = new Map(buckets.map((bucket) => [bucket.label, bucket]));
 
   for (const pullRequest of pullRequests.filter((item) => item.state === 'open')) {
-    bucketsByLabel.get(reviewBucketLabel(pullRequest))?.items.push({
-      pullRequest,
-      reason: reviewSignal(pullRequest),
-    });
-
-    if (isCommunityAuthor(pullRequest.author) && !isCommunityToolkitPullRequest(pullRequest)) {
-      bucketsByLabel.get('Community')?.items.push({
+    for (const bucketLabel of reviewBucketLabels(pullRequest)) {
+      bucketsByLabel.get(bucketLabel)?.items.push({
         pullRequest,
-        reason: 'community',
+        reason: reviewSignal(pullRequest, bucketLabel),
       });
     }
   }
@@ -273,109 +269,101 @@ function compareAttentionItems(first: AttentionItem, second: AttentionItem) {
   return new Date(first.pullRequest.createdAt).getTime() - new Date(second.pullRequest.createdAt).getTime();
 }
 
-function reviewBucketLabel(pullRequest: PullRequestSummary) {
+function reviewBucketLabels(pullRequest: PullRequestSummary) {
   if (pullRequest.draft) {
-    return 'Draft';
+    return ['Draft'];
+  }
+
+  const labels: string[] = [];
+
+  if (isBotAuthor(pullRequest.author)) {
+    labels.push('Bots / automation');
   }
 
   if (isGeneratedDocsPullRequest(pullRequest)) {
-    return 'Docs';
+    labels.push('Docs');
   }
 
   if (isCommunityToolkitPullRequest(pullRequest)) {
-    return 'Community Toolkit';
+    labels.push('Community Toolkit');
   }
 
-  if (isBotAuthor(pullRequest.author)) {
-    return 'Bots / automation';
+  const approvedButAging = isApprovedButAging(pullRequest);
+  if (approvedButAging) {
+    labels.push('Approved but aging');
   }
 
-  if (isApprovedButAging(pullRequest)) {
-    return 'Approved but aging';
-  }
-
-  if (pullRequest.review.state === 'approved') {
-    return 'Ready to merge';
+  if (pullRequest.review.state === 'approved' && !approvedButAging) {
+    labels.push('Ready to merge');
   }
 
   if (needsReReview(pullRequest)) {
-    return 'Re-review needed';
-  }
-
-  if (isQuickWin(pullRequest)) {
-    return 'Quick wins';
-  }
-
-  if (pullRequest.review.state === 'waiting') {
-    return 'Needs review';
+    labels.push('Re-review needed');
   }
 
   if (pullRequest.review.state === 'changes_requested') {
-    return 'Author response';
+    labels.push('Author response');
   }
 
   if (isIdle(pullRequest)) {
-    return 'Stalled';
+    labels.push('Stalled');
   }
 
-  return 'Review started';
+  if (isCommunityAuthor(pullRequest.author) && !isCommunityToolkitPullRequest(pullRequest)) {
+    labels.push('Community');
+  }
+
+  if (isQuickWin(pullRequest)) {
+    labels.push('Quick wins');
+  }
+
+  if (needsReview(pullRequest)) {
+    labels.push('Needs review');
+  }
+
+  if (labels.length === 0) {
+    labels.push('Review started');
+  }
+
+  return labels;
 }
 
-function reviewSignal(pullRequest: PullRequestSummary) {
+function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
   if (pullRequest.draft) {
     return 'Draft';
   }
 
   const approvedAt = approvalAgeAt(pullRequest);
-  if (isApprovedButAging(pullRequest) && approvedAt) {
-    return `Approved ${formatAge(approvedAt)}`;
+  switch (bucketLabel) {
+    case 'Approved but aging':
+      return approvedAt ? `Approved ${formatAge(approvedAt)}` : 'Approved';
+    case 'Ready to merge':
+      return `${formatCount(pullRequest.review.approvalCount, 'approval')}`;
+    case 'Re-review needed':
+      return pullRequest.lastCommitAt
+        ? `Pushed ${formatAge(pullRequest.lastCommitAt)}`
+        : 'Pushed after review';
+    case 'Docs':
+      return 'docs-from-code';
+    case 'Community Toolkit':
+      return 'CommunityToolkit/Aspire';
+    case 'Bots / automation':
+      return 'bot';
+    case 'Community':
+      return isCommunityWaiting(pullRequest)
+        ? `Community · waiting ${formatAge(pullRequest.createdAt)}`
+        : 'community';
+    case 'Quick wins':
+      return reviewFootprint(pullRequest);
+    case 'Needs review':
+      return 'No reviews';
+    case 'Stalled':
+      return `Idle ${formatRelative(pullRequest.updatedAt)}`;
+    case 'Author response':
+      return 'Changes requested';
+    default:
+      return formatCount(pullRequest.review.reviewerCount, 'reviewer');
   }
-
-  if (needsReReview(pullRequest)) {
-    return pullRequest.lastCommitAt
-      ? `Pushed ${formatAge(pullRequest.lastCommitAt)}`
-      : 'Pushed after review';
-  }
-
-  if (isGeneratedDocsPullRequest(pullRequest)) {
-    return 'docs-from-code';
-  }
-
-  if (isCommunityToolkitPullRequest(pullRequest)) {
-    return 'CommunityToolkit/Aspire';
-  }
-
-  if (isBotAuthor(pullRequest.author)) {
-    return 'bot';
-  }
-
-  if (isCommunityWaiting(pullRequest)) {
-    return pullRequest.review.state === 'waiting'
-      ? `Community · waiting ${formatAge(pullRequest.createdAt)}`
-      : `Community · idle ${formatAge(pullRequest.updatedAt)}`;
-  }
-
-  if (isQuickWin(pullRequest)) {
-    return reviewFootprint(pullRequest);
-  }
-
-  if (pullRequest.review.state === 'changes_requested') {
-    return 'Changes requested';
-  }
-
-  if (pullRequest.review.state === 'approved') {
-    return `${formatCount(pullRequest.review.approvalCount, 'approval')}`;
-  }
-
-  if (pullRequest.review.state === 'waiting') {
-    return 'No reviews';
-  }
-
-  if (isIdle(pullRequest)) {
-    return `Idle ${formatRelative(pullRequest.updatedAt)}`;
-  }
-
-  return formatCount(pullRequest.review.reviewerCount, 'reviewer');
 }
 
 function isApprovedButAging(pullRequest: PullRequestSummary) {
@@ -416,7 +404,7 @@ function isCommunityWaiting(pullRequest: PullRequestSummary) {
 function isQuickWin(pullRequest: PullRequestSummary) {
   const linesChanged = changedLineCount(pullRequest);
   return pullRequest.review.state === 'waiting'
-    && !isBotAuthor(pullRequest.author)
+    && isCoreTeamAuthor(pullRequest.author)
     && !targetsCurrentRelease(pullRequest)
     && pullRequest.linkedIssues.length <= 1
     && pullRequest.commitCount <= 2
@@ -425,6 +413,12 @@ function isQuickWin(pullRequest: PullRequestSummary) {
     && linesChanged > 0
     && linesChanged <= quickWinLineThreshold
     && !isIdle(pullRequest);
+}
+
+function needsReview(pullRequest: PullRequestSummary) {
+  return pullRequest.review.state === 'waiting'
+    && isCoreTeamAuthor(pullRequest.author)
+    && ageMs(pullRequest.updatedAt) < needsReviewFreshMs;
 }
 
 function reviewFootprint(pullRequest: PullRequestSummary) {
@@ -443,7 +437,11 @@ function changedLineCount(pullRequest: PullRequestSummary) {
 
 function isCommunityAuthor(author: string) {
   return !isBotAuthor(author)
-    && !coreTeamMembers.some((member) => actorIdentityKey(member) === actorIdentityKey(author));
+    && !isCoreTeamAuthor(author);
+}
+
+function isCoreTeamAuthor(author: string) {
+  return coreTeamMembers.some((member) => actorIdentityKey(member) === actorIdentityKey(author));
 }
 
 export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
@@ -560,12 +558,8 @@ function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {
     return { label: 'draft', tone: 'muted' };
   }
 
-  if (isApprovedButAging(pullRequest)) {
-    return { label: 'land approval', tone: 'danger' };
-  }
-
-  if (needsReReview(pullRequest)) {
-    return { label: 're-review', tone: 'warning' };
+  if (isBotAuthor(pullRequest.author)) {
+    return { label: 'automation', tone: 'accent' };
   }
 
   if (isGeneratedDocsPullRequest(pullRequest)) {
@@ -576,28 +570,38 @@ function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {
     return { label: 'toolkit review', tone: 'accent' };
   }
 
-  if (isCommunityWaiting(pullRequest)) {
-    return { label: 'community wait', tone: 'warning' };
-  }
-
-  if (isQuickWin(pullRequest)) {
-    return { label: 'quick win', tone: 'success' };
-  }
-
-  if (pullRequest.review.state === 'changes_requested') {
-    return { label: 'author fix', tone: 'danger' };
+  if (isApprovedButAging(pullRequest)) {
+    return { label: 'land approval', tone: 'danger' };
   }
 
   if (pullRequest.review.state === 'approved') {
     return { label: 'merge', tone: 'success' };
   }
 
-  if (pullRequest.review.state === 'waiting') {
-    return { label: 'needs reviewer', tone: 'warning' };
+  if (needsReReview(pullRequest)) {
+    return { label: 're-review', tone: 'warning' };
+  }
+
+  if (pullRequest.review.state === 'changes_requested') {
+    return { label: 'author fix', tone: 'danger' };
   }
 
   if (isIdle(pullRequest)) {
     return { label: 'unstick', tone: 'warning' };
+  }
+
+  if (isCommunityAuthor(pullRequest.author)) {
+    return isCommunityWaiting(pullRequest)
+      ? { label: 'community wait', tone: 'warning' }
+      : { label: 'community', tone: 'accent' };
+  }
+
+  if (isQuickWin(pullRequest)) {
+    return { label: 'quick win', tone: 'success' };
+  }
+
+  if (pullRequest.review.state === 'waiting') {
+    return { label: 'needs reviewer', tone: 'warning' };
   }
 
   return { label: 'finish review', tone: 'accent' };

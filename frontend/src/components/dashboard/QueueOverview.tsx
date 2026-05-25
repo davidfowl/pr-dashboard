@@ -20,9 +20,19 @@ type FocusItem = AttentionItem & {
 };
 
 const pullRequestListLimit = 10;
-const recentFocusWindowMs = 14 * dayMs;
+const focusAgeLimitMs = 14 * dayMs;
 const recentlyUpdatedFocusWindowMs = 2 * dayMs;
-const blockedFocusBucketLabels = new Set(['Author response', 'Stalled', 'Draft', 'Community Toolkit', 'Bots / automation', 'Community']);
+const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community']);
+const disqualifyingFocusBucketLabels = new Set(['Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community']);
+const focusBucketRank = new Map([
+  ['Approved but aging', 0],
+  ['Re-review needed', 1],
+  ['Ready to merge', 2],
+  ['Author response', 3],
+  ['Needs review', 4],
+  ['Quick wins', 5],
+  ['Review started', 6],
+]);
 
 function QueueOverview({
   counts,
@@ -33,28 +43,28 @@ function QueueOverview({
 }: QueueOverviewProps) {
   const [showAllCoreMembers, setShowAllCoreMembers] = useState(false);
 
-  const focusItems = useMemo<FocusItem[]>(() =>
-    attentionBuckets
-      .flatMap((bucket) =>
-        bucket.items.map((item) => ({
-          ...item,
-          bucketLabel: bucket.label,
-          bucketTone: bucket.tone,
-        })))
-      .filter((item) => !blockedFocusBucketLabels.has(item.bucketLabel))
-      .filter((item) => isRecentFocusItem(item.pullRequest))
-      .sort((first, second) =>
-        Number(isRecentlyUpdatedFocusItem(second.pullRequest)) - Number(isRecentlyUpdatedFocusItem(first.pullRequest))
-        || new Date(first.pullRequest.createdAt).getTime() - new Date(second.pullRequest.createdAt).getTime()
-        || first.pullRequest.repository.localeCompare(second.pullRequest.repository)
-        || first.pullRequest.number - second.pullRequest.number)
-      .slice(0, pullRequestListLimit),
-  [attentionBuckets]);
+  const focusItems = useMemo<FocusItem[]>(() => {
+    const blockedKeys = blockedFocusKeys(attentionBuckets);
+    return dedupeFocusItems(
+      attentionBuckets
+        .filter((bucket) => !excludedFocusBucketLabels.has(bucket.label))
+        .flatMap((bucket) =>
+          bucket.items.map((item) => ({
+            ...item,
+            bucketLabel: bucket.label,
+            bucketTone: bucket.tone,
+          }))),
+      blockedKeys,
+    )
+      .filter((item) => isWithinFocusAgeLimit(item.pullRequest))
+      .sort(compareFocusItems)
+      .slice(0, pullRequestListLimit);
+  }, [attentionBuckets]);
 
   const coreOpenCount = counts.reduce((total, count) => total + count.openPullRequestCount, 0);
   const activeCoreCounts = counts.filter((count) => count.openPullRequestCount > 0);
   const visibleCoreCounts = showAllCoreMembers ? counts : activeCoreCounts;
-  const reviewBuckets = useMemo(
+  const reviewBuckets = useMemo<AttentionBucket[]>(
     () => forMeItems.length === 0
       ? attentionBuckets
       : [
@@ -64,7 +74,7 @@ function QueueOverview({
           summary: login
             ? `Pull requests that need ${login}'s review or response.`
             : 'Pull requests that need your review or response.',
-          tone: 'accent' as const,
+          tone: 'accent',
           metric: 'personal queue',
           items: forMeItems.map((item) => ({
             pullRequest: item.pullRequest,
@@ -74,6 +84,7 @@ function QueueOverview({
       ],
     [attentionBuckets, forMeItems, login],
   );
+
   function renderCoreOwnerDetails() {
     return (
       <section className="drilldown-panel" aria-label="Core team open pull requests">
@@ -115,8 +126,8 @@ function QueueOverview({
         <p className="eyebrow">Queue overview</p>
         <h3>One queue across repos: recent PRs first, bucket details one click away.</h3>
         <p className="board-guidance">
-          Needs attention shows non-bot PRs opened in the last 14 days or updated in the last 48h,
-          excluding blocked/stalled lanes; fresh updates sort first, then FIFO.
+          Needs attention shows actionable PRs opened in the last 14 days, dedupes overlapping lanes,
+          and excludes automation/docs/community work.
         </p>
       </div>
 
@@ -161,13 +172,54 @@ function QueueOverview({
   );
 }
 
-function isRecentFocusItem(pullRequest: PullRequestSummary) {
-  return Date.now() - new Date(pullRequest.createdAt).getTime() <= recentFocusWindowMs
-    || isRecentlyUpdatedFocusItem(pullRequest);
+function isWithinFocusAgeLimit(pullRequest: PullRequestSummary) {
+  return Date.now() - new Date(pullRequest.createdAt).getTime() <= focusAgeLimitMs;
 }
 
 function isRecentlyUpdatedFocusItem(pullRequest: PullRequestSummary) {
   return Date.now() - new Date(pullRequest.updatedAt).getTime() <= recentlyUpdatedFocusWindowMs;
+}
+
+function blockedFocusKeys(buckets: AttentionBucket[]) {
+  return new Set(
+    buckets
+      .filter((bucket) => disqualifyingFocusBucketLabels.has(bucket.label))
+      .flatMap((bucket) => bucket.items.map((item) => pullRequestKey(item.pullRequest))),
+  );
+}
+
+function dedupeFocusItems(items: FocusItem[], blockedKeys: Set<string>) {
+  const itemsByPullRequest = new Map<string, FocusItem>();
+
+  for (const item of items) {
+    const key = pullRequestKey(item.pullRequest);
+    if (blockedKeys.has(key)) {
+      continue;
+    }
+
+    const existing = itemsByPullRequest.get(key);
+    if (!existing || bucketRank(item.bucketLabel) < bucketRank(existing.bucketLabel)) {
+      itemsByPullRequest.set(key, item);
+    }
+  }
+
+  return [...itemsByPullRequest.values()];
+}
+
+function compareFocusItems(first: FocusItem, second: FocusItem) {
+  return Number(isRecentlyUpdatedFocusItem(second.pullRequest)) - Number(isRecentlyUpdatedFocusItem(first.pullRequest))
+    || bucketRank(first.bucketLabel) - bucketRank(second.bucketLabel)
+    || new Date(first.pullRequest.createdAt).getTime() - new Date(second.pullRequest.createdAt).getTime()
+    || first.pullRequest.repository.localeCompare(second.pullRequest.repository)
+    || first.pullRequest.number - second.pullRequest.number;
+}
+
+function bucketRank(label: string) {
+  return focusBucketRank.get(label) ?? Number.MAX_SAFE_INTEGER;
+}
+
+function pullRequestKey(pullRequest: PullRequestSummary) {
+  return `${pullRequest.repository.toLowerCase()}#${pullRequest.number}`;
 }
 
 export default QueueOverview;

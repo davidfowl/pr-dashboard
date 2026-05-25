@@ -38,7 +38,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             var sort = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "created" : "updated";
             var direction = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "asc" : "desc";
             var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls?state={Uri.EscapeDataString(state)}&sort={sort}&direction={direction}&per_page={PullRequestPageSize}";
-            var pullRequestDtos = await SendGitHubRequestAsync(
+            var pullRequestDtos = await SendPagedGitHubRequestAsync(
                 url,
                 GitHubJsonSerializerContext.Default.GitHubPullRequestDtoArray,
                 cancellationToken);
@@ -333,6 +333,26 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     {
         using var response = await SendAuthorizedRequestAsync(url, cancellationToken);
         return await ReadGitHubJsonAsync(response, jsonTypeInfo, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<T>> SendPagedGitHubRequestAsync<T>(
+        string url,
+        JsonTypeInfo<T[]> jsonTypeInfo,
+        CancellationToken cancellationToken)
+    {
+        var items = new List<T>();
+        string? nextUrl = url;
+
+        while (nextUrl is not null)
+        {
+            using var response = await SendAuthorizedRequestAsync(nextUrl, cancellationToken);
+            var pageItems = await ReadGitHubJsonAsync(response, jsonTypeInfo, cancellationToken);
+
+            items.AddRange(pageItems);
+            nextUrl = GetNextPageUrl(response);
+        }
+
+        return items;
     }
 
     private async Task<HttpResponseMessage> SendAuthorizedRequestAsync(string url, CancellationToken cancellationToken)

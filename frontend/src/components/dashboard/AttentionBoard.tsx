@@ -28,21 +28,21 @@ function AttentionBoard({ buckets, onSelectPullRequest }: AttentionBoardProps) {
   }));
 
   return (
-    <section className="attention-board" aria-label="Review state buckets">
+    <section className="attention-board" aria-label="Review signal lanes">
       <div className="section-title-row">
         <p className="eyebrow">Team review board</p>
-        <h3>Review state buckets</h3>
+        <h3>Review signal lanes</h3>
         <p className="board-guidance">
-          Slice by state first, then open the ranked details only when a bucket needs attention.
+          Lanes can overlap: automation, docs, stale, and review-state signals stay visible without hiding each other.
         </p>
       </div>
 
       <TileDrilldown
         className="review-bucket-drilldown"
-        ariaLabel="Review state bucket details"
+        ariaLabel="Review signal lane details"
         idPrefix="review-bucket"
         selectedId={selectedBucketLabel}
-        tileListLabel="Review state buckets"
+        tileListLabel="Review signal lanes"
         tiles={bucketTiles}
         onSelect={setSelectedBucketLabel}
         renderDetails={({ bucket }) => {
