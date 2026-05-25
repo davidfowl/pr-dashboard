@@ -711,6 +711,19 @@ select:focus-visible {
   font-weight: 800;
 }
 
+.bucket-limit-note {
+  margin: 0.4rem 0 0;
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.pick-panel .bucket-limit-note,
+.drilldown-panel .bucket-limit-note,
+.attention-card .bucket-limit-note {
+  color: var(--accent-strong);
+}
+
 .attention-list {
   display: grid;
   margin-top: 0.65rem;

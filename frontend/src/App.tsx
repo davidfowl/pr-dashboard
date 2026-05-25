@@ -21,11 +21,8 @@ import { readJson } from './utils/http';
 import {
   createActivityModel,
   createAttentionBuckets,
-  createAutomationPullRequests,
-  createCommunityPullRequests,
   createDeveloperPullRequestCounts,
   createForMeItems,
-  createTeamMetrics,
   createTimelineStory,
   createTriageModel,
 } from './utils/models';
@@ -66,10 +63,7 @@ function App() {
   }, [timelineItems]);
 
   const repoAccent = useMemo(() => colorForText(activeRepo), [activeRepo]);
-  const teamMetrics = useMemo(() => createTeamMetrics(pullRequests), [pullRequests]);
   const developerPullRequestCounts = useMemo(() => createDeveloperPullRequestCounts(pullRequests), [pullRequests]);
-  const automationPullRequests = useMemo(() => createAutomationPullRequests(pullRequests), [pullRequests]);
-  const communityPullRequests = useMemo(() => createCommunityPullRequests(pullRequests), [pullRequests]);
   const attentionBuckets = useMemo(() => createAttentionBuckets(pullRequests), [pullRequests]);
   const forMeItems = useMemo(
     () => createForMeItems(pullRequests, authStatus?.login),
@@ -253,8 +247,8 @@ function App() {
     <div className="app-shell" style={{ '--repo-accent': repoAccent } as CSSProperties}>
       <header className="hero">
         <div>
-          <p className="eyebrow">GitHub PR Dashboard</p>
-          <h1>PR dashboard</h1>
+          <p className="eyebrow">Aspire team focus</p>
+          <h1>Aspire PR focus</h1>
           <p className="hero-copy">
             Find the pull requests that need attention and keep reviews moving.
           </p>
@@ -276,10 +270,7 @@ function App() {
             pullsLoading={pullsLoading}
             pullRequests={pullRequests}
             error={error}
-            teamMetrics={teamMetrics}
             developerPullRequestCounts={developerPullRequestCounts}
-            automationPullRequests={automationPullRequests}
-            communityPullRequests={communityPullRequests}
             attentionBuckets={attentionBuckets}
             forMeItems={forMeItems}
             login={authStatus?.login}

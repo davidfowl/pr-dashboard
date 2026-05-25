@@ -7,6 +7,7 @@ By default the UI watches:
 - `microsoft/aspire`
 - `microsoft/aspire.dev`
 - `microsoft/dcp`
+- `CommunityToolkit/Aspire`
 
 You can replace those with any comma-separated `owner/repo` list in the dashboard.
 

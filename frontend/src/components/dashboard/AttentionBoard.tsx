@@ -14,6 +14,8 @@ type ReviewBucketTile = DrilldownTile & {
   bucket: AttentionBucket;
 };
 
+const bucketItemLimit = 10;
+
 function AttentionBoard({ buckets, onSelectPullRequest }: AttentionBoardProps) {
   const [selectedBucketLabel, setSelectedBucketLabel] = useState(buckets[0]?.label ?? '');
   const bucketTiles: ReviewBucketTile[] = buckets.map((bucket) => ({
@@ -43,29 +45,39 @@ function AttentionBoard({ buckets, onSelectPullRequest }: AttentionBoardProps) {
         tileListLabel="Review state buckets"
         tiles={bucketTiles}
         onSelect={setSelectedBucketLabel}
-        renderDetails={({ bucket }) => (
-          <section className={`drilldown-panel attention-card ${bucket.tone}`} aria-label={`${bucket.label} pull requests`}>
-            <div className="attention-card-header">
-              <span>{bucket.label}</span>
-              <strong>{formatCount(bucket.items.length, 'open PR')}</strong>
-            </div>
-            <p>{bucket.summary} <em>{bucket.metric}</em></p>
-            <div className="attention-list">
-              {bucket.items.map((item) => (
-                <PullRequestListItem
-                  key={`${item.pullRequest.repository}-${item.pullRequest.number}`}
-                  pullRequest={item.pullRequest}
-                  onSelectPullRequest={onSelectPullRequest}
-                  signalProps={{
-                    leadingSignals: [{ label: item.reason, tone: bucket.tone }],
-                    excludeComputedLabels: [item.reason],
-                    computedSignalLimit: 4,
-                  }}
-                />
-              ))}
-            </div>
-          </section>
-        )}
+        renderDetails={({ bucket }) => {
+          const visibleItems = bucket.items.slice(0, bucketItemLimit);
+          const hiddenCount = bucket.items.length - visibleItems.length;
+
+          return (
+            <section className={`drilldown-panel attention-card ${bucket.tone}`} aria-label={`${bucket.label} pull requests`}>
+              <div className="attention-card-header">
+                <span>{bucket.label}</span>
+                <strong>{formatCount(bucket.items.length, 'open PR')}</strong>
+              </div>
+              <p>{bucket.summary} <em>{bucket.metric}</em></p>
+              {hiddenCount > 0 && (
+                <p className="bucket-limit-note">
+                  Showing top {visibleItems.length} of {bucket.items.length}. Resolve these and the next ranked PRs will surface on refresh.
+                </p>
+              )}
+              <div className="attention-list">
+                {visibleItems.map((item) => (
+                  <PullRequestListItem
+                    key={`${item.pullRequest.repository}-${item.pullRequest.number}`}
+                    pullRequest={item.pullRequest}
+                    onSelectPullRequest={onSelectPullRequest}
+                    signalProps={{
+                      leadingSignals: [{ label: item.reason, tone: bucket.tone }],
+                      excludeComputedLabels: [item.reason],
+                      computedSignalLimit: 4,
+                    }}
+                  />
+                ))}
+              </div>
+            </section>
+          );
+        }}
       />
     </section>
   );

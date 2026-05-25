@@ -1,4 +1,4 @@
-export const defaultRepos = ['microsoft/aspire', 'microsoft/aspire.dev', 'microsoft/dcp'];
+export const defaultRepos = ['microsoft/aspire', 'microsoft/aspire.dev', 'microsoft/dcp', 'CommunityToolkit/Aspire'];
 export const defaultRepoInput = defaultRepos.join(', ');
 export const currentRelease = '13.4';
 export const coreTeamMembers = [

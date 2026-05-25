@@ -48,6 +48,11 @@ record PullRequestSummary(
     IReadOnlyList<string> RequestedReviewers,
     string? Milestone,
     IReadOnlyList<LinkedIssueSummary> LinkedIssues,
+    int CommitCount,
+    int Additions,
+    int Deletions,
+    int ChangedFiles,
+    DateTimeOffset? LastCommitAt,
     ReviewStatus Review)
 {
     public static PullRequestSummary FromDto(GitHubPullRequestDto pullRequest) =>
@@ -73,6 +78,11 @@ record PullRequestSummary(
                 .ToArray(),
             pullRequest.Milestone?.Title,
             [],
+            pullRequest.Commits,
+            pullRequest.Additions,
+            pullRequest.Deletions,
+            pullRequest.ChangedFiles,
+            null,
             ReviewStatus.Waiting);
 }
 
@@ -105,6 +115,7 @@ record ReviewStatus(
     int ApprovalCount,
     int ChangesRequestedCount,
     int CommentedReviewCount,
+    DateTimeOffset? LastApprovedAt,
     DateTimeOffset? LastReviewedAt)
 {
     public static ReviewStatus Waiting { get; } = new(
@@ -114,6 +125,7 @@ record ReviewStatus(
         ApprovalCount: 0,
         ChangesRequestedCount: 0,
         CommentedReviewCount: 0,
+        LastApprovedAt: null,
         LastReviewedAt: null);
 }
 
@@ -130,14 +142,20 @@ record PullRequestDetails(
     DateTimeOffset CreatedAt,
     string Author,
     DateTimeOffset? MergedAt,
-    int CommitCount)
+    int CommitCount,
+    int Additions,
+    int Deletions,
+    int ChangedFiles)
 {
     public static PullRequestDetails FromDto(GitHubPullRequestDto pullRequest) =>
         new(
             pullRequest.CreatedAt,
             pullRequest.User?.Login ?? "unknown",
             pullRequest.MergedAt,
-            pullRequest.Commits);
+            pullRequest.Commits,
+            pullRequest.Additions,
+            pullRequest.Deletions,
+            pullRequest.ChangedFiles);
 }
 
 record TimelineResponse(string Repository, int Number, TimelineStats Stats, IReadOnlyList<TimelineItem> Items);
@@ -358,6 +376,7 @@ record TimelineItem(
 [JsonSerializable(typeof(GitHubIssueDto))]
 [JsonSerializable(typeof(GitHubIssuePullRequestDto))]
 [JsonSerializable(typeof(GitHubMilestoneDto))]
+[JsonSerializable(typeof(GitHubPullRequestCommitDto[]))]
 [JsonSerializable(typeof(GitHubPullRequestDto))]
 [JsonSerializable(typeof(GitHubPullRequestDto[]))]
 [JsonSerializable(typeof(GitHubReviewDto[]))]
@@ -423,6 +442,20 @@ sealed class GitHubPullRequestDto
     public GitHubMilestoneDto? Milestone { get; init; }
     public DateTimeOffset? MergedAt { get; init; }
     public int Commits { get; init; }
+    public int Additions { get; init; }
+    public int Deletions { get; init; }
+    public int ChangedFiles { get; init; }
+}
+
+sealed class GitHubCommitDto
+{
+    public GitHubActorDto? Author { get; init; }
+    public GitHubActorDto? Committer { get; init; }
+}
+
+sealed class GitHubPullRequestCommitDto
+{
+    public GitHubCommitDto? Commit { get; init; }
 }
 
 sealed class GitHubReviewDto
