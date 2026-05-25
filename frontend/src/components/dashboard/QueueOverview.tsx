@@ -7,8 +7,11 @@ import { targetsCurrentRelease } from '../../utils/models';
 import { shortRepoName } from '../../utils/routing';
 import PullRequestListItem from '../PullRequestListItem';
 import AttentionBoard from './AttentionBoard';
+import TileDrilldown from './TileDrilldown';
+import type { DrilldownTile } from './TileDrilldown';
 
 type OwnerTab = 'core' | 'automation' | 'community';
+type OwnerTile = DrilldownTile<OwnerTab>;
 
 type QueueOverviewProps = {
   counts: DeveloperPullRequestCount[];
@@ -71,7 +74,7 @@ function QueueOverview({
   const coreOpenCount = counts.reduce((total, count) => total + count.openPullRequestCount, 0);
   const activeCoreCounts = counts.filter((count) => count.openPullRequestCount > 0);
   const visibleCoreCounts = showAllCoreMembers ? counts : activeCoreCounts;
-  const ownerTabs = [
+  const ownerTabs: OwnerTile[] = [
     {
       id: 'core' as const,
       label: 'Core team',
@@ -91,6 +94,65 @@ function QueueOverview({
       summary: 'human authors outside core',
     },
   ];
+
+  function renderOwnerDetails(tab: OwnerTile) {
+    if (tab.id === 'core') {
+      return (
+        <section className="drilldown-panel" aria-label="Core team open pull requests">
+          <div className="drilldown-header">
+            <span>Core team</span>
+            <button type="button" onClick={() => setShowAllCoreMembers((value) => !value)}>
+              {showAllCoreMembers ? 'Show active only' : `Show all ${counts.length}`}
+            </button>
+          </div>
+          {visibleCoreCounts.length === 0 ? (
+            <p className="empty-for-me">No loaded open PRs from core team members.</p>
+          ) : (
+            <div className="core-member-list">
+              {visibleCoreCounts.map((count) => (
+                <article
+                  key={count.actor}
+                  className="core-member-row"
+                  style={{ '--developer-accent': colorForText(count.actor) } as CSSProperties}
+                >
+                  <span className="avatar-dot">{initials(count.actor)}</span>
+                  <strong>{count.actor}</strong>
+                  <span>{formatCount(count.openPullRequestCount, 'open PR')}</span>
+                  <em>
+                    {count.latestUpdatedAt
+                      ? `${repositorySummary(count.repositories)} · updated ${formatRelative(count.latestUpdatedAt)}`
+                      : 'No loaded open PRs'}
+                  </em>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      );
+    }
+
+    if (tab.id === 'automation') {
+      return (
+        <PullRequestSection
+          title="Bots / automation"
+          emptyMessage="No bot or automation open PRs in the current results."
+          pullRequests={automationPullRequests}
+          owner="automation"
+          onSelectPullRequest={onSelectPullRequest}
+        />
+      );
+    }
+
+    return (
+      <PullRequestSection
+        title="Community PRs"
+        emptyMessage="No community open PRs in the current results."
+        pullRequests={communityPullRequests}
+        owner="community"
+        onSelectPullRequest={onSelectPullRequest}
+      />
+    );
+  }
 
   return (
     <section className="queue-overview" aria-label="Queue overview">
@@ -139,83 +201,19 @@ function QueueOverview({
         </div>
       </section>
 
-      <section className="owner-drilldown" aria-label="Open pull request owner breakdown">
-        <div className="owner-tabs" role="tablist" aria-label="Open PR owner categories">
-          {ownerTabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              className={selectedOwnerTab === tab.id ? 'selected' : undefined}
-              onClick={() => setSelectedOwnerTab(tab.id)}
-              role="tab"
-              aria-selected={selectedOwnerTab === tab.id}
-            >
-              <span>{tab.label}</span>
-              <strong>{tab.count}</strong>
-              <em>{tab.summary}</em>
-            </button>
-          ))}
-        </div>
-
-        {selectedOwnerTab === 'core' && (
-          <section className="drilldown-panel" aria-label="Core team open pull requests">
-            <div className="drilldown-header">
-              <span>Core team</span>
-              <button type="button" onClick={() => setShowAllCoreMembers((value) => !value)}>
-                {showAllCoreMembers ? 'Show active only' : `Show all ${counts.length}`}
-              </button>
-            </div>
-            {visibleCoreCounts.length === 0 ? (
-              <p className="empty-for-me">No loaded open PRs from core team members.</p>
-            ) : (
-              <div className="core-member-list">
-                {visibleCoreCounts.map((count) => (
-                  <article
-                    key={count.actor}
-                    className="core-member-row"
-                    style={{ '--developer-accent': colorForText(count.actor) } as CSSProperties}
-                  >
-                    <span className="avatar-dot">{initials(count.actor)}</span>
-                    <strong>{count.actor}</strong>
-                    <span>{formatCount(count.openPullRequestCount, 'open PR')}</span>
-                    <em>
-                      {count.latestUpdatedAt
-                        ? `${repositorySummary(count.repositories)} · updated ${formatRelative(count.latestUpdatedAt)}`
-                        : 'No loaded open PRs'}
-                    </em>
-                  </article>
-                ))}
-              </div>
-            )}
-          </section>
-        )}
-
-        {selectedOwnerTab === 'automation' && (
-          <PullRequestSection
-            title="Bots / automation"
-            emptyMessage="No bot or automation open PRs in the current results."
-            pullRequests={automationPullRequests}
-            owner="automation"
-            onSelectPullRequest={onSelectPullRequest}
-          />
-        )}
-
-        {selectedOwnerTab === 'community' && (
-          <PullRequestSection
-            title="Community PRs"
-            emptyMessage="No community open PRs in the current results."
-            pullRequests={communityPullRequests}
-            owner="community"
-            onSelectPullRequest={onSelectPullRequest}
-          />
-        )}
-      </section>
+      <TileDrilldown
+        className="owner-drilldown"
+        ariaLabel="Open pull request owner breakdown"
+        idPrefix="owner-drilldown"
+        selectedId={selectedOwnerTab}
+        tileListLabel="Open PR owner categories"
+        tiles={ownerTabs}
+        onSelect={setSelectedOwnerTab}
+        renderDetails={renderOwnerDetails}
+      />
 
       {attentionBuckets.length > 0 && (
-        <details className="queue-details">
-          <summary>Show review state buckets</summary>
-          <AttentionBoard buckets={attentionBuckets} onSelectPullRequest={onSelectPullRequest} />
-        </details>
+        <AttentionBoard buckets={attentionBuckets} onSelectPullRequest={onSelectPullRequest} />
       )}
     </section>
   );

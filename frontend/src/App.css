@@ -353,6 +353,8 @@ select:focus-visible {
 }
 
 .attention-board {
+  display: grid;
+  gap: 0.75rem;
   margin-bottom: 0;
 }
 
@@ -370,8 +372,7 @@ select:focus-visible {
 .queue-stat-card,
 .focus-panel,
 .owner-drilldown,
-.drilldown-panel,
-.queue-details {
+.drilldown-panel {
   border: 1px solid var(--queue-color, var(--border));
   border-radius: 0.9rem;
   padding: 0.75rem 0.9rem;
@@ -416,13 +417,18 @@ select:focus-visible {
   font-size: 0.72rem;
 }
 
-.owner-tabs {
+.tile-drilldown {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.drilldown-tiles {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 0.5rem;
 }
 
-.owner-tabs button {
+.drilldown-tiles button {
   border: 1px solid var(--border);
   border-radius: 0.85rem;
   padding: 0.65rem;
@@ -432,33 +438,53 @@ select:focus-visible {
   cursor: pointer;
 }
 
-.owner-tabs button.selected,
-.owner-tabs button:hover {
-  border-color: var(--accent-strong);
-  color: var(--text);
-  background: rgba(88, 166, 255, 0.08);
+.drilldown-tiles button.success {
+  --drilldown-tile-color: var(--success);
+  --drilldown-tile-bg: rgba(63, 185, 80, 0.1);
 }
 
-.owner-tabs span,
-.owner-tabs strong,
-.owner-tabs em {
+.drilldown-tiles button.warning {
+  --drilldown-tile-color: var(--warning);
+  --drilldown-tile-bg: rgba(210, 153, 34, 0.11);
+}
+
+.drilldown-tiles button.danger {
+  --drilldown-tile-color: var(--danger);
+  --drilldown-tile-bg: rgba(248, 81, 73, 0.11);
+}
+
+.drilldown-tiles button.accent {
+  --drilldown-tile-color: var(--accent-strong);
+  --drilldown-tile-bg: rgba(88, 166, 255, 0.08);
+}
+
+.drilldown-tiles button.selected,
+.drilldown-tiles button:hover {
+  border-color: var(--drilldown-tile-color, var(--accent-strong));
+  color: var(--text);
+  background: var(--drilldown-tile-bg, rgba(88, 166, 255, 0.08));
+}
+
+.drilldown-tiles span,
+.drilldown-tiles strong,
+.drilldown-tiles em {
   display: block;
 }
 
-.owner-tabs span {
+.drilldown-tiles span {
   font-size: 0.68rem;
   font-weight: 900;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.owner-tabs strong {
+.drilldown-tiles strong {
   margin-top: 0.18rem;
   color: var(--text);
   font-size: 1.25rem;
 }
 
-.owner-tabs em {
+.drilldown-tiles em {
   margin-top: 0.18rem;
   font-size: 0.72rem;
   font-style: normal;
@@ -522,21 +548,6 @@ select:focus-visible {
   font-size: 0.72rem;
   font-style: normal;
   font-weight: 800;
-}
-
-.queue-details {
-  padding: 0.75rem 0.9rem;
-}
-
-.queue-details summary {
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 0.78rem;
-  font-weight: 900;
-}
-
-.queue-details[open] summary {
-  margin-bottom: 0.75rem;
 }
 
 .pick-panel {
@@ -643,12 +654,6 @@ select:focus-visible {
 .empty-for-me {
   border-top: 1px solid rgba(48, 54, 61, 0.62);
   padding: 0.65rem 0.2rem 0;
-}
-
-.attention-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 0.85rem;
 }
 
 .attention-card {
@@ -1608,7 +1613,7 @@ select:focus-visible {
     align-items: start;
   }
 
-  .owner-tabs,
+  .drilldown-tiles,
   .core-member-row {
     grid-template-columns: 1fr;
   }
