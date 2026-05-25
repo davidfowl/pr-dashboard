@@ -151,6 +151,65 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListReadsAllPages()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                """
+                [
+                  {
+                    "number": 1,
+                    "title": "First page",
+                    "state": "open",
+                    "body": null,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": []
+                  }
+                ]
+                """,
+                linkHeader: "<https://api.github.com/repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2>; rel=\"next\""),
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2" => Json(
+                """
+                [
+                  {
+                    "number": 2,
+                    "title": "Second page",
+                    "state": "open",
+                    "body": null,
+                    "created_at": "2026-01-03T00:00:00Z",
+                    "updated_at": "2026-01-04T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/2",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": []
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/2/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            "repos/example/repo/pulls/2" => Json(PullRequestDetailsJson(2)),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal([1, 2], pullRequests.Select(pullRequest => pullRequest.Number));
+    }
+
+    [Fact]
     public async Task PullListIncludesLastCommitAfterReviewForReReviewSignals()
     {
         var client = CreateClient(path => path switch
@@ -233,11 +292,20 @@ public sealed class GitHubClientTests
         return context;
     }
 
-    private static HttpResponseMessage Json(string content, HttpStatusCode statusCode = HttpStatusCode.OK) =>
-        new(statusCode)
+    private static HttpResponseMessage Json(string content, HttpStatusCode statusCode = HttpStatusCode.OK, string? linkHeader = null)
+    {
+        var response = new HttpResponseMessage(statusCode)
         {
             Content = new StringContent(content, Encoding.UTF8, "application/json")
         };
+
+        if (linkHeader is not null)
+        {
+            response.Headers.Add("Link", linkHeader);
+        }
+
+        return response;
+    }
 
     private static string PullRequestDetailsJson(int number) =>
         $$"""
