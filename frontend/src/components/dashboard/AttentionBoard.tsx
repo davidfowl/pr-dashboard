@@ -1,7 +1,5 @@
 import type { AttentionBucket, PullRequestSummary } from '../../types';
-import { formatRelative } from '../../utils/format';
-import { createAttentionSignals } from '../../utils/models';
-import { shortRepoName } from '../../utils/routing';
+import PullRequestListItem from '../PullRequestListItem';
 
 type AttentionBoardProps = {
   buckets: AttentionBucket[];
@@ -26,25 +24,11 @@ function AttentionBoard({ buckets, onSelectPullRequest }: AttentionBoardProps) {
             <p>{bucket.summary} <em>{bucket.metric}</em></p>
             <div className="attention-list">
               {bucket.items.map((item) => (
-                <button
+                <PullRequestListItem
                   key={`${item.pullRequest.repository}-${item.pullRequest.number}`}
-                  type="button"
-                  onClick={() => onSelectPullRequest(item.pullRequest.repository, item.pullRequest)}
-                >
-                  <span className="attention-pr-number">#{item.pullRequest.number}</span>
-                  <span className="attention-pr-repo">{shortRepoName(item.pullRequest.repository)}</span>
-                  <strong>{item.pullRequest.title}</strong>
-                  <span className="attention-pr-meta">
-                    {item.pullRequest.author} · updated {formatRelative(item.pullRequest.updatedAt)}
-                  </span>
-                  <span className="attention-pr-signals">
-                    {createAttentionSignals(item).map((signal) => (
-                      <span key={signal.label} className={`attention-signal ${signal.tone ?? 'muted'}`}>
-                        {signal.label}
-                      </span>
-                    ))}
-                  </span>
-                </button>
+                  pullRequest={item.pullRequest}
+                  onSelectPullRequest={onSelectPullRequest}
+                />
               ))}
             </div>
           </article>

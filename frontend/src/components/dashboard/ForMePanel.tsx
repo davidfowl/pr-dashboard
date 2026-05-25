@@ -1,6 +1,6 @@
 import type { PickItem, PullRequestSummary } from '../../types';
-import { createForMeSignals } from '../../utils/models';
 import { shortRepoName } from '../../utils/routing';
+import PullRequestSignalPills from '../PullRequestSignalPills';
 
 type ForMePanelProps = {
   items: PickItem[];
@@ -39,14 +39,15 @@ function ForMePanel({ items, login, onSelectPullRequest }: ForMePanelProps) {
             <span className="pick-meta">
               {shortRepoName(item.pullRequest.repository)} #{item.pullRequest.number} · {item.pullRequest.author}
             </span>
-            <span className="pick-signals">
-              <span className={`attention-signal ${item.tone}`}>{item.action}</span>
-              {createForMeSignals(item).map((signal) => (
-                <span key={signal.label} className={`attention-signal ${signal.tone ?? 'muted'}`}>
-                  {signal.label}
-                </span>
-              ))}
-            </span>
+            <PullRequestSignalPills
+              pullRequest={item.pullRequest}
+              className="pick-signals"
+              leadingSignals={[
+                { label: item.action, tone: item.tone },
+                { label: item.reason.split(' · ')[0], tone: 'accent' },
+              ]}
+              showActionSignal={false}
+            />
           </button>
         ))}
       </div>
