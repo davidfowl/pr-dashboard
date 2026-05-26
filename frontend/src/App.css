@@ -800,6 +800,42 @@ select:focus-visible {
 .attention-pr-number {
   grid-row: 1 / span 2;
   font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.attention-pr-check-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 999px;
+  border: 1px solid var(--badge-border, var(--border));
+  background: var(--badge-bg, rgba(139, 148, 158, 0.08));
+  color: var(--badge-text, var(--muted));
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.attention-pr-check-badge.success {
+  --badge-border: rgba(63, 185, 80, 0.45);
+  --badge-bg: rgba(63, 185, 80, 0.13);
+  --badge-text: #7ee787;
+}
+
+.attention-pr-check-badge.failure {
+  --badge-border: rgba(248, 81, 73, 0.5);
+  --badge-bg: rgba(248, 81, 73, 0.15);
+  --badge-text: #ff7b72;
+}
+
+.attention-pr-check-badge.pending {
+  --badge-border: rgba(210, 153, 34, 0.5);
+  --badge-bg: rgba(210, 153, 34, 0.15);
+  --badge-text: #e3b341;
 }
 
 .attention-pr-repo {
@@ -1446,6 +1482,98 @@ select:focus-visible {
 
 .milestone-panel {
   margin-bottom: 1rem;
+}
+
+.checks-panel {
+  margin-bottom: 1rem;
+}
+
+.checks-card {
+  border: 1px solid var(--checks-color, var(--border));
+  border-left-width: 3px;
+  border-radius: 0.9rem;
+  padding: 0.8rem 0.9rem;
+  background: #0d1117;
+}
+
+.checks-card.success {
+  --checks-color: var(--success);
+}
+
+.checks-card.warning {
+  --checks-color: var(--warning);
+}
+
+.checks-card.danger {
+  --checks-color: var(--danger);
+}
+
+.checks-card.muted {
+  --checks-color: var(--muted);
+}
+
+.checks-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.checks-card-header strong {
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.checks-card-header time {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.checks-counts {
+  margin: 0.4rem 0 0;
+  color: #cbd5e1;
+  font-size: 0.82rem;
+}
+
+.checks-mergeable {
+  margin: 0.55rem 0 0;
+  color: #fda4af;
+  font-size: 0.82rem;
+}
+
+.failing-checks {
+  list-style: none;
+  padding: 0;
+  margin: 0.6rem 0 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.failing-checks li {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+}
+
+.failing-checks a {
+  color: #bae6fd;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.failing-checks a:hover {
+  text-decoration: underline;
+}
+
+.failing-check-conclusion {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .milestone-list {

@@ -12,9 +12,22 @@ sealed class GitHubPullRequestService(GitHubClient gitHub)
         CancellationToken cancellationToken)
     {
         var pullRequest = await gitHub.GetPullRequestDetailsAsync(repositoryName, number, cancellationToken);
-        var timeline = await gitHub.GetPullRequestTimelineAsync(repositoryName, number, cancellationToken);
+        var timelineTask = gitHub.GetPullRequestTimelineAsync(repositoryName, number, cancellationToken);
+        var checksTask = string.IsNullOrEmpty(pullRequest.HeadSha)
+            ? Task.FromResult(ChecksStatus.None)
+            : gitHub.GetChecksStatusAsync(repositoryName, pullRequest.HeadSha, cancellationToken);
+
+        await Task.WhenAll(timelineTask, checksTask);
+
+        var timeline = timelineTask.Result;
         var stats = TimelineStats.Create(pullRequest, timeline);
 
-        return new TimelineResponse(repositoryName.ToString(), number, stats, timeline);
+        return new TimelineResponse(
+            repositoryName.ToString(),
+            number,
+            stats,
+            checksTask.Result,
+            pullRequest.MergeableState,
+            timeline);
     }
 }

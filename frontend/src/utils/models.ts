@@ -83,11 +83,26 @@ export function createForMeItems(pullRequests: PullRequestSummary[], login?: str
 }
 
 function createPersonalPick(pullRequest: PullRequestSummary, login: string): PickItem | null {
+  if (sameLogin(pullRequest.author, login) && pullRequest.checks?.state === 'failure') {
+    return {
+      pullRequest,
+      action: 'Fix CI',
+      reason: `Your PR has ${formatCount(pullRequest.checks.failureCount, 'failing check')} · ${pickReason(pullRequest)}`,
+      tone: 'danger',
+      personal: true,
+    };
+  }
+
   if (pullRequest.requestedReviewers.some((reviewer) => sameLogin(reviewer, login))) {
+    const ciSuffix = pullRequest.checks?.state === 'failure'
+      ? ' · CI failing'
+      : pullRequest.checks?.state === 'pending'
+        ? ' · CI running'
+        : '';
     return {
       pullRequest,
       action: 'Review this',
-      reason: `Review requested from you · ${pickReason(pullRequest)}`,
+      reason: `Review requested from you · ${pickReason(pullRequest)}${ciSuffix}`,
       tone: 'warning',
       personal: true,
     };
@@ -118,6 +133,7 @@ function createPersonalPick(pullRequest: PullRequestSummary, login: string): Pic
 
 function pickScore(item: PickItem) {
   let score = item.personal ? 1000 : 0;
+  if (item.action === 'Fix CI') score += 110;
   if (item.action === 'Review this') score += 90;
   if (item.action === 'Merge this' || item.action === 'Finish this') score += 80;
   if (item.action === 'Respond here') score += 75;
@@ -161,6 +177,13 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
       summary: 'Approved PRs that have been waiting to land for multiple days.',
       tone: 'danger',
       metric: 'land stale approvals',
+      items: [],
+    },
+    {
+      label: 'CI failing',
+      summary: 'Open PRs whose head commit has failing checks. Author needs to fix before reviewers can help.',
+      tone: 'danger',
+      metric: 'unblock CI',
       items: [],
     },
     {
@@ -281,12 +304,18 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
     labels.push('Community Toolkit');
   }
 
+  const ciFailing = isChecksFailing(pullRequest);
+  if (ciFailing) {
+    labels.push('CI failing');
+  }
+
   const approvedButAging = isApprovedButAging(pullRequest);
   if (approvedButAging) {
     labels.push('Approved but aging');
   }
 
-  if (pullRequest.review.state === 'approved' && !approvedButAging) {
+  // Failing CI disqualifies "Ready to merge" — the PR is not actually ready to land.
+  if (pullRequest.review.state === 'approved' && !approvedButAging && !ciFailing) {
     labels.push('Ready to merge');
   }
 
@@ -306,7 +335,8 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
     labels.push('Community');
   }
 
-  if (isQuickWin(pullRequest)) {
+  // A small PR with red CI is not a "drain queue" candidate until CI is fixed.
+  if (isQuickWin(pullRequest) && !ciFailing) {
     labels.push('Quick wins');
   }
 
@@ -330,6 +360,8 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
   switch (bucketLabel) {
     case approvedButAgingBucketLabel:
       return approvedAt ? `Approved ${formatAge(approvedAt)}` : 'Approved';
+    case 'CI failing':
+      return formatCount(pullRequest.checks?.failureCount ?? 0, 'failing check');
     case 'Ready to merge':
       return `${formatCount(pullRequest.review.approvalCount, 'approval')}`;
     case 'Re-review needed':
@@ -364,6 +396,14 @@ function isApprovedButAging(pullRequest: PullRequestSummary) {
   return pullRequest.review.state === 'approved'
     && approvedAt != null
     && ageMs(approvedAt) >= approvedAgingMs;
+}
+
+function isChecksFailing(pullRequest: PullRequestSummary) {
+  return pullRequest.checks?.state === 'failure';
+}
+
+function isChecksPending(pullRequest: PullRequestSummary) {
+  return pullRequest.checks?.state === 'pending';
 }
 
 function approvalAgeAt(pullRequest: PullRequestSummary) {
@@ -445,6 +485,11 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
     signals.push({ label: `release ${currentRelease}`, tone: 'danger' });
   }
 
+  const checksSignal = checksAttentionSignal(pullRequest);
+  if (checksSignal) {
+    signals.push(checksSignal);
+  }
+
   const approvedAt = approvalAgeAt(pullRequest);
   if (isApprovedButAging(pullRequest) && approvedAt) {
     signals.push({ label: `approved ${formatAge(approvedAt)}`, tone: 'danger' });
@@ -508,6 +553,27 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
   return signals.slice(0, 7);
 }
 
+function checksAttentionSignal(pullRequest: PullRequestSummary): AttentionSignal | null {
+  const checks = pullRequest.checks;
+  if (!checks || checks.state === 'none') {
+    return null;
+  }
+
+  if (checks.state === 'failure') {
+    const label = checks.failureCount > 0
+      ? `CI failing · ${formatCount(checks.failureCount, 'check')}`
+      : 'CI failing';
+    return { label, tone: 'danger' };
+  }
+
+  if (checks.state === 'pending') {
+    return { label: 'CI running', tone: 'warning' };
+  }
+
+  // Successful CI on dashboard rows is intentionally suppressed to avoid pill noise.
+  return null;
+}
+
 export function targetsCurrentRelease(pullRequest: PullRequestSummary) {
   return [
     pullRequest.title,
@@ -563,12 +629,18 @@ function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {
     return { label: 'toolkit review', tone: 'accent' };
   }
 
+  if (isChecksFailing(pullRequest)) {
+    return { label: 'fix CI', tone: 'danger' };
+  }
+
   if (isApprovedButAging(pullRequest)) {
     return { label: 'land approval', tone: 'danger' };
   }
 
   if (pullRequest.review.state === 'approved') {
-    return { label: 'merge', tone: 'success' };
+    return isChecksPending(pullRequest)
+      ? { label: 'wait for CI', tone: 'warning' }
+      : { label: 'merge', tone: 'success' };
   }
 
   if (needsReReview(pullRequest)) {
@@ -635,11 +707,24 @@ export function createTriageModel(
   pullRequest: PullRequestSummary,
   stats: TimelineStats,
   items: TimelineItem[],
+  mergeableState?: string | null,
 ): TriageModel {
   const action = actionSignal(pullRequest);
   const signals = createAttentionSignals({ pullRequest, reason: '' })
     .filter((signal) => signal.label !== action.label)
     .slice(0, 6);
+
+  if (pullRequest.checks?.state === 'success') {
+    signals.push({ label: `CI ${formatCount(pullRequest.checks.successCount, 'check')} pass`, tone: 'success' });
+  }
+
+  if (mergeableState === 'dirty') {
+    signals.push({ label: 'merge conflicts', tone: 'danger' });
+  } else if (mergeableState === 'behind') {
+    signals.push({ label: 'behind base', tone: 'warning' });
+  } else if (mergeableState === 'blocked') {
+    signals.push({ label: 'blocked by branch protection', tone: 'danger' });
+  }
 
   if (stats.firstReviewDelayMs != null) {
     signals.push({ label: `first review ${formatDuration(stats.firstReviewDelayMs)}`, tone: 'accent' });
@@ -651,20 +736,41 @@ export function createTriageModel(
 
   return {
     action,
-    why: triageWhy(pullRequest, stats, items),
-    waitingOn: waitingOn(pullRequest),
+    why: triageWhy(pullRequest, stats, items, mergeableState),
+    waitingOn: waitingOn(pullRequest, mergeableState),
     signals: dedupeSignals(signals).slice(0, 8),
     participants: createTriageParticipants(stats.developers),
     milestones: createSignalMilestones(pullRequest, items),
   };
 }
 
-function triageWhy(pullRequest: PullRequestSummary, stats: TimelineStats, items: TimelineItem[]) {
+function triageWhy(
+  pullRequest: PullRequestSummary,
+  stats: TimelineStats,
+  items: TimelineItem[],
+  mergeableState?: string | null,
+) {
   if (pullRequest.draft) {
     return `Draft for ${formatAge(pullRequest.createdAt)}; keep it off the active review queue.`;
   }
 
+  if (isChecksFailing(pullRequest)) {
+    const count = pullRequest.checks?.failureCount ?? 0;
+    const checksPart = count > 0 ? `${formatCount(count, 'failing check')}` : 'CI is failing';
+    if (pullRequest.review.state === 'approved') {
+      return `Approved, but ${checksPart} — author needs to fix CI before this can land.`;
+    }
+    return `${checksPart} on the latest commit — author needs to fix CI before reviewers can finish.`;
+  }
+
+  if (mergeableState === 'dirty') {
+    return 'Merge conflicts on base — author needs to rebase before this can land.';
+  }
+
   if (pullRequest.review.state === 'approved') {
+    if (isChecksPending(pullRequest)) {
+      return `Approved, but CI is still running on the head commit — wait for it to finish before merging.`;
+    }
     return `Approved ${formatAge(pullRequest.review.lastReviewedAt ?? pullRequest.updatedAt)} ago and still open.`;
   }
 
@@ -689,13 +795,17 @@ function triageWhy(pullRequest: PullRequestSummary, stats: TimelineStats, items:
     : `No clear human review signal yet.`;
 }
 
-function waitingOn(pullRequest: PullRequestSummary) {
+function waitingOn(pullRequest: PullRequestSummary, mergeableState?: string | null) {
+  if (isChecksFailing(pullRequest) || mergeableState === 'dirty') {
+    return `${pullRequest.author} (CI)`;
+  }
+
   if (pullRequest.draft || pullRequest.review.state === 'changes_requested') {
     return pullRequest.author;
   }
 
   if (pullRequest.review.state === 'approved') {
-    return 'maintainer';
+    return isChecksPending(pullRequest) ? 'CI' : 'maintainer';
   }
 
   if (pullRequest.review.state === 'waiting') {

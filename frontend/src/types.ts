@@ -34,7 +34,9 @@ export type PullRequestSummary = {
   deletions: number;
   changedFiles: number;
   lastCommitAt?: string | null;
+  headSha?: string | null;
   review: ReviewStatus;
+  checks: ChecksStatus;
 };
 
 export type LinkedIssueSummary = {
@@ -55,6 +57,26 @@ export type ReviewStatus = {
   commentedReviewCount: number;
   lastApprovedAt?: string | null;
   lastReviewedAt?: string | null;
+};
+
+export type CheckState = 'success' | 'failure' | 'pending' | 'none';
+
+export type FailingCheck = {
+  name: string;
+  conclusion?: string | null;
+  htmlUrl?: string | null;
+};
+
+export type ChecksStatus = {
+  state: CheckState;
+  totalCount: number;
+  successCount: number;
+  failureCount: number;
+  pendingCount: number;
+  neutralCount: number;
+  skippedCount: number;
+  completedAt?: string | null;
+  failingChecks: FailingCheck[];
 };
 
 export type PullRequestListResponse = {
@@ -106,6 +128,8 @@ export type TimelineResponse = {
   repository: string;
   number: number;
   stats: TimelineStats;
+  checks: ChecksStatus;
+  mergeableState?: string | null;
   items: TimelineItem[];
 };
 

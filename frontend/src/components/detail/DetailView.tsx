@@ -6,6 +6,7 @@ import type {
   TriageModel,
 } from '../../types';
 import ActivityPanel from './ActivityPanel';
+import ChecksPanel from './ChecksPanel';
 import DeveloperPanel from './DeveloperPanel';
 import MilestonePanel from './MilestonePanel';
 import RawActivityTimeline from './RawActivityTimeline';
@@ -20,6 +21,7 @@ type DetailViewProps = {
   triageModel: TriageModel | null;
   activityModel: ActivityModel | null;
   groupedTimeline: Record<string, TimelineStoryEntry[]>;
+  mergeableState: string | null;
   onBack: () => void;
 };
 
@@ -32,6 +34,7 @@ function DetailView({
   triageModel,
   activityModel,
   groupedTimeline,
+  mergeableState,
   onBack,
 }: DetailViewProps) {
   return (
@@ -60,6 +63,10 @@ function DetailView({
       ) : (
         <div>
           {triageModel && <TriagePanel model={triageModel} />}
+
+          {selectedPullRequest?.checks && (
+            <ChecksPanel checks={selectedPullRequest.checks} mergeableState={mergeableState} />
+          )}
 
           {activityModel && <ActivityPanel model={activityModel} />}
 

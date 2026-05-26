@@ -53,7 +53,9 @@ record PullRequestSummary(
     int Deletions,
     int ChangedFiles,
     DateTimeOffset? LastCommitAt,
-    ReviewStatus Review)
+    string? HeadSha,
+    ReviewStatus Review,
+    ChecksStatus Checks)
 {
     public static PullRequestSummary FromDto(GitHubPullRequestDto pullRequest) =>
         new(
@@ -83,7 +85,9 @@ record PullRequestSummary(
             pullRequest.Deletions,
             pullRequest.ChangedFiles,
             null,
-            ReviewStatus.Waiting);
+            pullRequest.Head?.Sha,
+            ReviewStatus.Waiting,
+            ChecksStatus.None);
 }
 
 record LinkedIssueSummary(
@@ -129,6 +133,31 @@ record ReviewStatus(
         LastReviewedAt: null);
 }
 
+record ChecksStatus(
+    string State,
+    int TotalCount,
+    int SuccessCount,
+    int FailureCount,
+    int PendingCount,
+    int NeutralCount,
+    int SkippedCount,
+    DateTimeOffset? CompletedAt,
+    IReadOnlyList<FailingCheck> FailingChecks)
+{
+    public static ChecksStatus None { get; } = new(
+        State: "none",
+        TotalCount: 0,
+        SuccessCount: 0,
+        FailureCount: 0,
+        PendingCount: 0,
+        NeutralCount: 0,
+        SkippedCount: 0,
+        CompletedAt: null,
+        FailingChecks: []);
+}
+
+record FailingCheck(string Name, string? Conclusion, string? HtmlUrl);
+
 record ReviewEvent(string Actor, string State, DateTimeOffset SubmittedAt)
 {
     public static ReviewEvent FromDto(GitHubReviewDto review) =>
@@ -145,7 +174,9 @@ record PullRequestDetails(
     int CommitCount,
     int Additions,
     int Deletions,
-    int ChangedFiles)
+    int ChangedFiles,
+    string? HeadSha,
+    string? MergeableState)
 {
     public static PullRequestDetails FromDto(GitHubPullRequestDto pullRequest) =>
         new(
@@ -155,10 +186,18 @@ record PullRequestDetails(
             pullRequest.Commits,
             pullRequest.Additions,
             pullRequest.Deletions,
-            pullRequest.ChangedFiles);
+            pullRequest.ChangedFiles,
+            pullRequest.Head?.Sha,
+            pullRequest.MergeableState);
 }
 
-record TimelineResponse(string Repository, int Number, TimelineStats Stats, IReadOnlyList<TimelineItem> Items);
+record TimelineResponse(
+    string Repository,
+    int Number,
+    TimelineStats Stats,
+    ChecksStatus Checks,
+    string? MergeableState,
+    IReadOnlyList<TimelineItem> Items);
 
 record TimelineStats(
     int CommitCount,
@@ -372,6 +411,8 @@ record TimelineItem(
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
 [JsonSerializable(typeof(GitHubActorDto))]
+[JsonSerializable(typeof(GitHubCheckRunsResponseDto))]
+[JsonSerializable(typeof(GitHubCombinedStatusDto))]
 [JsonSerializable(typeof(GitHubErrorDto))]
 [JsonSerializable(typeof(GitHubIssueDto))]
 [JsonSerializable(typeof(GitHubIssuePullRequestDto))]
@@ -446,6 +487,47 @@ sealed class GitHubPullRequestDto
     public int Additions { get; init; }
     public int Deletions { get; init; }
     public int ChangedFiles { get; init; }
+    public GitHubPullRequestRefDto? Head { get; init; }
+    public string? MergeableState { get; init; }
+}
+
+sealed class GitHubPullRequestRefDto
+{
+    public string? Sha { get; init; }
+    public string? Ref { get; init; }
+}
+
+sealed class GitHubCheckRunsResponseDto
+{
+    public int TotalCount { get; init; }
+    public GitHubCheckRunDto[] CheckRuns { get; init; } = [];
+}
+
+sealed class GitHubCheckRunDto
+{
+    public long Id { get; init; }
+    public string? Name { get; init; }
+    public string? Status { get; init; }
+    public string? Conclusion { get; init; }
+    public DateTimeOffset? StartedAt { get; init; }
+    public DateTimeOffset? CompletedAt { get; init; }
+    public string? HtmlUrl { get; init; }
+}
+
+sealed class GitHubCombinedStatusDto
+{
+    public string? State { get; init; }
+    public int TotalCount { get; init; }
+    public GitHubStatusDto[] Statuses { get; init; } = [];
+}
+
+sealed class GitHubStatusDto
+{
+    public string? State { get; init; }
+    public string? Context { get; init; }
+    public string? Description { get; init; }
+    public string? TargetUrl { get; init; }
+    public DateTimeOffset? UpdatedAt { get; init; }
 }
 
 sealed class GitHubCommitDto

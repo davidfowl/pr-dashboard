@@ -65,6 +65,28 @@ The app requests the `repo` and `read:org` scopes.
 
 If `repo` is omitted, the backend defaults to `microsoft/aspire`.
 
+Each pull request in `/api/github/pulls` and the `/timeline` response carries a `checks` object that rolls up GitHub's Check Runs and legacy combined-statuses for the PR's head commit:
+
+```jsonc
+{
+  "checks": {
+    "state": "success | failure | pending | none",
+    "totalCount": 0,
+    "successCount": 0,
+    "failureCount": 0,
+    "pendingCount": 0,
+    "neutralCount": 0,
+    "skippedCount": 0,
+    "completedAt": "2026-05-26T15:00:00Z",
+    "failingChecks": [
+      { "name": "tests", "conclusion": "failure", "htmlUrl": "https://..." }
+    ]
+  }
+}
+```
+
+Checks are only fetched for `state=open` queries to keep the closed/all history view lightweight. The `/timeline` response also includes `mergeableState` (`clean | dirty | blocked | behind | unstable | unknown`) so the detail view can surface merge-conflict / branch-protection blockers.
+
 ## Build and lint
 
 ```bash

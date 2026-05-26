@@ -37,6 +37,7 @@ function App() {
   const [selectedPullRequest, setSelectedPullRequest] = useState<PullRequestSummary | null>(null);
   const [timelineItems, setTimelineItems] = useState<TimelineItem[]>([]);
   const [timelineStats, setTimelineStats] = useState<TimelineStats | null>(null);
+  const [mergeableState, setMergeableState] = useState<string | null>(null);
   const [pullsLoading, setPullsLoading] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
@@ -74,9 +75,9 @@ function App() {
   const triageModel = useMemo(
     () =>
       selectedPullRequest && timelineStats
-        ? createTriageModel(selectedPullRequest, timelineStats, timelineItems)
+        ? createTriageModel(selectedPullRequest, timelineStats, timelineItems, mergeableState)
         : null,
-    [selectedPullRequest, timelineItems, timelineStats],
+    [mergeableState, selectedPullRequest, timelineItems, timelineStats],
   );
 
   useEffect(() => {
@@ -176,6 +177,7 @@ function App() {
       setSelectedPullRequest(null);
       setTimelineItems([]);
       setTimelineStats(null);
+      setMergeableState(null);
       setViewMode('dashboard');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to sign out.');
@@ -188,6 +190,7 @@ function App() {
     setSelectedPullRequest(null);
     setTimelineItems([]);
     setTimelineStats(null);
+    setMergeableState(null);
     setViewMode('dashboard');
 
     try {
@@ -236,10 +239,20 @@ function App() {
       const data = await readJson<TimelineResponse>(response);
       setTimelineStats(data.stats);
       setTimelineItems(data.items);
+      setSelectedPullRequest((current) =>
+        current
+          ? {
+              ...current,
+              checks: data.checks ?? current.checks,
+            }
+          : current,
+      );
+      setMergeableState(data.mergeableState ?? null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load pull request timeline.');
       setTimelineItems([]);
       setTimelineStats(null);
+      setMergeableState(null);
     } finally {
       setTimelineLoading(false);
     }
@@ -319,6 +332,7 @@ function App() {
             triageModel={triageModel}
             activityModel={activityModel}
             groupedTimeline={groupedTimeline}
+            mergeableState={mergeableState}
             onBack={() => showDashboard()}
           />
         )}

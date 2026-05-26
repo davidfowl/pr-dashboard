@@ -80,6 +80,18 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             await Task.WhenAll(detailTasks.Values);
             await Task.WhenAll(lastCommitTasks.Values);
 
+            // Checks are fetched per head SHA from the list payload. Skip for closed/all queries
+            // since CI signals are only actionable on open PRs.
+            var fetchChecks = state.Equals("open", StringComparison.OrdinalIgnoreCase);
+            var checksTasks = pullRequests.ToDictionary(
+                pullRequest => pullRequest.Number,
+                pullRequest =>
+                    fetchChecks && !string.IsNullOrEmpty(pullRequest.HeadSha)
+                        ? GetChecksStatusAsync(repositoryName, pullRequest.HeadSha, cancellationToken)
+                        : Task.FromResult(ChecksStatus.None));
+
+            await Task.WhenAll(checksTasks.Values);
+
             return pullRequests
                 .Select(pullRequest =>
                 {
@@ -94,11 +106,195 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                         Deletions = details?.Deletions ?? pullRequest.Deletions,
                         ChangedFiles = details?.ChangedFiles ?? pullRequest.ChangedFiles,
                         LastCommitAt = lastCommitTask?.Result,
-                        Review = reviewsByPullRequest[pullRequest.Number]
+                        Review = reviewsByPullRequest[pullRequest.Number],
+                        Checks = checksTasks[pullRequest.Number].Result
                     };
                 })
                 .ToArray();
         }) ?? [];
+    }
+
+    public async Task<ChecksStatus> GetChecksStatusAsync(
+        RepositoryName repositoryName,
+        string headSha,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(headSha))
+        {
+            return ChecksStatus.None;
+        }
+
+        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
+        // Key by SHA so a fresh push naturally invalidates stale check state once
+        // GitHub posts results for the new commit.
+        var cacheKey = $"checks:{authCacheKey}:{repositoryName}:{headSha}";
+        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheDuration;
+
+            var checkRunsTask = TryGetCheckRunsAsync(repositoryName, headSha, cancellationToken);
+            var combinedStatusTask = TryGetCombinedStatusAsync(repositoryName, headSha, cancellationToken);
+            await Task.WhenAll(checkRunsTask, combinedStatusTask);
+
+            return MergeChecks(checkRunsTask.Result, combinedStatusTask.Result);
+        }) ?? ChecksStatus.None;
+    }
+
+    private async Task<GitHubCheckRunsResponseDto?> TryGetCheckRunsAsync(
+        RepositoryName repositoryName,
+        string headSha,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await SendGitHubRequestAsync(
+                $"repos/{repositoryName.Owner}/{repositoryName.Name}/commits/{Uri.EscapeDataString(headSha)}/check-runs?filter=latest&per_page=100",
+                GitHubJsonSerializerContext.Default.GitHubCheckRunsResponseDto,
+                cancellationToken);
+        }
+        catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound
+            || ex.StatusCode == HttpStatusCode.UnprocessableEntity)
+        {
+            // Checks are enrichment-only. Treat missing data as "no checks".
+            return null;
+        }
+    }
+
+    private async Task<GitHubCombinedStatusDto?> TryGetCombinedStatusAsync(
+        RepositoryName repositoryName,
+        string headSha,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await SendGitHubRequestAsync(
+                $"repos/{repositoryName.Owner}/{repositoryName.Name}/commits/{Uri.EscapeDataString(headSha)}/status",
+                GitHubJsonSerializerContext.Default.GitHubCombinedStatusDto,
+                cancellationToken);
+        }
+        catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound
+            || ex.StatusCode == HttpStatusCode.UnprocessableEntity)
+        {
+            return null;
+        }
+    }
+
+    private const int MaxFailingChecksTracked = 5;
+
+    private static ChecksStatus MergeChecks(GitHubCheckRunsResponseDto? checkRuns, GitHubCombinedStatusDto? combinedStatus)
+    {
+        var success = 0;
+        var failure = 0;
+        var pending = 0;
+        var neutral = 0;
+        var skipped = 0;
+        DateTimeOffset? latestCompletedAt = null;
+        var failingChecks = new List<FailingCheck>();
+
+        if (checkRuns?.CheckRuns is { Length: > 0 } runs)
+        {
+            foreach (var run in runs)
+            {
+                var status = run.Status?.ToLowerInvariant();
+                var conclusion = run.Conclusion?.ToLowerInvariant();
+
+                if (status is "queued" or "in_progress" or "pending" or "waiting")
+                {
+                    pending++;
+                    continue;
+                }
+
+                switch (conclusion)
+                {
+                    case "success":
+                        success++;
+                        break;
+                    case "failure" or "timed_out" or "action_required" or "cancelled" or "startup_failure":
+                        failure++;
+                        if (failingChecks.Count < MaxFailingChecksTracked)
+                        {
+                            failingChecks.Add(new FailingCheck(
+                                Name: run.Name ?? "(unnamed check)",
+                                Conclusion: conclusion,
+                                HtmlUrl: run.HtmlUrl));
+                        }
+                        break;
+                    case "neutral":
+                        neutral++;
+                        break;
+                    case "skipped" or "stale":
+                        skipped++;
+                        break;
+                    default:
+                        // Unknown / null conclusion on a completed run — count as neutral so it
+                        // does not drag the rollup down or up.
+                        neutral++;
+                        break;
+                }
+
+                if (run.CompletedAt is { } completedAt
+                    && (latestCompletedAt is null || completedAt > latestCompletedAt))
+                {
+                    latestCompletedAt = completedAt;
+                }
+            }
+        }
+
+        if (combinedStatus?.Statuses is { Length: > 0 } statuses)
+        {
+            foreach (var contextStatus in statuses)
+            {
+                var state = contextStatus.State?.ToLowerInvariant();
+                switch (state)
+                {
+                    case "success":
+                        success++;
+                        break;
+                    case "failure" or "error":
+                        failure++;
+                        if (failingChecks.Count < MaxFailingChecksTracked)
+                        {
+                            failingChecks.Add(new FailingCheck(
+                                Name: contextStatus.Context ?? "(unnamed status)",
+                                Conclusion: state,
+                                HtmlUrl: contextStatus.TargetUrl));
+                        }
+                        break;
+                    case "pending":
+                        pending++;
+                        break;
+                    default:
+                        neutral++;
+                        break;
+                }
+
+                if (contextStatus.UpdatedAt is { } updatedAt
+                    && (latestCompletedAt is null || updatedAt > latestCompletedAt))
+                {
+                    latestCompletedAt = updatedAt;
+                }
+            }
+        }
+
+        var total = success + failure + pending + neutral + skipped;
+
+        var rolledUpState =
+            total == 0 ? "none" :
+            failure > 0 ? "failure" :
+            pending > 0 ? "pending" :
+            success > 0 ? "success" :
+            "none";
+
+        return new ChecksStatus(
+            State: rolledUpState,
+            TotalCount: total,
+            SuccessCount: success,
+            FailureCount: failure,
+            PendingCount: pending,
+            NeutralCount: neutral,
+            SkippedCount: skipped,
+            CompletedAt: latestCompletedAt,
+            FailingChecks: failingChecks);
     }
 
     public async Task<ReviewStatus> GetReviewStatusAsync(

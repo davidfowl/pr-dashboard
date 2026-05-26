@@ -319,6 +319,166 @@ public sealed class GitHubClientTests
         var pullRequest = Assert.Single(pullRequests);
         Assert.Equal("reviewed", pullRequest.Review.State);
         Assert.Equal(DateTimeOffset.Parse("2026-01-03T00:00:00Z"), pullRequest.LastCommitAt);
+        Assert.Equal("none", pullRequest.Checks.State);
+    }
+
+    [Fact]
+    public async Task PullListAttachesFailingChecksWhenHeadShaIsKnown()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                """
+                [
+                  {
+                    "number": 1,
+                    "title": "Add feature",
+                    "state": "open",
+                    "body": null,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": [],
+                    "head": { "sha": "abc123", "ref": "feature" }
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            "repos/example/repo/commits/abc123/check-runs?filter=latest&per_page=100" => Json(
+                """
+                {
+                  "total_count": 3,
+                  "check_runs": [
+                    { "id": 1, "name": "build", "status": "completed", "conclusion": "success", "completed_at": "2026-01-02T00:30:00Z", "html_url": "https://ci.example/build" },
+                    { "id": 2, "name": "tests", "status": "completed", "conclusion": "failure", "completed_at": "2026-01-02T00:45:00Z", "html_url": "https://ci.example/tests" },
+                    { "id": 3, "name": "lint", "status": "in_progress", "conclusion": null, "completed_at": null, "html_url": "https://ci.example/lint" }
+                  ]
+                }
+                """),
+            "repos/example/repo/commits/abc123/status" => Json(
+                """
+                {
+                  "state": "pending",
+                  "total_count": 1,
+                  "statuses": [
+                    { "state": "pending", "context": "azure-pipelines", "target_url": "https://az.example", "updated_at": "2026-01-02T00:50:00Z" }
+                  ]
+                }
+                """),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("failure", pullRequest.Checks.State);
+        Assert.Equal(4, pullRequest.Checks.TotalCount);
+        Assert.Equal(1, pullRequest.Checks.SuccessCount);
+        Assert.Equal(1, pullRequest.Checks.FailureCount);
+        Assert.Equal(2, pullRequest.Checks.PendingCount);
+        var failing = Assert.Single(pullRequest.Checks.FailingChecks);
+        Assert.Equal("tests", failing.Name);
+        Assert.Equal("failure", failing.Conclusion);
+    }
+
+    [Fact]
+    public async Task PullListTreatsAllGreenChecksAsSuccess()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                """
+                [
+                  {
+                    "number": 1,
+                    "title": "Add feature",
+                    "state": "open",
+                    "body": null,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": [],
+                    "head": { "sha": "def456", "ref": "feature" }
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            "repos/example/repo/commits/def456/check-runs?filter=latest&per_page=100" => Json(
+                """
+                {
+                  "total_count": 2,
+                  "check_runs": [
+                    { "id": 1, "name": "build", "status": "completed", "conclusion": "success", "completed_at": "2026-01-02T00:30:00Z" },
+                    { "id": 2, "name": "tests", "status": "completed", "conclusion": "success", "completed_at": "2026-01-02T00:45:00Z" }
+                  ]
+                }
+                """),
+            "repos/example/repo/commits/def456/status" => Json(
+                """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("success", pullRequest.Checks.State);
+        Assert.Equal(2, pullRequest.Checks.TotalCount);
+        Assert.Empty(pullRequest.Checks.FailingChecks);
+    }
+
+    [Fact]
+    public async Task PullListSkipsChecksWhenStateIsClosed()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=closed&sort=updated&direction=desc&per_page=100" => Json(
+                """
+                [
+                  {
+                    "number": 1,
+                    "title": "Add feature",
+                    "state": "closed",
+                    "body": null,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": [],
+                    "head": { "sha": "abc123", "ref": "feature" }
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "closed",
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("none", pullRequest.Checks.State);
     }
 
     private static GitHubClient CreateClient(Func<string, HttpResponseMessage> route)
