@@ -360,7 +360,7 @@ public sealed class GitHubClientTests
                   ]
                 }
                 """),
-            "repos/example/repo/commits/abc123/status" => Json(
+            "repos/example/repo/commits/abc123/status?per_page=100" => Json(
                 """
                 {
                   "state": "pending",
@@ -426,7 +426,7 @@ public sealed class GitHubClientTests
                   ]
                 }
                 """),
-            "repos/example/repo/commits/def456/status" => Json(
+            "repos/example/repo/commits/def456/status?per_page=100" => Json(
                 """{ "state": "success", "total_count": 0, "statuses": [] }"""),
             _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
         });
@@ -518,7 +518,7 @@ public sealed class GitHubClientTests
                   ]
                 }
                 """),
-            "repos/example/repo/commits/neu789/status" => Json(
+            "repos/example/repo/commits/neu789/status?per_page=100" => Json(
                 """{ "state": "success", "total_count": 0, "statuses": [] }"""),
             _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
         });
@@ -566,7 +566,7 @@ public sealed class GitHubClientTests
             "repos/example/repo/commits/rl1/check-runs?filter=latest&per_page=100" => Json(
                 """{ "message": "API rate limit exceeded" }""",
                 (HttpStatusCode)403),
-            "repos/example/repo/commits/rl1/status" => Json(
+            "repos/example/repo/commits/rl1/status?per_page=100" => Json(
                 """{ "message": "Server error" }""",
                 HttpStatusCode.InternalServerError),
             _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
@@ -635,7 +635,7 @@ public sealed class GitHubClientTests
                   ]
                 }
                 """),
-            "repos/example/repo/commits/open123/status" => Json(
+            "repos/example/repo/commits/open123/status?per_page=100" => Json(
                 """{ "state": "success", "total_count": 0, "statuses": [] }"""),
             // Intentionally NO check-runs / status stubs for closed456 — the test asserts they
             // are never requested for closed PRs even inside an all query.

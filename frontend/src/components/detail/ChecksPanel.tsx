@@ -64,8 +64,8 @@ function ChecksPanel({ checks, mergeableState }: ChecksPanelProps) {
         )}
         {checks.failingChecks.length > 0 && (
           <ul className="failing-checks">
-            {checks.failingChecks.map((failing) => (
-              <li key={`${failing.name}-${failing.conclusion ?? ''}`}>
+            {checks.failingChecks.map((failing, index) => (
+              <li key={`${failing.htmlUrl ?? failing.name}-${failing.conclusion ?? ''}-${index}`}>
                 {failing.htmlUrl ? (
                   <a href={failing.htmlUrl} target="_blank" rel="noreferrer">{failing.name}</a>
                 ) : (

@@ -91,24 +91,45 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                         ? GetChecksStatusAsync(repositoryName, pullRequest.HeadSha, cancellationToken)
                         : Task.FromResult(ChecksStatus.None));
 
-            await Task.WhenAll(checksTasks.Values);
+            var checksByPullRequest = new Dictionary<int, ChecksStatus>(checksTasks.Count);
+            foreach (var (number, task) in checksTasks)
+            {
+                checksByPullRequest[number] = await task;
+            }
+
+            var detailsByPullRequest = new Dictionary<int, PullRequestDetails?>(detailTasks.Count);
+            foreach (var (number, task) in detailTasks)
+            {
+                detailsByPullRequest[number] = await task;
+            }
+
+            var lastCommitByPullRequest = new Dictionary<int, DateTimeOffset?>(lastCommitTasks.Count);
+            foreach (var (number, task) in lastCommitTasks)
+            {
+                lastCommitByPullRequest[number] = await task;
+            }
+
+            var linkedIssuesByPullRequest = new Dictionary<int, IReadOnlyList<LinkedIssueSummary>>(linkedIssueTasks.Count);
+            foreach (var (number, task) in linkedIssueTasks)
+            {
+                linkedIssuesByPullRequest[number] = await task;
+            }
 
             return pullRequests
                 .Select(pullRequest =>
                 {
-                    detailTasks.TryGetValue(pullRequest.Number, out var detailTask);
-                    lastCommitTasks.TryGetValue(pullRequest.Number, out var lastCommitTask);
-                    var details = detailTask?.Result;
+                    detailsByPullRequest.TryGetValue(pullRequest.Number, out var details);
+                    lastCommitByPullRequest.TryGetValue(pullRequest.Number, out var lastCommitAt);
                     return pullRequest with
                     {
-                        LinkedIssues = linkedIssueTasks[pullRequest.Number].Result,
+                        LinkedIssues = linkedIssuesByPullRequest[pullRequest.Number],
                         CommitCount = details?.CommitCount ?? pullRequest.CommitCount,
                         Additions = details?.Additions ?? pullRequest.Additions,
                         Deletions = details?.Deletions ?? pullRequest.Deletions,
                         ChangedFiles = details?.ChangedFiles ?? pullRequest.ChangedFiles,
-                        LastCommitAt = lastCommitTask?.Result,
+                        LastCommitAt = lastCommitAt,
                         Review = reviewsByPullRequest[pullRequest.Number],
-                        Checks = checksTasks[pullRequest.Number].Result
+                        Checks = checksByPullRequest[pullRequest.Number]
                     };
                 })
                 .ToArray();
@@ -134,16 +155,16 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             entry.AbsoluteExpirationRelativeToNow = CacheDuration;
 
             var checkRunsTask = TryGetCheckRunsAsync(repositoryName, headSha, cancellationToken);
-            var combinedStatusTask = TryGetCombinedStatusAsync(repositoryName, headSha, cancellationToken);
+            var combinedStatusTask = TryGetCombinedStatusesAsync(repositoryName, headSha, cancellationToken);
             await Task.WhenAll(checkRunsTask, combinedStatusTask);
 
-            return MergeChecks(checkRunsTask.Result, combinedStatusTask.Result);
+            return MergeChecks(await checkRunsTask, await combinedStatusTask);
         }) ?? ChecksStatus.None;
     }
 
     private const int MaxFailingChecksTracked = 5;
 
-    private static ChecksStatus MergeChecks(IReadOnlyList<GitHubCheckRunDto> checkRuns, GitHubCombinedStatusDto? combinedStatus)
+    private static ChecksStatus MergeChecks(IReadOnlyList<GitHubCheckRunDto> checkRuns, IReadOnlyList<GitHubStatusDto> statuses)
     {
         var success = 0;
         var failure = 0;
@@ -198,7 +219,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             }
         }
 
-        if (combinedStatus?.Statuses is { Length: > 0 } statuses)
+        if (statuses.Count > 0)
         {
             foreach (var contextStatus in statuses)
             {
@@ -301,24 +322,44 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         return runs;
     }
 
-    private async Task<GitHubCombinedStatusDto?> TryGetCombinedStatusAsync(
+    private async Task<IReadOnlyList<GitHubStatusDto>> TryGetCombinedStatusesAsync(
         RepositoryName repositoryName,
         string headSha,
         CancellationToken cancellationToken)
     {
+        // Combined status defaults to per_page=30 and paginates via Link headers, identical in
+        // shape to check-runs (wrapper object with a `statuses[]` array). Without paging, repos
+        // that post many third-party statuses (Azure Pipelines, AppVeyor, Travis, etc.) silently
+        // truncate and skew the rollup.
+        var statuses = new List<GitHubStatusDto>();
+        string? url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/commits/{Uri.EscapeDataString(headSha)}/status?per_page=100";
+
         try
         {
-            return await SendGitHubRequestAsync(
-                $"repos/{repositoryName.Owner}/{repositoryName.Name}/commits/{Uri.EscapeDataString(headSha)}/status",
-                GitHubJsonSerializerContext.Default.GitHubCombinedStatusDto,
-                cancellationToken);
+            while (url is not null)
+            {
+                using var response = await SendAuthorizedRequestAsync(url, cancellationToken);
+                var page = await ReadGitHubJsonAsync(
+                    response,
+                    GitHubJsonSerializerContext.Default.GitHubCombinedStatusDto,
+                    cancellationToken);
+
+                if (page.Statuses is { Length: > 0 } pageStatuses)
+                {
+                    statuses.AddRange(pageStatuses);
+                }
+
+                url = GetNextPageUrl(response);
+            }
         }
         catch (GitHubApiException)
         {
             // Same enrichment-only stance as TryGetCheckRunsAsync — never let a single PR's
             // checks call break the whole list.
-            return null;
+            return [];
         }
+
+        return statuses;
     }
 
     public async Task<ReviewStatus> GetReviewStatusAsync(

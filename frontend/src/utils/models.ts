@@ -796,7 +796,11 @@ function triageWhy(
 }
 
 function waitingOn(pullRequest: PullRequestSummary, mergeableState?: string | null) {
-  if (isChecksFailing(pullRequest) || mergeableState === 'dirty') {
+  if (mergeableState === 'dirty') {
+    return `${pullRequest.author} (rebase)`;
+  }
+
+  if (isChecksFailing(pullRequest)) {
     return `${pullRequest.author} (CI)`;
   }
 

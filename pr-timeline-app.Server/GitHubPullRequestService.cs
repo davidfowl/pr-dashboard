@@ -17,16 +17,15 @@ sealed class GitHubPullRequestService(GitHubClient gitHub)
             ? Task.FromResult(ChecksStatus.None)
             : gitHub.GetChecksStatusAsync(repositoryName, pullRequest.HeadSha, cancellationToken);
 
-        await Task.WhenAll(timelineTask, checksTask);
-
-        var timeline = timelineTask.Result;
+        var timeline = await timelineTask;
+        var checks = await checksTask;
         var stats = TimelineStats.Create(pullRequest, timeline);
 
         return new TimelineResponse(
             repositoryName.ToString(),
             number,
             stats,
-            checksTask.Result,
+            checks,
             pullRequest.MergeableState,
             timeline);
     }

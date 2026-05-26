@@ -45,13 +45,11 @@ function App() {
   const [viewMode, setViewMode] = useState<'dashboard' | 'details'>('dashboard');
   const [locationHash, setLocationHash] = useState(window.location.hash);
   const [selectedBucketId, setSelectedBucketId] = useState(parseBucketHash(window.location.hash)?.bucketId ?? '');
+  // Tracks the PR currently selected for detail view. Updated synchronously when loadTimeline
+  // starts (and on logout / repo reload) so async completions can reliably detect whether they
+  // still belong to the latest selection. A useEffect would lag behind a render and cause fast
+  // cache hits to be incorrectly dropped.
   const currentSelectionRef = useRef<{ repository: string; number: number } | null>(null);
-
-  useEffect(() => {
-    currentSelectionRef.current = selectedPullRequest
-      ? { repository: selectedPullRequest.repository, number: selectedPullRequest.number }
-      : null;
-  }, [selectedPullRequest]);
 
   const selectedTitle = selectedPullRequest
     ? `#${selectedPullRequest.number} ${selectedPullRequest.title}`
@@ -132,7 +130,8 @@ function App() {
     if (pullRequest) {
       void loadTimeline(detail.repository, pullRequest, false);
     }
-    // loadTimeline is a stable hoisted function; including it here would re-fire the effect on every render.
+    // loadTimeline closes over component state; including it would re-fire on every render.
+    // The effect intentionally tracks only the hash + pull-request list + current selection.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locationHash, pullRequests, selectedPullRequest]);
 
@@ -183,6 +182,7 @@ function App() {
       await readJson(response);
       await loadAuthStatus();
       setPullRequests([]);
+      currentSelectionRef.current = null;
       setSelectedPullRequest(null);
       setTimelineItems([]);
       setTimelineStats(null);
@@ -196,6 +196,7 @@ function App() {
   async function loadPullRequests(repositoryInput: string, pullState: PullState) {
     setPullsLoading(true);
     setError(null);
+    currentSelectionRef.current = null;
     setSelectedPullRequest(null);
     setTimelineItems([]);
     setTimelineStats(null);
@@ -234,6 +235,10 @@ function App() {
   async function loadTimeline(repository: string, pullRequest: PullRequestSummary, updateHistory = true) {
     setTimelineLoading(true);
     setError(null);
+    // Set the selection ref BEFORE the async fetch starts so isSelectionStillCurrent always
+    // sees the most recent selection — even when the timeline resolves from cache before the
+    // next render commit.
+    currentSelectionRef.current = { repository, number: pullRequest.number };
     setSelectedPullRequest(pullRequest);
     setActiveRepo(repository);
     setViewMode('details');
@@ -242,7 +247,6 @@ function App() {
       setLocationHash(window.location.hash);
     }
 
-    // Capture identity so a late completion from a prior PR cannot overwrite a newer selection.
     const requestedRepository = repository;
     const requestedNumber = pullRequest.number;
 

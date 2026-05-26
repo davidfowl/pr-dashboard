@@ -85,7 +85,7 @@ Each pull request in `/api/github/pulls` and the `/timeline` response carries a 
 }
 ```
 
-Checks are only fetched for `state=open` queries to keep the closed/all history view lightweight. The `/timeline` response also includes `mergeableState` (`clean | dirty | blocked | behind | unstable | unknown`) so the detail view can surface merge-conflict / branch-protection blockers.
+Checks are fetched per PR based on the PR's own state — they are included for open PRs (including in the `state=all` view) and skipped for closed/merged PRs. The `/timeline` response also includes `mergeableState` (`clean | dirty | blocked | behind | unstable | unknown`) so the detail view can surface merge-conflict / branch-protection blockers.
 
 ## Build and lint
 
