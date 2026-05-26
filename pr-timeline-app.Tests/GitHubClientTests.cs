@@ -481,6 +481,179 @@ public sealed class GitHubClientTests
         Assert.Equal("none", pullRequest.Checks.State);
     }
 
+    [Fact]
+    public async Task PullListTreatsAllNeutralOrSkippedChecksAsSuccess()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                """
+                [
+                  {
+                    "number": 1,
+                    "title": "Add feature",
+                    "state": "open",
+                    "body": null,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": [],
+                    "head": { "sha": "neu789", "ref": "feature" }
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            "repos/example/repo/commits/neu789/check-runs?filter=latest&per_page=100" => Json(
+                """
+                {
+                  "total_count": 2,
+                  "check_runs": [
+                    { "id": 1, "name": "irrelevant", "status": "completed", "conclusion": "neutral", "completed_at": "2026-01-02T00:30:00Z" },
+                    { "id": 2, "name": "doc-job", "status": "completed", "conclusion": "skipped", "completed_at": "2026-01-02T00:35:00Z" }
+                  ]
+                }
+                """),
+            "repos/example/repo/commits/neu789/status" => Json(
+                """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("success", pullRequest.Checks.State);
+        Assert.Equal(2, pullRequest.Checks.TotalCount);
+        Assert.Equal(0, pullRequest.Checks.SuccessCount);
+        Assert.Equal(1, pullRequest.Checks.NeutralCount);
+        Assert.Equal(1, pullRequest.Checks.SkippedCount);
+    }
+
+    [Fact]
+    public async Task PullListSwallowsRateLimitOnChecksFetch()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                """
+                [
+                  {
+                    "number": 1,
+                    "title": "Add feature",
+                    "state": "open",
+                    "body": null,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": [],
+                    "head": { "sha": "rl1", "ref": "feature" }
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            "repos/example/repo/commits/rl1/check-runs?filter=latest&per_page=100" => Json(
+                """{ "message": "API rate limit exceeded" }""",
+                (HttpStatusCode)403),
+            "repos/example/repo/commits/rl1/status" => Json(
+                """{ "message": "Server error" }""",
+                HttpStatusCode.InternalServerError),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        // Rate limit and 5xx on checks must degrade gracefully — the PR still appears.
+        Assert.Equal("none", pullRequest.Checks.State);
+    }
+
+    [Fact]
+    public async Task PullListFetchesChecksForOpenPrsInAllQuery()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=all&sort=updated&direction=desc&per_page=100" => Json(
+                """
+                [
+                  {
+                    "number": 1,
+                    "title": "Open feature",
+                    "state": "open",
+                    "body": null,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": [],
+                    "head": { "sha": "open123", "ref": "feature" }
+                  },
+                  {
+                    "number": 2,
+                    "title": "Closed feature",
+                    "state": "closed",
+                    "body": null,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/2",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": [],
+                    "head": { "sha": "closed456", "ref": "older" }
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/2/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            "repos/example/repo/pulls/2" => Json(PullRequestDetailsJson(2)),
+            "repos/example/repo/commits/open123/check-runs?filter=latest&per_page=100" => Json(
+                """
+                {
+                  "total_count": 1,
+                  "check_runs": [
+                    { "id": 1, "name": "tests", "status": "completed", "conclusion": "success", "completed_at": "2026-01-02T00:30:00Z" }
+                  ]
+                }
+                """),
+            "repos/example/repo/commits/open123/status" => Json(
+                """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+            // Intentionally NO check-runs / status stubs for closed456 — the test asserts they
+            // are never requested for closed PRs even inside an all query.
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "all",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, pullRequests.Count);
+        var open = pullRequests.Single(pullRequest => pullRequest.Number == 1);
+        var closed = pullRequests.Single(pullRequest => pullRequest.Number == 2);
+        Assert.Equal("success", open.Checks.State);
+        Assert.Equal("none", closed.Checks.State);
+    }
+
     private static GitHubClient CreateClient(Func<string, HttpResponseMessage> route)
     {
         var httpClient = new HttpClient(new StubGitHubHandler(route))

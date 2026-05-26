@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, FormEvent } from 'react';
 import './App.css';
 import AppInfo from './components/AppInfo';
@@ -45,6 +45,13 @@ function App() {
   const [viewMode, setViewMode] = useState<'dashboard' | 'details'>('dashboard');
   const [locationHash, setLocationHash] = useState(window.location.hash);
   const [selectedBucketId, setSelectedBucketId] = useState(parseBucketHash(window.location.hash)?.bucketId ?? '');
+  const currentSelectionRef = useRef<{ repository: string; number: number } | null>(null);
+
+  useEffect(() => {
+    currentSelectionRef.current = selectedPullRequest
+      ? { repository: selectedPullRequest.repository, number: selectedPullRequest.number }
+      : null;
+  }, [selectedPullRequest]);
 
   const selectedTitle = selectedPullRequest
     ? `#${selectedPullRequest.number} ${selectedPullRequest.title}`
@@ -125,6 +132,8 @@ function App() {
     if (pullRequest) {
       void loadTimeline(detail.repository, pullRequest, false);
     }
+    // loadTimeline is a stable hoisted function; including it here would re-fire the effect on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [locationHash, pullRequests, selectedPullRequest]);
 
   useEffect(() => {
@@ -233,29 +242,49 @@ function App() {
       setLocationHash(window.location.hash);
     }
 
+    // Capture identity so a late completion from a prior PR cannot overwrite a newer selection.
+    const requestedRepository = repository;
+    const requestedNumber = pullRequest.number;
+
     try {
       const query = new URLSearchParams({ repo: repository });
       const response = await fetch(`/api/github/pulls/${pullRequest.number}/timeline?${query}`);
       const data = await readJson<TimelineResponse>(response);
-      setTimelineStats(data.stats);
-      setTimelineItems(data.items);
       setSelectedPullRequest((current) =>
-        current
+        current && current.repository === requestedRepository && current.number === requestedNumber
           ? {
               ...current,
               checks: data.checks ?? current.checks,
             }
           : current,
       );
-      setMergeableState(data.mergeableState ?? null);
+      setTimelineStats((current) =>
+        isSelectionStillCurrent(requestedRepository, requestedNumber) ? data.stats : current,
+      );
+      setTimelineItems((current) =>
+        isSelectionStillCurrent(requestedRepository, requestedNumber) ? data.items : current,
+      );
+      setMergeableState((current) =>
+        isSelectionStillCurrent(requestedRepository, requestedNumber) ? (data.mergeableState ?? null) : current,
+      );
     } catch (err) {
+      if (!isSelectionStillCurrent(requestedRepository, requestedNumber)) {
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Unable to load pull request timeline.');
       setTimelineItems([]);
       setTimelineStats(null);
       setMergeableState(null);
     } finally {
-      setTimelineLoading(false);
+      if (isSelectionStillCurrent(requestedRepository, requestedNumber)) {
+        setTimelineLoading(false);
+      }
     }
+  }
+
+  function isSelectionStillCurrent(repository: string, number: number) {
+    const current = currentSelectionRef.current;
+    return current?.repository === repository && current.number === number;
   }
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {

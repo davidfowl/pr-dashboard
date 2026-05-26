@@ -26,6 +26,7 @@ const focusAgeLimitMs = 14 * dayMs;
 const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community']);
 const disqualifyingFocusBucketLabels = new Set(['Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community']);
 const focusBucketRanks = new Map([
+  ['CI failing', -1],
   ['Approved but aging', 0],
   ['Re-review needed', 1],
   ['Ready to merge', 2],

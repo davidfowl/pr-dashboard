@@ -80,13 +80,14 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             await Task.WhenAll(detailTasks.Values);
             await Task.WhenAll(lastCommitTasks.Values);
 
-            // Checks are fetched per head SHA from the list payload. Skip for closed/all queries
-            // since CI signals are only actionable on open PRs.
-            var fetchChecks = state.Equals("open", StringComparison.OrdinalIgnoreCase);
+            // Checks are fetched per head SHA from the list payload. Skip per PR when the PR is
+            // closed/merged since CI signals are only actionable on open PRs (this still fetches
+            // for open PRs in the "all" view).
             var checksTasks = pullRequests.ToDictionary(
                 pullRequest => pullRequest.Number,
                 pullRequest =>
-                    fetchChecks && !string.IsNullOrEmpty(pullRequest.HeadSha)
+                    pullRequest.State.Equals("open", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrEmpty(pullRequest.HeadSha)
                         ? GetChecksStatusAsync(repositoryName, pullRequest.HeadSha, cancellationToken)
                         : Task.FromResult(ChecksStatus.None));
 
@@ -140,48 +141,9 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         }) ?? ChecksStatus.None;
     }
 
-    private async Task<GitHubCheckRunsResponseDto?> TryGetCheckRunsAsync(
-        RepositoryName repositoryName,
-        string headSha,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await SendGitHubRequestAsync(
-                $"repos/{repositoryName.Owner}/{repositoryName.Name}/commits/{Uri.EscapeDataString(headSha)}/check-runs?filter=latest&per_page=100",
-                GitHubJsonSerializerContext.Default.GitHubCheckRunsResponseDto,
-                cancellationToken);
-        }
-        catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound
-            || ex.StatusCode == HttpStatusCode.UnprocessableEntity)
-        {
-            // Checks are enrichment-only. Treat missing data as "no checks".
-            return null;
-        }
-    }
-
-    private async Task<GitHubCombinedStatusDto?> TryGetCombinedStatusAsync(
-        RepositoryName repositoryName,
-        string headSha,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await SendGitHubRequestAsync(
-                $"repos/{repositoryName.Owner}/{repositoryName.Name}/commits/{Uri.EscapeDataString(headSha)}/status",
-                GitHubJsonSerializerContext.Default.GitHubCombinedStatusDto,
-                cancellationToken);
-        }
-        catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound
-            || ex.StatusCode == HttpStatusCode.UnprocessableEntity)
-        {
-            return null;
-        }
-    }
-
     private const int MaxFailingChecksTracked = 5;
 
-    private static ChecksStatus MergeChecks(GitHubCheckRunsResponseDto? checkRuns, GitHubCombinedStatusDto? combinedStatus)
+    private static ChecksStatus MergeChecks(IReadOnlyList<GitHubCheckRunDto> checkRuns, GitHubCombinedStatusDto? combinedStatus)
     {
         var success = 0;
         var failure = 0;
@@ -191,52 +153,48 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         DateTimeOffset? latestCompletedAt = null;
         var failingChecks = new List<FailingCheck>();
 
-        if (checkRuns?.CheckRuns is { Length: > 0 } runs)
+        foreach (var run in checkRuns)
         {
-            foreach (var run in runs)
+            var status = run.Status?.ToLowerInvariant();
+            var conclusion = run.Conclusion?.ToLowerInvariant();
+
+            // Treat any not-yet-completed run as pending. status == "completed" is the only state
+            // for which conclusion is guaranteed meaningful.
+            if (status != "completed")
             {
-                var status = run.Status?.ToLowerInvariant();
-                var conclusion = run.Conclusion?.ToLowerInvariant();
+                pending++;
+                continue;
+            }
 
-                if (status is "queued" or "in_progress" or "pending" or "waiting")
-                {
-                    pending++;
-                    continue;
-                }
+            switch (conclusion)
+            {
+                case "success":
+                    success++;
+                    break;
+                case "failure" or "timed_out" or "action_required" or "cancelled" or "startup_failure":
+                    failure++;
+                    failingChecks.Add(new FailingCheck(
+                        Name: run.Name ?? "(unnamed check)",
+                        Conclusion: conclusion,
+                        HtmlUrl: run.HtmlUrl));
+                    break;
+                case "neutral":
+                    neutral++;
+                    break;
+                case "skipped" or "stale":
+                    skipped++;
+                    break;
+                default:
+                    // Unknown / null conclusion on a completed run — count as neutral so it
+                    // does not drag the rollup down or up.
+                    neutral++;
+                    break;
+            }
 
-                switch (conclusion)
-                {
-                    case "success":
-                        success++;
-                        break;
-                    case "failure" or "timed_out" or "action_required" or "cancelled" or "startup_failure":
-                        failure++;
-                        if (failingChecks.Count < MaxFailingChecksTracked)
-                        {
-                            failingChecks.Add(new FailingCheck(
-                                Name: run.Name ?? "(unnamed check)",
-                                Conclusion: conclusion,
-                                HtmlUrl: run.HtmlUrl));
-                        }
-                        break;
-                    case "neutral":
-                        neutral++;
-                        break;
-                    case "skipped" or "stale":
-                        skipped++;
-                        break;
-                    default:
-                        // Unknown / null conclusion on a completed run — count as neutral so it
-                        // does not drag the rollup down or up.
-                        neutral++;
-                        break;
-                }
-
-                if (run.CompletedAt is { } completedAt
-                    && (latestCompletedAt is null || completedAt > latestCompletedAt))
-                {
-                    latestCompletedAt = completedAt;
-                }
+            if (run.CompletedAt is { } completedAt
+                && (latestCompletedAt is null || completedAt > latestCompletedAt))
+            {
+                latestCompletedAt = completedAt;
             }
         }
 
@@ -252,13 +210,10 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                         break;
                     case "failure" or "error":
                         failure++;
-                        if (failingChecks.Count < MaxFailingChecksTracked)
-                        {
-                            failingChecks.Add(new FailingCheck(
-                                Name: contextStatus.Context ?? "(unnamed status)",
-                                Conclusion: state,
-                                HtmlUrl: contextStatus.TargetUrl));
-                        }
+                        failingChecks.Add(new FailingCheck(
+                            Name: contextStatus.Context ?? "(unnamed status)",
+                            Conclusion: state,
+                            HtmlUrl: contextStatus.TargetUrl));
                         break;
                     case "pending":
                         pending++;
@@ -278,12 +233,20 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
 
         var total = success + failure + pending + neutral + skipped;
 
+        // Mirrors GitHub's own check-suite conclusion: a suite with only neutral/skipped runs is
+        // considered passing, so a PR with all-neutral CI should still qualify as "success" here.
         var rolledUpState =
             total == 0 ? "none" :
             failure > 0 ? "failure" :
             pending > 0 ? "pending" :
-            success > 0 ? "success" :
+            success > 0 || neutral > 0 || skipped > 0 ? "success" :
             "none";
+
+        // Apply the failing-checks cap once globally so the merge of runs + statuses cannot
+        // double the intended limit.
+        var cappedFailing = failingChecks.Count <= MaxFailingChecksTracked
+            ? failingChecks
+            : failingChecks.GetRange(0, MaxFailingChecksTracked);
 
         return new ChecksStatus(
             State: rolledUpState,
@@ -294,7 +257,68 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             NeutralCount: neutral,
             SkippedCount: skipped,
             CompletedAt: latestCompletedAt,
-            FailingChecks: failingChecks);
+            FailingChecks: cappedFailing);
+    }
+
+    private async Task<IReadOnlyList<GitHubCheckRunDto>> TryGetCheckRunsAsync(
+        RepositoryName repositoryName,
+        string headSha,
+        CancellationToken cancellationToken)
+    {
+        // The check-runs response is a wrapper object ({ total_count, check_runs[] }) rather than a
+        // bare array, so we follow Link-header pagination manually instead of using
+        // SendPagedGitHubRequestAsync. Without this, PRs with > 100 check runs (matrix builds in
+        // monorepos) silently truncate and can produce a false "green" rollup.
+        var runs = new List<GitHubCheckRunDto>();
+        string? url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/commits/{Uri.EscapeDataString(headSha)}/check-runs?filter=latest&per_page=100";
+
+        try
+        {
+            while (url is not null)
+            {
+                using var response = await SendAuthorizedRequestAsync(url, cancellationToken);
+                var page = await ReadGitHubJsonAsync(
+                    response,
+                    GitHubJsonSerializerContext.Default.GitHubCheckRunsResponseDto,
+                    cancellationToken);
+
+                if (page.CheckRuns is { Length: > 0 } pageRuns)
+                {
+                    runs.AddRange(pageRuns);
+                }
+
+                url = GetNextPageUrl(response);
+            }
+        }
+        catch (GitHubApiException)
+        {
+            // Checks are enrichment-only. Any GitHub-side failure (404 for missing data, 403 for
+            // rate limits, 401 for an expired token, 5xx blips) must degrade gracefully to "no
+            // checks" instead of tearing down the entire PR list response.
+            return [];
+        }
+
+        return runs;
+    }
+
+    private async Task<GitHubCombinedStatusDto?> TryGetCombinedStatusAsync(
+        RepositoryName repositoryName,
+        string headSha,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await SendGitHubRequestAsync(
+                $"repos/{repositoryName.Owner}/{repositoryName.Name}/commits/{Uri.EscapeDataString(headSha)}/status",
+                GitHubJsonSerializerContext.Default.GitHubCombinedStatusDto,
+                cancellationToken);
+        }
+        catch (GitHubApiException)
+        {
+            // Same enrichment-only stance as TryGetCheckRunsAsync — never let a single PR's
+            // checks call break the whole list.
+            return null;
+        }
     }
 
     public async Task<ReviewStatus> GetReviewStatusAsync(
