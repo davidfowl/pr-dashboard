@@ -9,6 +9,38 @@ export function parseRepositories(value: string) {
   return [...new Set(repositories)].length > 0 ? [...new Set(repositories)] : defaultRepos;
 }
 
+const bucketHashPrefix = '#bucket/';
+
+export function bucketRouteId(label: string) {
+  return label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'bucket';
+}
+
+export function createBucketHash(bucketId: string) {
+  return `${bucketHashPrefix}${encodeURIComponent(bucketId)}`;
+}
+
+export function createBucketUrl(bucketId: string) {
+  return `${window.location.origin}${window.location.pathname}${createBucketHash(bucketId)}`;
+}
+
+export function replaceBucketHistory(bucketId: string) {
+  const hash = createBucketHash(bucketId);
+  if (window.location.hash !== hash) {
+    window.history.replaceState({ view: 'dashboard', bucketId }, '', hash);
+  }
+}
+
+export function parseBucketHash(hash: string) {
+  const match = /^#bucket\/([^/]+)$/.exec(hash);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    bucketId: decodeURIComponent(match[1]),
+  };
+}
+
 export function pushDetailHistory(repository: string, number: number) {
   const hash = `#pr/${encodeURIComponent(repository)}/${number}`;
   if (window.location.hash !== hash) {

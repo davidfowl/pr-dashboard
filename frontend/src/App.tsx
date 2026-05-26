@@ -26,7 +26,7 @@ import {
   createTimelineStory,
   createTriageModel,
 } from './utils/models';
-import { parseDetailHash, parseRepositories, pushDetailHistory } from './utils/routing';
+import { parseBucketHash, parseDetailHash, parseRepositories, pushDetailHistory, replaceBucketHistory } from './utils/routing';
 
 function App() {
   const [repo, setRepo] = useState(defaultRepoInput);
@@ -43,6 +43,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'dashboard' | 'details'>('dashboard');
   const [locationHash, setLocationHash] = useState(window.location.hash);
+  const [selectedBucketId, setSelectedBucketId] = useState(parseBucketHash(window.location.hash)?.bucketId ?? '');
 
   const selectedTitle = selectedPullRequest
     ? `#${selectedPullRequest.number} ${selectedPullRequest.title}`
@@ -87,9 +88,10 @@ function App() {
 
   useEffect(() => {
     function onPopState() {
-      setLocationHash(window.location.hash);
-      if (!window.location.hash.startsWith('#pr/')) {
-        showDashboard(false);
+      const hash = window.location.hash;
+      setLocationHash(hash);
+      if (!hash.startsWith('#pr/')) {
+        setViewMode('dashboard');
       }
     }
 
@@ -123,6 +125,19 @@ function App() {
       void loadTimeline(detail.repository, pullRequest, false);
     }
   }, [locationHash, pullRequests, selectedPullRequest]);
+
+  useEffect(() => {
+    const bucket = parseBucketHash(locationHash);
+    if (bucket) {
+      setSelectedBucketId(bucket.bucketId);
+      setViewMode('dashboard');
+      return;
+    }
+
+    if (!locationHash.startsWith('#pr/')) {
+      setSelectedBucketId('');
+    }
+  }, [locationHash]);
 
   async function loadAuthStatus() {
     try {
@@ -238,9 +253,20 @@ function App() {
   function showDashboard(updateHistory = true) {
     setViewMode('dashboard');
     if (updateHistory && window.location.hash) {
-      window.history.replaceState({ view: 'dashboard' }, '', window.location.pathname + window.location.search);
-      setLocationHash('');
+      if (selectedBucketId) {
+        replaceBucketHistory(selectedBucketId);
+        setLocationHash(window.location.hash);
+      } else {
+        window.history.replaceState({ view: 'dashboard' }, '', window.location.pathname + window.location.search);
+        setLocationHash('');
+      }
     }
+  }
+
+  function selectBucket(bucketId: string) {
+    setSelectedBucketId(bucketId);
+    replaceBucketHistory(bucketId);
+    setLocationHash(window.location.hash);
   }
 
   return (
@@ -273,10 +299,12 @@ function App() {
             developerPullRequestCounts={developerPullRequestCounts}
             attentionBuckets={attentionBuckets}
             forMeItems={forMeItems}
+            selectedBucketId={selectedBucketId}
             login={authStatus?.login}
             onRepoChange={setRepo}
             onStateChange={setState}
             onSubmit={onSubmit}
+            onSelectBucket={selectBucket}
             onSelectPullRequest={(repository, pullRequest) => void loadTimeline(repository, pullRequest)}
           />
         )}

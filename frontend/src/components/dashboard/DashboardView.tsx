@@ -18,10 +18,12 @@ type DashboardViewProps = {
   developerPullRequestCounts: DeveloperPullRequestCount[];
   attentionBuckets: AttentionBucket[];
   forMeItems: PickItem[];
+  selectedBucketId: string;
   login?: string;
   onRepoChange: (value: string) => void;
   onStateChange: (value: PullState) => void;
   onSubmit: FormEventHandler<HTMLFormElement>;
+  onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
 };
 
@@ -34,10 +36,12 @@ function DashboardView({
   developerPullRequestCounts,
   attentionBuckets,
   forMeItems,
+  selectedBucketId,
   login,
   onRepoChange,
   onStateChange,
   onSubmit,
+  onSelectBucket,
   onSelectPullRequest,
 }: DashboardViewProps) {
   return (
@@ -49,7 +53,9 @@ function DashboardView({
               counts={developerPullRequestCounts}
               attentionBuckets={attentionBuckets}
               forMeItems={forMeItems}
+              selectedBucketId={selectedBucketId}
               login={login}
+              onSelectBucket={onSelectBucket}
               onSelectPullRequest={onSelectPullRequest}
             />
           )}

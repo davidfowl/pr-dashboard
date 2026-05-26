@@ -10,7 +10,9 @@ type QueueOverviewProps = {
   counts: DeveloperPullRequestCount[];
   attentionBuckets: AttentionBucket[];
   forMeItems: PickItem[];
+  selectedBucketId: string;
   login?: string;
+  onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
 };
 
@@ -37,7 +39,9 @@ function QueueOverview({
   counts,
   attentionBuckets,
   forMeItems,
+  selectedBucketId,
   login,
+  onSelectBucket,
   onSelectPullRequest,
 }: QueueOverviewProps) {
   const [showAllCoreMembers, setShowAllCoreMembers] = useState(false);
@@ -160,7 +164,12 @@ function QueueOverview({
       </section>
 
       {reviewBuckets.length > 0 && (
-        <AttentionBoard buckets={reviewBuckets} onSelectPullRequest={onSelectPullRequest} />
+        <AttentionBoard
+          buckets={reviewBuckets}
+          selectedBucketId={selectedBucketId}
+          onSelectBucket={onSelectBucket}
+          onSelectPullRequest={onSelectPullRequest}
+        />
       )}
     </section>
   );
