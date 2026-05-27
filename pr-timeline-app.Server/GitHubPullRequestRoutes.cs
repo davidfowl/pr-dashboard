@@ -33,6 +33,36 @@ public static class GitHubPullRequestRoutes
             return Results.Ok(new PullRequestListResponse(repositoryName.ToString(), pulls));
         });
 
+        api.MapPost("pulls/checks", async (
+            [FromQuery] string? repo,
+            PullRequestChecksRequest request,
+            GitHubPullRequestService pullRequests,
+            CancellationToken cancellationToken) =>
+        {
+            if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
+                });
+            }
+
+            var requestedPullRequests = request.PullRequests ?? [];
+            if (requestedPullRequests.Any(pullRequest => pullRequest.Number <= 0))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["pullRequests"] = ["Pull request numbers must be greater than zero."]
+                });
+            }
+
+            var checks = await pullRequests.GetPullRequestChecksAsync(
+                repositoryName,
+                requestedPullRequests,
+                cancellationToken);
+            return Results.Ok(new PullRequestChecksResponse(repositoryName.ToString(), checks));
+        });
+
         api.MapGet("pulls/{number:int}/timeline", async (
             int number,
             [FromQuery] string? repo,

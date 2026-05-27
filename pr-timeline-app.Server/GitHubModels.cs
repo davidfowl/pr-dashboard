@@ -35,6 +35,14 @@ record AuthStatusResponse(bool Authenticated, bool Configured, bool CanLogin, st
 
 record PullRequestListResponse(string Repository, IReadOnlyList<PullRequestSummary> PullRequests);
 
+record PullRequestChecksRequest(IReadOnlyList<PullRequestChecksRequestItem>? PullRequests);
+
+record PullRequestChecksRequestItem(int Number, string? HeadSha);
+
+record PullRequestChecksResponse(string Repository, IReadOnlyList<PullRequestChecksSummary> PullRequests);
+
+record PullRequestChecksSummary(int Number, string HeadSha, ChecksStatus Checks);
+
 record PullRequestSummary(
     int Number,
     string Title,
@@ -87,7 +95,10 @@ record PullRequestSummary(
             null,
             pullRequest.Head?.Sha,
             ReviewStatus.Waiting,
-            ChecksStatus.None);
+            pullRequest.State?.Equals("open", StringComparison.OrdinalIgnoreCase) is true
+                && !string.IsNullOrEmpty(pullRequest.Head?.Sha)
+                    ? ChecksStatus.Unknown
+                    : ChecksStatus.None);
 }
 
 record LinkedIssueSummary(
@@ -144,6 +155,17 @@ record ChecksStatus(
     DateTimeOffset? CompletedAt,
     IReadOnlyList<FailingCheck> FailingChecks)
 {
+    public static ChecksStatus Unknown { get; } = new(
+        State: "unknown",
+        TotalCount: 0,
+        SuccessCount: 0,
+        FailureCount: 0,
+        PendingCount: 0,
+        NeutralCount: 0,
+        SkippedCount: 0,
+        CompletedAt: null,
+        FailingChecks: []);
+
     public static ChecksStatus None { get; } = new(
         State: "none",
         TotalCount: 0,

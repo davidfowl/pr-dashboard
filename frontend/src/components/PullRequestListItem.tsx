@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import type { CheckState, PullRequestSummary } from '../types';
 import { formatRelative } from '../utils/format';
 import PullRequestSignalPills from './PullRequestSignalPills';
@@ -6,10 +7,12 @@ import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
 type PullRequestListItemProps = {
   pullRequest: PullRequestSummary;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest?: (repository: string, pullRequest: PullRequestSummary) => void;
   signalProps?: Omit<PullRequestSignalPillsProps, 'pullRequest'>;
 };
 
 const checkBadgeGlyphs: Record<Exclude<CheckState, 'none'>, { glyph: string; label: string }> = {
+  unknown: { glyph: '…', label: 'CI loading' },
   success: { glyph: '✓', label: 'CI passed' },
   failure: { glyph: '✗', label: 'CI failing' },
   pending: { glyph: '●', label: 'CI running' },
@@ -18,8 +21,10 @@ const checkBadgeGlyphs: Record<Exclude<CheckState, 'none'>, { glyph: string; lab
 function PullRequestListItem({
   pullRequest,
   onSelectPullRequest,
+  onVisiblePullRequest,
   signalProps,
 }: PullRequestListItemProps) {
+  const itemRef = useRef<HTMLButtonElement | null>(null);
   const checksState = pullRequest.checks?.state;
   const badge = checksState && checksState !== 'none' ? checkBadgeGlyphs[checksState] : null;
   const badgeTitle = badge
@@ -28,8 +33,42 @@ function PullRequestListItem({
       : ''}`
     : undefined;
 
+  useEffect(() => {
+    if (
+      !onVisiblePullRequest
+      || pullRequest.state !== 'open'
+      || !pullRequest.headSha
+      || checksState !== 'unknown'
+    ) {
+      return;
+    }
+
+    const node = itemRef.current;
+    if (!node || !('IntersectionObserver' in window)) {
+      onVisiblePullRequest(pullRequest.repository, pullRequest);
+      return;
+    }
+
+    let reported = false;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (reported || !entries.some((entry) => entry.isIntersecting)) {
+          return;
+        }
+
+        reported = true;
+        onVisiblePullRequest(pullRequest.repository, pullRequest);
+        observer.disconnect();
+      },
+      { rootMargin: '160px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [checksState, onVisiblePullRequest, pullRequest]);
+
   return (
     <button
+      ref={itemRef}
       type="button"
       onClick={() => onSelectPullRequest(pullRequest.repository, pullRequest)}
     >

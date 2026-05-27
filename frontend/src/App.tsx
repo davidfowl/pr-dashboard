@@ -9,6 +9,8 @@ import { defaultRepoInput, defaultRepos } from './constants';
 import type {
   AuthStatus,
   MergeableState,
+  PullRequestChecksRequest,
+  PullRequestChecksResponse,
   PullRequestListResponse,
   PullRequestSummary,
   PullState,
@@ -28,6 +30,12 @@ import {
   createTriageModel,
 } from './utils/models';
 import { parseBucketHash, parseDetailHash, parseRepositories, pushDetailHistory, replaceBucketHistory } from './utils/routing';
+
+type VisibleChecksRequestItem = {
+  repository: string;
+  number: number;
+  headSha: string;
+};
 
 function App() {
   const [repo, setRepo] = useState(defaultRepoInput);
@@ -51,6 +59,11 @@ function App() {
   // still belong to the latest selection. A useEffect would lag behind a render and cause fast
   // cache hits to be incorrectly dropped.
   const currentSelectionRef = useRef<{ repository: string; number: number } | null>(null);
+  const checksRequestVersionRef = useRef(0);
+  const visibleChecksQueueRef = useRef(new Map<string, VisibleChecksRequestItem>());
+  const pendingVisibleChecksRef = useRef(new Set<string>());
+  const visibleChecksTimerRef = useRef<number | null>(null);
+  const visibleChecksAbortControllerRef = useRef<AbortController | null>(null);
 
   const selectedTitle = selectedPullRequest
     ? `#${selectedPullRequest.number} ${selectedPullRequest.title}`
@@ -173,6 +186,7 @@ function App() {
 
   async function logoutGitHub() {
     setError(null);
+    cancelVisibleChecksRequests();
 
     try {
       const response = await fetch('/api/github/logout', {
@@ -197,6 +211,7 @@ function App() {
   async function loadPullRequests(repositoryInput: string, pullState: PullState) {
     setPullsLoading(true);
     setError(null);
+    beginVisibleChecksRequestScope();
     currentSelectionRef.current = null;
     setSelectedPullRequest(null);
     setTimelineItems([]);
@@ -230,6 +245,137 @@ function App() {
       setPullRequests([]);
     } finally {
       setPullsLoading(false);
+    }
+  }
+
+  function beginVisibleChecksRequestScope() {
+    cancelVisibleChecksRequests();
+    visibleChecksAbortControllerRef.current = new AbortController();
+  }
+
+  function cancelVisibleChecksRequests() {
+    checksRequestVersionRef.current += 1;
+    visibleChecksQueueRef.current.clear();
+    pendingVisibleChecksRef.current.clear();
+    if (visibleChecksTimerRef.current !== null) {
+      window.clearTimeout(visibleChecksTimerRef.current);
+      visibleChecksTimerRef.current = null;
+    }
+
+    visibleChecksAbortControllerRef.current?.abort();
+    visibleChecksAbortControllerRef.current = null;
+  }
+
+  function requestVisibleChecks(repository: string, pullRequest: PullRequestSummary) {
+    if (
+      pullRequest.state !== 'open'
+      || !pullRequest.headSha
+      || pullRequest.checks?.state !== 'unknown'
+    ) {
+      return;
+    }
+
+    const key = checksRequestKey(repository, pullRequest.number, pullRequest.headSha);
+    if (pendingVisibleChecksRef.current.has(key) || visibleChecksQueueRef.current.has(key)) {
+      return;
+    }
+
+    pendingVisibleChecksRef.current.add(key);
+    visibleChecksQueueRef.current.set(key, {
+      repository,
+      number: pullRequest.number,
+      headSha: pullRequest.headSha,
+    });
+
+    if (visibleChecksTimerRef.current === null) {
+      const requestVersion = checksRequestVersionRef.current;
+      visibleChecksTimerRef.current = window.setTimeout(() => {
+        void flushVisibleChecksQueue(requestVersion);
+      }, 50);
+    }
+  }
+
+  async function flushVisibleChecksQueue(requestVersion: number) {
+    visibleChecksTimerRef.current = null;
+    const queuedItems = [...visibleChecksQueueRef.current.values()];
+    visibleChecksQueueRef.current.clear();
+    if (queuedItems.length === 0 || requestVersion !== checksRequestVersionRef.current) {
+      return;
+    }
+
+    const abortController = visibleChecksAbortControllerRef.current ?? new AbortController();
+    visibleChecksAbortControllerRef.current = abortController;
+    const itemsByRepository = queuedItems.reduce((groups, item) => {
+      const repositoryItems = groups.get(item.repository) ?? [];
+      repositoryItems.push(item);
+      groups.set(item.repository, repositoryItems);
+      return groups;
+    }, new Map<string, VisibleChecksRequestItem[]>());
+    await Promise.all([...itemsByRepository].map(([repository, items]) =>
+      loadVisibleChecks(repository, items, requestVersion, abortController.signal)));
+  }
+
+  async function loadVisibleChecks(
+    repository: string,
+    items: VisibleChecksRequestItem[],
+    requestVersion: number,
+    signal: AbortSignal,
+  ) {
+    const requestedKeys = items.map((item) => checksRequestKey(item.repository, item.number, item.headSha));
+    try {
+      const query = new URLSearchParams({ repo: repository });
+      const body: PullRequestChecksRequest = {
+        pullRequests: items.map((item) => ({
+          number: item.number,
+          headSha: item.headSha,
+        })),
+      };
+      const response = await fetch(`/api/github/pulls/checks?${query}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal,
+      });
+      const data = await readJson<PullRequestChecksResponse>(response);
+      if (signal.aborted || requestVersion !== checksRequestVersionRef.current) {
+        return;
+      }
+
+      const checksByKey = new Map(
+        data.pullRequests.map((pullRequest) => [
+          checksRequestKey(data.repository, pullRequest.number, pullRequest.headSha),
+          pullRequest.checks,
+        ]),
+      );
+
+      setPullRequests((current) =>
+        current.map((pullRequest) => {
+          const headSha = pullRequest.headSha;
+          if (!headSha) {
+            return pullRequest;
+          }
+
+          const checks = checksByKey.get(checksRequestKey(pullRequest.repository, pullRequest.number, headSha));
+          return checks ? { ...pullRequest, checks } : pullRequest;
+        }),
+      );
+      setSelectedPullRequest((current) => {
+        const headSha = current?.headSha;
+        if (!current || !headSha) {
+          return current;
+        }
+
+        const checks = checksByKey.get(checksRequestKey(current.repository, current.number, headSha));
+        return checks ? { ...current, checks } : current;
+      });
+    } catch (err) {
+      if (!isAbortError(err)) {
+        console.warn('Unable to load visible pull request checks.', err);
+      }
+    } finally {
+      for (const key of requestedKeys) {
+        pendingVisibleChecksRef.current.delete(key);
+      }
     }
   }
 
@@ -353,6 +499,7 @@ function App() {
             onSubmit={onSubmit}
             onSelectBucket={selectBucket}
             onSelectPullRequest={(repository, pullRequest) => void loadTimeline(repository, pullRequest)}
+            onVisiblePullRequest={requestVisibleChecks}
           />
         )}
 
@@ -375,6 +522,14 @@ function App() {
       <AppInfo />
     </div>
   );
+}
+
+function checksRequestKey(repository: string, number: number, headSha: string) {
+  return `${repository.toLowerCase()}#${number}:${headSha}`;
+}
+
+function isAbortError(err: unknown) {
+  return err instanceof DOMException && err.name === 'AbortError';
 }
 
 export default App;

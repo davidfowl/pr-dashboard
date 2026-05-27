@@ -6,6 +6,12 @@ sealed class GitHubPullRequestService(GitHubClient gitHub)
         CancellationToken cancellationToken) =>
         gitHub.GetPullRequestsAsync(repositoryName, state, cancellationToken);
 
+    public Task<IReadOnlyList<PullRequestChecksSummary>> GetPullRequestChecksAsync(
+        RepositoryName repositoryName,
+        IReadOnlyList<PullRequestChecksRequestItem> pullRequests,
+        CancellationToken cancellationToken) =>
+        gitHub.GetPullRequestChecksAsync(repositoryName, pullRequests, cancellationToken);
+
     public async Task<TimelineResponse> GetTimelineAsync(
         RepositoryName repositoryName,
         int number,

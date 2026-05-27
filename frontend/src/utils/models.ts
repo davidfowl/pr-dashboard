@@ -404,7 +404,7 @@ function isChecksFailing(pullRequest: PullRequestSummary) {
 }
 
 function isChecksPending(pullRequest: PullRequestSummary) {
-  return pullRequest.checks?.state === 'pending';
+  return pullRequest.checks?.state === 'pending' || pullRequest.checks?.state === 'unknown';
 }
 
 function approvalAgeAt(pullRequest: PullRequestSummary) {
@@ -556,7 +556,7 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
 
 function checksAttentionSignal(pullRequest: PullRequestSummary): AttentionSignal | null {
   const checks = pullRequest.checks;
-  if (!checks || checks.state === 'none') {
+  if (!checks || checks.state === 'none' || checks.state === 'unknown') {
     return null;
   }
 

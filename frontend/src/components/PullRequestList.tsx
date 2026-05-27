@@ -13,6 +13,7 @@ export type PullRequestListEntry = {
 type PullRequestListProps = {
   entries: PullRequestListEntry[];
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest?: (repository: string, pullRequest: PullRequestSummary) => void;
   emptyState?: string;
   limit?: number;
 };
@@ -33,6 +34,7 @@ const bucketRanks = new Map([
 function PullRequestList({
   entries,
   onSelectPullRequest,
+  onVisiblePullRequest,
   emptyState,
   limit,
 }: PullRequestListProps) {
@@ -51,6 +53,7 @@ function PullRequestList({
           key={`${entry.bucketLabel}-${entry.pullRequest.repository}-${entry.pullRequest.number}`}
           pullRequest={entry.pullRequest}
           onSelectPullRequest={onSelectPullRequest}
+          onVisiblePullRequest={onVisiblePullRequest}
           signalProps={entry.signalProps}
         />
       ))}

@@ -25,6 +25,7 @@ type DashboardViewProps = {
   onSubmit: FormEventHandler<HTMLFormElement>;
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
 };
 
 function DashboardView({
@@ -43,6 +44,7 @@ function DashboardView({
   onSubmit,
   onSelectBucket,
   onSelectPullRequest,
+  onVisiblePullRequest,
 }: DashboardViewProps) {
   return (
     <>
@@ -57,6 +59,7 @@ function DashboardView({
               login={login}
               onSelectBucket={onSelectBucket}
               onSelectPullRequest={onSelectPullRequest}
+              onVisiblePullRequest={onVisiblePullRequest}
             />
           )}
         </section>

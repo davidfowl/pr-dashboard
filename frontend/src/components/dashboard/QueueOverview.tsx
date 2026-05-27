@@ -14,6 +14,7 @@ type QueueOverviewProps = {
   login?: string;
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
 };
 
 type FocusItem = AttentionItem & {
@@ -44,6 +45,7 @@ function QueueOverview({
   login,
   onSelectBucket,
   onSelectPullRequest,
+  onVisiblePullRequest,
 }: QueueOverviewProps) {
   const [showAllCoreMembers, setShowAllCoreMembers] = useState(false);
 
@@ -152,6 +154,7 @@ function QueueOverview({
           limit={pullRequestListLimit}
           emptyState="No recent non-automation PRs need attention in the current results."
           onSelectPullRequest={onSelectPullRequest}
+          onVisiblePullRequest={onVisiblePullRequest}
         />
       </section>
 
@@ -170,6 +173,7 @@ function QueueOverview({
           selectedBucketId={selectedBucketId}
           onSelectBucket={onSelectBucket}
           onSelectPullRequest={onSelectPullRequest}
+          onVisiblePullRequest={onVisiblePullRequest}
         />
       )}
     </section>

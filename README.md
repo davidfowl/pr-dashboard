@@ -61,6 +61,7 @@ The app requests the `repo` and `read:org` scopes.
 - `GET /api/github/login?returnUrl=/...`
 - `POST /api/github/logout`
 - `GET /api/github/pulls?repo=owner/repo&state=open|closed|all`
+- `POST /api/github/pulls/checks?repo=owner/repo`
 - `GET /api/github/pulls/{number}/timeline?repo=owner/repo`
 
 If `repo` is omitted, the backend defaults to `microsoft/aspire`.
@@ -70,7 +71,7 @@ Each pull request in `/api/github/pulls` and the `/timeline` response carries a 
 ```jsonc
 {
   "checks": {
-    "state": "success | failure | pending | none",
+    "state": "unknown | success | failure | pending | none",
     "totalCount": 0,
     "successCount": 0,
     "failureCount": 0,
@@ -85,7 +86,7 @@ Each pull request in `/api/github/pulls` and the `/timeline` response carries a 
 }
 ```
 
-Checks are fetched per PR based on the PR's own state — they are included for open PRs (including in the `state=all` view) and skipped for closed/merged PRs. The `/timeline` response also includes `mergeableState` (`clean | dirty | blocked | behind | unstable | unknown`) so the detail view can surface merge-conflict / branch-protection blockers.
+PR list responses mark open PR checks as `unknown` initially so the dashboard can render without waiting for every PR's CI. The browser asks `POST /api/github/pulls/checks` only for open PRs that become visible, and the server enriches those requested head SHAs with bounded concurrency. Closed/merged PRs are skipped. The `/timeline` response still includes checks for the selected PR plus `mergeableState` (`clean | dirty | blocked | behind | unstable | unknown`) so the detail view can surface merge-conflict / branch-protection blockers.
 
 ## Build and lint
 

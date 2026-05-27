@@ -11,6 +11,7 @@ type AttentionBoardProps = {
   selectedBucketId: string;
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
 };
 
 type ReviewBucketTile = DrilldownTile & {
@@ -31,6 +32,7 @@ function AttentionBoard({
   selectedBucketId,
   onSelectBucket,
   onSelectPullRequest,
+  onVisiblePullRequest,
 }: AttentionBoardProps) {
   const [copyStatus, setCopyStatus] = useState<CopyStatus | null>(null);
   const bucketTiles: ReviewBucketTile[] = buckets.map((bucket) => ({
@@ -136,6 +138,7 @@ function AttentionBoard({
                 }))}
                 limit={bucketItemLimit}
                 onSelectPullRequest={onSelectPullRequest}
+                onVisiblePullRequest={onVisiblePullRequest}
               />
             </section>
           );

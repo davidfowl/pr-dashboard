@@ -59,7 +59,7 @@ export type ReviewStatus = {
   lastReviewedAt?: string | null;
 };
 
-export type CheckState = 'success' | 'failure' | 'pending' | 'none';
+export type CheckState = 'unknown' | 'success' | 'failure' | 'pending' | 'none';
 
 export type FailingCheck = {
   name: string;
@@ -82,6 +82,22 @@ export type ChecksStatus = {
 export type PullRequestListResponse = {
   repository: string;
   pullRequests: Omit<PullRequestSummary, 'repository'>[];
+};
+
+export type PullRequestChecksRequest = {
+  pullRequests: {
+    number: number;
+    headSha: string;
+  }[];
+};
+
+export type PullRequestChecksResponse = {
+  repository: string;
+  pullRequests: {
+    number: number;
+    headSha: string;
+    checks: ChecksStatus;
+  }[];
 };
 
 export type TimelineItem = {
