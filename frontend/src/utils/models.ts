@@ -7,6 +7,7 @@ import type {
   AttentionSignal,
   DeveloperPullRequestCount,
   DeveloperStats,
+  MergeableState,
   PickItem,
   PullRequestSummary,
   SignalMilestone,
@@ -707,7 +708,7 @@ export function createTriageModel(
   pullRequest: PullRequestSummary,
   stats: TimelineStats,
   items: TimelineItem[],
-  mergeableState?: string | null,
+  mergeableState?: MergeableState | null,
 ): TriageModel {
   const action = actionSignal(pullRequest);
   const signals = createAttentionSignals({ pullRequest, reason: '' })
@@ -748,7 +749,7 @@ function triageWhy(
   pullRequest: PullRequestSummary,
   stats: TimelineStats,
   items: TimelineItem[],
-  mergeableState?: string | null,
+  mergeableState?: MergeableState | null,
 ) {
   if (pullRequest.draft) {
     return `Draft for ${formatAge(pullRequest.createdAt)}; keep it off the active review queue.`;
@@ -795,7 +796,7 @@ function triageWhy(
     : `No clear human review signal yet.`;
 }
 
-function waitingOn(pullRequest: PullRequestSummary, mergeableState?: string | null) {
+function waitingOn(pullRequest: PullRequestSummary, mergeableState?: MergeableState | null) {
   if (mergeableState === 'dirty') {
     return `${pullRequest.author} (rebase)`;
   }

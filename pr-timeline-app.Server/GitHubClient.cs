@@ -152,16 +152,28 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         var cacheKey = $"checks:{authCacheKey}:{repositoryName}:{headSha}";
         return await cache.GetOrCreateAsync(cacheKey, async entry =>
         {
-            entry.AbsoluteExpirationRelativeToNow = CacheDuration;
-
             var checkRunsTask = TryGetCheckRunsAsync(repositoryName, headSha, cancellationToken);
             var combinedStatusTask = TryGetCombinedStatusesAsync(repositoryName, headSha, cancellationToken);
             await Task.WhenAll(checkRunsTask, combinedStatusTask);
 
-            return MergeChecks(await checkRunsTask, await combinedStatusTask);
+            var rollup = MergeChecks(await checkRunsTask, await combinedStatusTask);
+
+            // Terminal states are cached for the full window; pending/failure get a much shorter
+            // TTL so the dashboard reflects CI transitions promptly without waiting for the head
+            // SHA to change.
+            entry.AbsoluteExpirationRelativeToNow = rollup.State switch
+            {
+                "pending" => PendingChecksCacheDuration,
+                "failure" => FailingChecksCacheDuration,
+                _ => CacheDuration,
+            };
+
+            return rollup;
         }) ?? ChecksStatus.None;
     }
 
+    private static readonly TimeSpan PendingChecksCacheDuration = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan FailingChecksCacheDuration = TimeSpan.FromSeconds(20);
     private const int MaxFailingChecksTracked = 5;
 
     private static ChecksStatus MergeChecks(IReadOnlyList<GitHubCheckRunDto> checkRuns, IReadOnlyList<GitHubStatusDto> statuses)
@@ -172,7 +184,9 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         var neutral = 0;
         var skipped = 0;
         DateTimeOffset? latestCompletedAt = null;
-        var failingChecks = new List<FailingCheck>();
+        // Cap the failing list while iterating so a matrix build with thousands of failing
+        // contexts cannot cause unbounded allocation just to be trimmed at the end.
+        var failingChecks = new List<FailingCheck>(MaxFailingChecksTracked);
 
         foreach (var run in checkRuns)
         {
@@ -194,10 +208,13 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                     break;
                 case "failure" or "timed_out" or "action_required" or "cancelled" or "startup_failure":
                     failure++;
-                    failingChecks.Add(new FailingCheck(
-                        Name: run.Name ?? "(unnamed check)",
-                        Conclusion: conclusion,
-                        HtmlUrl: run.HtmlUrl));
+                    if (failingChecks.Count < MaxFailingChecksTracked)
+                    {
+                        failingChecks.Add(new FailingCheck(
+                            Name: run.Name ?? "(unnamed check)",
+                            Conclusion: conclusion,
+                            HtmlUrl: run.HtmlUrl));
+                    }
                     break;
                 case "neutral":
                     neutral++;
@@ -231,10 +248,13 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                         break;
                     case "failure" or "error":
                         failure++;
-                        failingChecks.Add(new FailingCheck(
-                            Name: contextStatus.Context ?? "(unnamed status)",
-                            Conclusion: state,
-                            HtmlUrl: contextStatus.TargetUrl));
+                        if (failingChecks.Count < MaxFailingChecksTracked)
+                        {
+                            failingChecks.Add(new FailingCheck(
+                                Name: contextStatus.Context ?? "(unnamed status)",
+                                Conclusion: state,
+                                HtmlUrl: contextStatus.TargetUrl));
+                        }
                         break;
                     case "pending":
                         pending++;
@@ -263,12 +283,6 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             success > 0 || neutral > 0 || skipped > 0 ? "success" :
             "none";
 
-        // Apply the failing-checks cap once globally so the merge of runs + statuses cannot
-        // double the intended limit.
-        var cappedFailing = failingChecks.Count <= MaxFailingChecksTracked
-            ? failingChecks
-            : failingChecks.GetRange(0, MaxFailingChecksTracked);
-
         return new ChecksStatus(
             State: rolledUpState,
             TotalCount: total,
@@ -278,7 +292,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             NeutralCount: neutral,
             SkippedCount: skipped,
             CompletedAt: latestCompletedAt,
-            FailingChecks: cappedFailing);
+            FailingChecks: failingChecks);
     }
 
     private async Task<IReadOnlyList<GitHubCheckRunDto>> TryGetCheckRunsAsync(
@@ -311,11 +325,12 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 url = GetNextPageUrl(response);
             }
         }
-        catch (GitHubApiException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Checks are enrichment-only. Any GitHub-side failure (404 for missing data, 403 for
-            // rate limits, 401 for an expired token, 5xx blips) must degrade gracefully to "no
-            // checks" instead of tearing down the entire PR list response.
+            // Checks are enrichment-only. Any failure (GitHub API errors like 404/403/5xx,
+            // JsonException from unexpected payload shapes, socket errors, etc.) must degrade
+            // gracefully to "no checks" instead of tearing down the entire PR list response.
+            // Cancellation is intentionally re-thrown so the caller can honor it.
             return [];
         }
 
@@ -352,10 +367,10 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 url = GetNextPageUrl(response);
             }
         }
-        catch (GitHubApiException)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Same enrichment-only stance as TryGetCheckRunsAsync — never let a single PR's
-            // checks call break the whole list.
+            // checks call break the whole list. Cancellation is intentionally re-thrown.
             return [];
         }
 

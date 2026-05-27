@@ -124,12 +124,22 @@ export type DeveloperStats = {
   lastActivityAt: string;
 };
 
+export type MergeableState =
+  | 'clean'
+  | 'dirty'
+  | 'blocked'
+  | 'behind'
+  | 'unstable'
+  | 'has_hooks'
+  | 'unknown'
+  | 'draft';
+
 export type TimelineResponse = {
   repository: string;
   number: number;
   stats: TimelineStats;
   checks: ChecksStatus;
-  mergeableState?: string | null;
+  mergeableState?: MergeableState | null;
   items: TimelineItem[];
 };
 

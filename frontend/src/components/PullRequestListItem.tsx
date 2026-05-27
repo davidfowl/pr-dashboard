@@ -38,9 +38,10 @@ function PullRequestListItem({
           <span
             className={`attention-pr-check-badge ${checksState}`}
             title={badgeTitle}
-            aria-label={badge.label}
+            aria-label={badgeTitle ?? badge.label}
+            role="img"
           >
-            {badge.glyph}
+            <span aria-hidden="true">{badge.glyph}</span>
           </span>
         )}
         #{pullRequest.number}

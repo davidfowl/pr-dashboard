@@ -1,9 +1,9 @@
-import type { ChecksStatus } from '../../types';
+import type { ChecksStatus, MergeableState } from '../../types';
 import { formatCount, formatRelative } from '../../utils/format';
 
 type ChecksPanelProps = {
   checks: ChecksStatus;
-  mergeableState?: string | null;
+  mergeableState?: MergeableState | null;
 };
 
 function ChecksPanel({ checks, mergeableState }: ChecksPanelProps) {

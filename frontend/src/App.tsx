@@ -8,6 +8,7 @@ import DetailView from './components/detail/DetailView';
 import { defaultRepoInput, defaultRepos } from './constants';
 import type {
   AuthStatus,
+  MergeableState,
   PullRequestListResponse,
   PullRequestSummary,
   PullState,
@@ -37,7 +38,7 @@ function App() {
   const [selectedPullRequest, setSelectedPullRequest] = useState<PullRequestSummary | null>(null);
   const [timelineItems, setTimelineItems] = useState<TimelineItem[]>([]);
   const [timelineStats, setTimelineStats] = useState<TimelineStats | null>(null);
-  const [mergeableState, setMergeableState] = useState<string | null>(null);
+  const [mergeableState, setMergeableState] = useState<MergeableState | null>(null);
   const [pullsLoading, setPullsLoading] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);

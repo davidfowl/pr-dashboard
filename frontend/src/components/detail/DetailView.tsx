@@ -1,5 +1,6 @@
 import type {
   ActivityModel,
+  MergeableState,
   PullRequestSummary,
   TimelineItem,
   TimelineStoryEntry,
@@ -21,7 +22,7 @@ type DetailViewProps = {
   triageModel: TriageModel | null;
   activityModel: ActivityModel | null;
   groupedTimeline: Record<string, TimelineStoryEntry[]>;
-  mergeableState: string | null;
+  mergeableState: MergeableState | null;
   onBack: () => void;
 };
 
