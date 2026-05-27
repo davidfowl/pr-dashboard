@@ -654,7 +654,104 @@ public sealed class GitHubClientTests
         Assert.Equal("none", closed.Checks.State);
     }
 
+    [Fact]
+    public async Task PullListLimitsConcurrentChecksFetches()
+    {
+        const int pullRequestCount = 6;
+        var activeChecksByHead = new Dictionary<string, int>(StringComparer.Ordinal);
+        var activeGate = new object();
+        var maxActiveHeads = 0;
+        var pullListJson = $$"""
+            [
+            {{string.Join(
+                ",\n",
+                Enumerable.Range(1, pullRequestCount).Select(number => $$"""
+                  {
+                    "number": {{number}},
+                    "title": "Feature {{number}}",
+                    "state": "open",
+                    "body": null,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/{{number}}",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": [],
+                    "head": { "sha": "sha{{number}}", "ref": "feature-{{number}}" }
+                  }
+                """))}}
+            ]
+            """;
+
+        var client = CreateClient(async (path, cancellationToken) =>
+        {
+            if (TryGetChecksHeadSha(path, out var headSha))
+            {
+                lock (activeGate)
+                {
+                    activeChecksByHead.TryGetValue(headSha, out var activeRequestsForHead);
+                    activeChecksByHead[headSha] = activeRequestsForHead + 1;
+                    maxActiveHeads = Math.Max(maxActiveHeads, activeChecksByHead.Count);
+                }
+
+                try
+                {
+                    await Task.Delay(50, cancellationToken);
+                    return path.Contains("/check-runs?", StringComparison.Ordinal)
+                        ? Json("""{ "total_count": 0, "check_runs": [] }""")
+                        : Json("""{ "state": "success", "total_count": 0, "statuses": [] }""");
+                }
+                finally
+                {
+                    lock (activeGate)
+                    {
+                        var activeRequestsForHead = activeChecksByHead[headSha] - 1;
+                        if (activeRequestsForHead == 0)
+                        {
+                            activeChecksByHead.Remove(headSha);
+                        }
+                        else
+                        {
+                            activeChecksByHead[headSha] = activeRequestsForHead;
+                        }
+                    }
+                }
+            }
+
+            if (path == "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100")
+            {
+                return Json(pullListJson);
+            }
+
+            if (path.StartsWith("repos/example/repo/pulls/", StringComparison.Ordinal)
+                && path.EndsWith("/reviews?per_page=100", StringComparison.Ordinal))
+            {
+                return Json("[]");
+            }
+
+            if (TryGetPullRequestNumber(path, out var number))
+            {
+                return Json(PullRequestDetailsJson(number));
+            }
+
+            throw new InvalidOperationException($"Unexpected GitHub request: {path}");
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(pullRequestCount, pullRequests.Count);
+        Assert.True(maxActiveHeads <= 4, $"Expected at most 4 concurrent checks fetches but saw {maxActiveHeads}.");
+    }
+
     private static GitHubClient CreateClient(Func<string, HttpResponseMessage> route)
+        => CreateClient((path, _) => Task.FromResult(route(path)));
+
+    private static GitHubClient CreateClient(Func<string, CancellationToken, Task<HttpResponseMessage>> route)
     {
         var httpClient = new HttpClient(new StubGitHubHandler(route))
         {
@@ -665,6 +762,46 @@ public sealed class GitHubClientTests
             new TestHostEnvironment());
 
         return new GitHubClient(httpClient, tokenProvider, new MemoryCache(new MemoryCacheOptions()), new TestHostEnvironment());
+    }
+
+    private static bool TryGetChecksHeadSha(string path, out string headSha)
+    {
+        headSha = "";
+        const string marker = "/commits/";
+        var markerIndex = path.IndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex < 0)
+        {
+            return false;
+        }
+
+        var afterMarker = path[(markerIndex + marker.Length)..];
+        var slashIndex = afterMarker.IndexOf('/');
+        if (slashIndex <= 0)
+        {
+            return false;
+        }
+
+        var endpoint = afterMarker[(slashIndex + 1)..];
+        if (!endpoint.StartsWith("check-runs?", StringComparison.Ordinal)
+            && !endpoint.StartsWith("status?", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        headSha = afterMarker[..slashIndex];
+        return true;
+    }
+
+    private static bool TryGetPullRequestNumber(string path, out int number)
+    {
+        const string prefix = "repos/example/repo/pulls/";
+        if (!path.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            number = 0;
+            return false;
+        }
+
+        return int.TryParse(path[prefix.Length..], out number);
     }
 
     private static DefaultHttpContext CreateHttpContextWithGitHubToken()
@@ -724,13 +861,13 @@ public sealed class GitHubClientTests
         }
         """;
 
-    private sealed class StubGitHubHandler(Func<string, HttpResponseMessage> route) : HttpMessageHandler
+    private sealed class StubGitHubHandler(Func<string, CancellationToken, Task<HttpResponseMessage>> route) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
             Assert.Equal("unit-test-token", request.Headers.Authorization?.Parameter);
-            return Task.FromResult(route(request.RequestUri?.PathAndQuery.TrimStart('/') ?? ""));
+            return await route(request.RequestUri?.PathAndQuery.TrimStart('/') ?? "", cancellationToken);
         }
     }
 

@@ -11,6 +11,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     private const int PullRequestPageSize = 100;
     private const int MaxLinkedIssuesPerPullRequest = 10;
     private const int MaxGitHubRedirects = 3;
+    private const int MaxConcurrentChecksFetches = 4;
 
     public async Task<string?> GetCurrentUserLoginAsync(CancellationToken cancellationToken)
     {
@@ -80,22 +81,10 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             await Task.WhenAll(detailTasks.Values);
             await Task.WhenAll(lastCommitTasks.Values);
 
-            // Checks are fetched per head SHA from the list payload. Skip per PR when the PR is
-            // closed/merged since CI signals are only actionable on open PRs (this still fetches
-            // for open PRs in the "all" view).
-            var checksTasks = pullRequests.ToDictionary(
-                pullRequest => pullRequest.Number,
-                pullRequest =>
-                    pullRequest.State.Equals("open", StringComparison.OrdinalIgnoreCase)
-                    && !string.IsNullOrEmpty(pullRequest.HeadSha)
-                        ? GetChecksStatusAsync(repositoryName, pullRequest.HeadSha, cancellationToken)
-                        : Task.FromResult(ChecksStatus.None));
-
-            var checksByPullRequest = new Dictionary<int, ChecksStatus>(checksTasks.Count);
-            foreach (var (number, task) in checksTasks)
-            {
-                checksByPullRequest[number] = await task;
-            }
+            var checksByPullRequest = await GetChecksByPullRequestAsync(
+                pullRequests,
+                repositoryName,
+                cancellationToken);
 
             var detailsByPullRequest = new Dictionary<int, PullRequestDetails?>(detailTasks.Count);
             foreach (var (number, task) in detailTasks)
@@ -170,6 +159,40 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
 
             return rollup;
         }) ?? ChecksStatus.None;
+    }
+
+    private async Task<Dictionary<int, ChecksStatus>> GetChecksByPullRequestAsync(
+        IReadOnlyList<PullRequestSummary> pullRequests,
+        RepositoryName repositoryName,
+        CancellationToken cancellationToken)
+    {
+        var checksByPullRequest = pullRequests.ToDictionary(
+            pullRequest => pullRequest.Number,
+            _ => ChecksStatus.None);
+
+        // Fetch checks per head SHA from the list payload, but batch open PRs so large repos do not
+        // burst check-runs/status API calls for every PR at once.
+        var pullRequestsWithChecks = pullRequests
+            .Where(pullRequest =>
+                pullRequest.State.Equals("open", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrEmpty(pullRequest.HeadSha))
+            .ToArray();
+
+        foreach (var batch in pullRequestsWithChecks.Chunk(MaxConcurrentChecksFetches))
+        {
+            var batchResults = await Task.WhenAll(batch.Select(async pullRequest =>
+                (pullRequest.Number, Checks: await GetChecksStatusAsync(
+                    repositoryName,
+                    pullRequest.HeadSha!,
+                    cancellationToken))));
+
+            foreach (var (number, checks) in batchResults)
+            {
+                checksByPullRequest[number] = checks;
+            }
+        }
+
+        return checksByPullRequest;
     }
 
     private static readonly TimeSpan PendingChecksCacheDuration = TimeSpan.FromSeconds(10);
