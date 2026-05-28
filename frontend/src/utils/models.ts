@@ -1,4 +1,11 @@
-import { coreTeamMembers, currentRelease, dayMs, hourMs } from '../constants';
+import {
+  coreTeamMembers,
+  currentRelease,
+  dayMs,
+  docsFromCodeLabel,
+  docsFromCodeRepository,
+  hourMs,
+} from '../constants';
 import type {
   ActivityMarker,
   ActivityModel,
@@ -508,7 +515,7 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
         ? `Pushed ${formatAge(pullRequest.lastCommitAt)}`
         : 'Pushed after review';
     case 'Docs':
-      return 'docs-from-code';
+      return 'generated docs';
     case 'Community Toolkit':
       return 'CommunityToolkit/Aspire';
     case 'Bots / automation':
@@ -556,9 +563,9 @@ function needsReReview(pullRequest: PullRequestSummary) {
     && new Date(pullRequest.lastCommitAt).getTime() > new Date(pullRequest.review.lastReviewedAt).getTime();
 }
 
-function isGeneratedDocsPullRequest(pullRequest: PullRequestSummary) {
-  return pullRequest.repository.toLowerCase() === 'microsoft/aspire.dev'
-    && pullRequest.labels.some((label) => label.toLowerCase() === 'docs-from-code');
+export function isGeneratedDocsPullRequest(pullRequest: PullRequestSummary) {
+  return pullRequest.repository.toLowerCase() === docsFromCodeRepository
+    && pullRequest.labels.some((label) => label.toLowerCase() === docsFromCodeLabel);
 }
 
 function isCommunityToolkitPullRequest(pullRequest: PullRequestSummary) {

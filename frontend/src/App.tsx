@@ -9,7 +9,10 @@ import {
   currentRelease,
   defaultRepoInput,
   defaultRepos,
+  defaultShipWeekRepoInput,
+  defaultShipWeekRepos,
   defaultShipWeekReleaseBranch,
+  docsFromCodeRepository,
 } from './constants';
 import type {
   AuthStatus,
@@ -35,6 +38,7 @@ import {
   createForMeItems,
   createTimelineStory,
   createTriageModel,
+  isGeneratedDocsPullRequest,
 } from './utils/models';
 import {
   parseBucketHash,
@@ -59,7 +63,7 @@ function App() {
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => parseDashboardMode(window.location.search));
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
-  const [shipWeekRepo, setShipWeekRepo] = useState(defaultRepos[0]);
+  const [shipWeekRepo, setShipWeekRepo] = useState(defaultShipWeekRepoInput);
   const [shipWeekMilestone, setShipWeekMilestone] = useState(currentRelease);
   const [shipWeekReleaseBranch, setShipWeekReleaseBranch] = useState(defaultShipWeekReleaseBranch);
   const [shipWeek, setShipWeek] = useState<ShipWeekResponse | null>(null);
@@ -125,7 +129,7 @@ function App() {
   useEffect(() => {
     void loadAuthStatus();
     if (dashboardMode === 'ship') {
-      void loadShipWeek(defaultRepos[0], currentRelease, defaultShipWeekReleaseBranch);
+      void loadShipWeek(defaultShipWeekRepoInput, currentRelease, defaultShipWeekReleaseBranch);
     } else {
       void loadPullRequests(defaultRepoInput, state);
     }
@@ -283,16 +287,26 @@ function App() {
     setShipWeekError(null);
 
     try {
-      const repository = repositoryInput.trim() || defaultRepos[0];
+      const repositories = parseRepositories(repositoryInput, defaultShipWeekRepos);
       const milestone = milestoneInput.trim() || currentRelease;
       const releaseBranch = releaseBranchInput.trim();
-      const query = new URLSearchParams({ repo: repository, milestone });
-      if (releaseBranch) {
-        query.set('releaseBranch', releaseBranch);
-      }
+      const releaseScopeRepositories = repositories.filter((repository) => !isDocsFromCodeRepository(repository));
+      const docsRepositories = repositories.filter(isDocsFromCodeRepository);
+      const [releaseResponses, docsPullRequests] = await Promise.all([
+        Promise.all(releaseScopeRepositories.map((repository) =>
+          loadRepositoryShipWeek(repository, milestone, releaseBranch))),
+        Promise.all(docsRepositories.map(loadDocsFromCodePullRequests)),
+      ]);
 
-      const response = await fetch(`/api/github/ship-week?${query}`);
-      setShipWeek(normalizeShipWeekResponse(await readJson<ShipWeekResponse>(response)));
+      const shipWeek = combineShipWeekResponses(
+        repositories,
+        milestone,
+        releaseBranch,
+        releaseResponses,
+        docsPullRequests.flat(),
+      );
+      setActiveRepo(repositories.length === 1 ? repositories[0] : `${repositories.length} repos`);
+      setShipWeek(shipWeek);
     } catch (err) {
       setShipWeekError(err instanceof Error ? err.message : 'Unable to load ship-week data.');
       setShipWeek(null);
@@ -649,17 +663,94 @@ function checksRequestKey(repository: string, number: number, headSha: string) {
   return `${repository.toLowerCase()}#${number}:${headSha}`;
 }
 
+async function loadRepositoryShipWeek(repository: string, milestone: string, releaseBranch: string) {
+  const query = new URLSearchParams({ repo: repository, milestone });
+  if (releaseBranch) {
+    query.set('releaseBranch', releaseBranch);
+  }
+
+  const response = await fetch(`/api/github/ship-week?${query}`);
+  return normalizeShipWeekResponse(await readJson<ShipWeekResponse>(response));
+}
+
+async function loadDocsFromCodePullRequests(repository: string) {
+  const query = new URLSearchParams({ repo: repository, state: 'open' });
+  const response = await fetch(`/api/github/pulls?${query}`);
+  const data = await readJson<PullRequestListResponse>(response);
+  return data.pullRequests
+    .map((pullRequest) => ({
+      ...pullRequest,
+      repository: data.repository,
+    }))
+    .filter(isGeneratedDocsPullRequest);
+}
+
+function combineShipWeekResponses(
+  repositories: string[],
+  requestedMilestone: string,
+  requestedReleaseBranch: string,
+  releaseResponses: ShipWeekResponse[],
+  docsPullRequests: PullRequestSummary[],
+): ShipWeekResponse {
+  const releaseBranches = [...new Set(releaseResponses.map((response) => response.releaseBranch).filter(Boolean))];
+  const repositoryLabel = repositories.length === 1 ? repositories[0] : `${repositories.length} repos`;
+  const releaseBranch = requestedReleaseBranch
+    || (releaseBranches.length === 1 ? releaseBranches[0] : releaseBranches.length > 1 ? 'release branches' : '');
+
+  return {
+    repository: repositoryLabel,
+    milestone: releaseResponses[0]?.milestone ?? requestedMilestone,
+    releaseBranch,
+    pullRequests: [
+      ...releaseResponses.flatMap((response) => response.pullRequests),
+      ...docsPullRequests.map(createDocsFromCodeShipWeekPullRequest),
+    ].sort(compareShipWeekPullRequests),
+    issues: releaseResponses
+      .flatMap((response) => response.issues)
+      .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime()),
+  };
+}
+
+function createDocsFromCodeShipWeekPullRequest(pullRequest: PullRequestSummary) {
+  return {
+    pullRequest,
+    releaseScope: {
+      inMilestone: false,
+      targetsReleaseBranch: false,
+      releaseBranchException: false,
+      milestoneIssueNumbers: [],
+      docsFromCode: true,
+    },
+  };
+}
+
+function compareShipWeekPullRequests(first: ShipWeekResponse['pullRequests'][number], second: ShipWeekResponse['pullRequests'][number]) {
+  return Number(second.releaseScope.releaseBranchException) - Number(first.releaseScope.releaseBranchException)
+    || Number(second.releaseScope.docsFromCode) - Number(first.releaseScope.docsFromCode)
+    || new Date(first.pullRequest.createdAt).getTime() - new Date(second.pullRequest.createdAt).getTime()
+    || first.pullRequest.repository.localeCompare(second.pullRequest.repository)
+    || first.pullRequest.number - second.pullRequest.number;
+}
+
 function normalizeShipWeekResponse(response: ShipWeekResponse): ShipWeekResponse {
   return {
     ...response,
     pullRequests: response.pullRequests.map((item) => ({
       ...item,
+      releaseScope: {
+        ...item.releaseScope,
+        docsFromCode: item.releaseScope.docsFromCode ?? false,
+      },
       pullRequest: {
         ...item.pullRequest,
         repository: item.pullRequest.repository ?? response.repository,
       },
     })),
   };
+}
+
+function isDocsFromCodeRepository(repository: string) {
+  return repository.toLowerCase() === docsFromCodeRepository;
 }
 
 function isAbortError(err: unknown) {

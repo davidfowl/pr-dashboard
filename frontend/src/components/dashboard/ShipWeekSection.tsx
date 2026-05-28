@@ -42,7 +42,7 @@ function ShipWeekSection({
         <p className="eyebrow">Ship mode</p>
         <h3>{shipWeek ? `${shipWeek.milestone} release scope` : 'Release scope'}</h3>
         <p className="board-guidance">
-          Two PR lists matter: work in the milestone, and work targeting the base branch. Open milestone issues are tracked separately as TBD.
+          Three PR lists matter: work in the milestone, work targeting the base branch, and generated docs updates. Open milestone issues are tracked separately as TBD.
         </p>
       </div>
 
@@ -80,6 +80,12 @@ function ShipWeekSection({
               detail="approved and unblocked"
               tone="success"
             />
+            <SummaryCard
+              label="Docs"
+              value={model.docsFromCodePullRequests.length}
+              detail="generated PRs"
+              tone={model.docsFromCodePullRequests.length > 0 ? 'accent' : 'success'}
+            />
           </div>
 
           <div className="ship-week-critical-grid">
@@ -108,6 +114,21 @@ function ShipWeekSection({
                 onVisiblePullRequest={onVisiblePullRequest}
               />
             </section>
+
+            {model.docsFromCodePullRequests.length > 0 && (
+              <section className="ship-week-critical-panel accent" aria-label="Generated docs pull requests">
+                <div className="attention-card-header">
+                  <span>Generated docs PRs</span>
+                  <strong>{formatCount(model.docsFromCodePullRequests.length, 'PR')}</strong>
+                </div>
+                <ShipModePullRequestList
+                  items={model.docsFromCodePullRequests}
+                  emptyState="No open generated docs PRs are loaded."
+                  onSelectPullRequest={onSelectPullRequest}
+                  onVisiblePullRequest={onVisiblePullRequest}
+                />
+              </section>
+            )}
           </div>
 
           <section className="ship-week-critical-panel danger" aria-label="Open milestone issues TBD">
@@ -131,15 +152,24 @@ function createShipModeModel(shipWeek: ShipWeekResponse) {
   const baseBranchPullRequests = shipWeek.pullRequests
     .filter((item) => item.releaseScope.targetsReleaseBranch && !item.pullRequest.draft)
     .map(createShipModePullRequestItem);
+  const docsFromCodePullRequests = shipWeek.pullRequests
+    .filter((item) => item.releaseScope.docsFromCode && !item.pullRequest.draft)
+    .map(createShipModePullRequestItem);
+  const actionablePullRequests = [
+    ...milestonePullRequests,
+    ...baseBranchPullRequests,
+    ...docsFromCodePullRequests,
+  ];
 
   return {
     milestonePullRequests,
     baseBranchPullRequests,
-    needsWorkCount: countUniqueItems([...milestonePullRequests, ...baseBranchPullRequests], (item) =>
+    docsFromCodePullRequests,
+    needsWorkCount: countUniqueItems(actionablePullRequests, (item) =>
       item.action === 'CI failing' || item.action === 'Author response'),
-    pendingReviewCount: countUniqueItems([...milestonePullRequests, ...baseBranchPullRequests], (item) =>
+    pendingReviewCount: countUniqueItems(actionablePullRequests, (item) =>
       item.action === 'Pending review' || item.action === 'Needs re-review'),
-    readyCount: countUniqueItems([...milestonePullRequests, ...baseBranchPullRequests], (item) =>
+    readyCount: countUniqueItems(actionablePullRequests, (item) =>
       item.action === 'Ready to land'),
   };
 }

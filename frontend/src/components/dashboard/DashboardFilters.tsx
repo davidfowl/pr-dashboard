@@ -1,6 +1,6 @@
 import type { FormEventHandler } from 'react';
 import type { DashboardMode, PullRequestSummary, PullState } from '../../types';
-import { currentRelease, defaultRepoInput, shipWeekReleaseBranchPlaceholder } from '../../constants';
+import { currentRelease, defaultRepoInput, defaultShipWeekRepoInput, shipWeekReleaseBranchPlaceholder } from '../../constants';
 
 type DashboardFiltersProps = {
   dashboardMode: DashboardMode;
@@ -92,14 +92,14 @@ function DashboardFilters({
       ) : (
         <form className="repo-form ship-week-form" onSubmit={onShipWeekSubmit}>
           <label>
-            <span>Ship mode repo</span>
+            <span>Ship mode repositories</span>
             <input
               value={shipWeekRepo}
               onChange={(event) => onShipWeekRepoChange(event.target.value)}
-              placeholder="microsoft/aspire"
+              placeholder={defaultShipWeekRepoInput}
               autoComplete="off"
             />
-            <small>Ship mode ignores PRs outside the milestone and base branch.</small>
+            <small>Separate multiple repositories with commas. Ship mode includes generated aspire.dev docs PRs.</small>
           </label>
 
           <label>

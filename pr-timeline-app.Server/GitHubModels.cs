@@ -64,7 +64,8 @@ record ShipWeekReleaseScope(
     bool InMilestone,
     bool TargetsReleaseBranch,
     bool ReleaseBranchException,
-    IReadOnlyList<int> MilestoneIssueNumbers);
+    IReadOnlyList<int> MilestoneIssueNumbers,
+    bool DocsFromCode = false);
 
 record ShipWeekIssueSummary(
     string Repository,

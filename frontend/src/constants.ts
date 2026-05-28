@@ -1,5 +1,9 @@
 export const defaultRepos = ['microsoft/aspire', 'microsoft/aspire.dev', 'microsoft/dcp', 'CommunityToolkit/Aspire'];
 export const defaultRepoInput = defaultRepos.join(', ');
+export const defaultShipWeekRepos = ['microsoft/aspire', 'microsoft/aspire.dev'];
+export const defaultShipWeekRepoInput = defaultShipWeekRepos.join(', ');
+export const docsFromCodeRepository = 'microsoft/aspire.dev';
+export const docsFromCodeLabel = 'docs-from-code';
 export const currentRelease = '13.4';
 export const defaultShipWeekReleaseBranch = '';
 export const shipWeekReleaseBranchPlaceholder = 'Auto-detect latest release/*';
