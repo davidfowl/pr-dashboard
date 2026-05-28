@@ -26,7 +26,7 @@ function PullRequestListItem({
   signalProps,
   linkedIssues = [],
 }: PullRequestListItemProps) {
-  const itemRef = useRef<HTMLButtonElement | null>(null);
+  const itemRef = useRef<HTMLElement | null>(null);
   const checksState = pullRequest.checks?.state;
   const badge = checksState && checksState !== 'none' ? checkBadgeGlyphs[checksState] : null;
   const badgeTitle = badge
@@ -69,11 +69,7 @@ function PullRequestListItem({
   }, [checksState, onVisiblePullRequest, pullRequest]);
 
   return (
-    <button
-      ref={itemRef}
-      type="button"
-      onClick={() => onSelectPullRequest(pullRequest.repository, pullRequest)}
-    >
+    <article ref={itemRef} className="attention-pr-row">
       <span className="attention-pr-number">
         {badge && (
           <span
@@ -90,10 +86,37 @@ function PullRequestListItem({
       <span className="attention-pr-repo" title={pullRequest.repository}>
         {pullRequest.repository}
       </span>
-      <strong>{pullRequest.title}</strong>
+      <a
+        className="attention-pr-title"
+        href={pullRequest.htmlUrl}
+        target="_blank"
+        rel="noreferrer"
+        title={pullRequest.title}
+      >
+        {pullRequest.title}
+      </a>
       <span className="attention-pr-meta">
         {pullRequest.author} · updated {formatRelative(pullRequest.updatedAt)}
       </span>
+      <div className="attention-pr-actions">
+        <a
+          className="attention-pr-github-link"
+          href={pullRequest.htmlUrl}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Open ${pullRequest.repository} #${pullRequest.number} on GitHub`}
+        >
+          GitHub
+        </a>
+        <button
+          type="button"
+          className="attention-pr-timeline-button"
+          onClick={() => onSelectPullRequest(pullRequest.repository, pullRequest)}
+          aria-label={`View timeline for ${pullRequest.repository} #${pullRequest.number}`}
+        >
+          View timeline
+        </button>
+      </div>
       <PullRequestSignalPills pullRequest={pullRequest} {...signalProps} />
       {linkedIssues.length > 0 && (
         <span className="attention-pr-linked-issues" aria-label="Linked issues">
@@ -103,7 +126,6 @@ function PullRequestListItem({
               href={issue.htmlUrl}
               target="_blank"
               rel="noreferrer"
-              onClick={(event) => event.stopPropagation()}
               title={`${issue.repository}#${issue.number}: ${issue.title}`}
             >
               issue #{issue.number}
@@ -111,7 +133,7 @@ function PullRequestListItem({
           ))}
         </span>
       )}
-    </button>
+    </article>
   );
 }
 
