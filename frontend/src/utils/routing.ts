@@ -1,13 +1,14 @@
 import { defaultRepos } from '../constants';
 import type { DashboardMode } from '../types';
 
-export function parseRepositories(value: string) {
+export function parseRepositories(value: string, fallbackRepositories = defaultRepos) {
   const repositories = value
     .split(/[,\s]+/)
     .map((repository) => repository.trim())
     .filter(Boolean);
 
-  return [...new Set(repositories)].length > 0 ? [...new Set(repositories)] : defaultRepos;
+  const uniqueRepositories = [...new Set(repositories)];
+  return uniqueRepositories.length > 0 ? uniqueRepositories : fallbackRepositories;
 }
 
 const bucketHashPrefix = '#bucket/';

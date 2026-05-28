@@ -1,4 +1,11 @@
-import { coreTeamMembers, currentRelease, dayMs, hourMs } from '../constants';
+import {
+  coreTeamMembers,
+  currentRelease,
+  dayMs,
+  docsFromCodeLabel,
+  docsFromCodeRepository,
+  hourMs,
+} from '../constants';
 import type {
   ActivityMarker,
   ActivityModel,
@@ -508,7 +515,7 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
         ? `Pushed ${formatAge(pullRequest.lastCommitAt)}`
         : 'Pushed after review';
     case 'Docs':
-      return 'docs-from-code';
+      return 'generated docs';
     case 'Community Toolkit':
       return 'CommunityToolkit/Aspire';
     case 'Bots / automation':
@@ -556,9 +563,9 @@ function needsReReview(pullRequest: PullRequestSummary) {
     && new Date(pullRequest.lastCommitAt).getTime() > new Date(pullRequest.review.lastReviewedAt).getTime();
 }
 
-function isGeneratedDocsPullRequest(pullRequest: PullRequestSummary) {
-  return pullRequest.repository.toLowerCase() === 'microsoft/aspire.dev'
-    && pullRequest.labels.some((label) => label.toLowerCase() === 'docs-from-code');
+export function isGeneratedDocsPullRequest(pullRequest: PullRequestSummary) {
+  return pullRequest.repository.toLowerCase() === docsFromCodeRepository
+    && pullRequest.labels.some((label) => label.toLowerCase() === docsFromCodeLabel);
 }
 
 function isCommunityToolkitPullRequest(pullRequest: PullRequestSummary) {
@@ -685,7 +692,11 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
     signals.push({ label: formatCount(pullRequest.review.commentedReviewCount, 'review comment'), tone: 'muted' });
   }
 
-  for (const label of pullRequest.labels.slice(0, 2)) {
+  const computedLabels = isGeneratedDocsPullRequest(pullRequest)
+    ? pullRequest.labels.filter((label) => label.toLowerCase() !== docsFromCodeLabel)
+    : pullRequest.labels;
+
+  for (const label of computedLabels.slice(0, 2)) {
     signals.push({ label, tone: 'accent' });
   }
 

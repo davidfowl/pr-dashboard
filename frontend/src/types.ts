@@ -121,6 +121,7 @@ export type ShipWeekReleaseScope = {
   targetsReleaseBranch: boolean;
   releaseBranchException: boolean;
   milestoneIssueNumbers: number[];
+  docsFromCode: boolean;
 };
 
 export type ShipWeekIssueSummary = {

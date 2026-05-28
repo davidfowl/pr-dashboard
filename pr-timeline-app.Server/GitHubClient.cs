@@ -53,6 +53,55 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         }) ?? [];
     }
 
+    public async Task<IReadOnlyList<PullRequestSummary>> GetPullRequestsByLabelAsync(
+        RepositoryName repositoryName,
+        string state,
+        string label,
+        CancellationToken cancellationToken)
+    {
+        var normalizedLabel = label.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedLabel))
+        {
+            return await GetPullRequestsAsync(repositoryName, state, cancellationToken);
+        }
+
+        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
+        var cacheKey = $"pulls:{authCacheKey}:{repositoryName}:{state}:label:{normalizedLabel}";
+        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheDuration;
+            var sort = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "created" : "updated";
+            var direction = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "asc" : "desc";
+            var issues = await SendPagedGitHubRequestAsync(
+                $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues?state={Uri.EscapeDataString(state)}&labels={Uri.EscapeDataString(normalizedLabel)}&sort={sort}&direction={direction}&per_page={PullRequestPageSize}",
+                GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
+                cancellationToken);
+            var pullRequestTasks = issues
+                .Where(issue => issue.PullRequest is not null)
+                .ToDictionary(
+                    issue => issue.Number,
+                    issue => GetPullRequestDtoOrNullAsync(repositoryName, issue.Number, cancellationToken));
+
+            await Task.WhenAll(pullRequestTasks.Values);
+
+            var pullRequestDtos = new List<GitHubPullRequestDto>(pullRequestTasks.Count);
+            foreach (var task in pullRequestTasks.Values)
+            {
+                if (await task is { Draft: false } pullRequest)
+                {
+                    pullRequestDtos.Add(pullRequest);
+                }
+            }
+
+            return await CreatePullRequestSummariesAsync(
+                repositoryName,
+                pullRequestDtos
+                    .OrderBy(pullRequest => pullRequest.CreatedAt)
+                    .ToArray(),
+                cancellationToken);
+        }) ?? [];
+    }
+
     public async Task<ShipWeekLoadResult> GetShipWeekAsync(
         RepositoryName repositoryName,
         string milestoneTitle,

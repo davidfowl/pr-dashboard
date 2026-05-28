@@ -206,6 +206,81 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListByLabelLoadsOnlyMatchingPullRequests()
+    {
+        var requestedPaths = new List<string>();
+        var client = CreateClient(path =>
+        {
+            requestedPaths.Add(path);
+            return path switch
+            {
+                "repos/example/repo/issues?state=open&labels=docs-from-code&sort=created&direction=asc&per_page=100" => Json(
+                    """
+                    [
+                      {
+                        "number": 5,
+                        "title": "Generated docs",
+                        "state": "open",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-02T00:00:00Z",
+                        "user": { "login": "octocat" },
+                        "html_url": "https://github.com/example/repo/pull/5",
+                        "labels": [{ "name": "docs-from-code" }],
+                        "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/5" }
+                      },
+                      {
+                        "number": 6,
+                        "title": "Plain issue",
+                        "state": "open",
+                        "created_at": "2026-01-03T00:00:00Z",
+                        "updated_at": "2026-01-04T00:00:00Z",
+                        "user": { "login": "octocat" },
+                        "html_url": "https://github.com/example/repo/issues/6",
+                        "labels": [{ "name": "docs-from-code" }]
+                      }
+                    ]
+                    """),
+                "repos/example/repo/pulls/5" => Json(
+                    """
+                    {
+                      "number": 5,
+                      "title": "Generated docs",
+                      "state": "open",
+                      "body": null,
+                      "created_at": "2026-01-01T00:00:00Z",
+                      "updated_at": "2026-01-02T00:00:00Z",
+                      "draft": false,
+                      "user": { "login": "octocat" },
+                      "html_url": "https://github.com/example/repo/pull/5",
+                      "labels": [{ "name": "docs-from-code" }],
+                      "requested_reviewers": [],
+                      "requested_teams": [],
+                      "commits": 1,
+                      "additions": 10,
+                      "deletions": 2,
+                      "changed_files": 1
+                    }
+                    """),
+                "repos/example/repo/pulls/5/reviews?per_page=100" => Json("[]"),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var pullRequests = await client.GetPullRequestsByLabelAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            "docs-from-code",
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal(5, pullRequest.Number);
+        Assert.Equal(["docs-from-code"], pullRequest.Labels);
+        Assert.DoesNotContain(
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100",
+            requestedPaths);
+    }
+
+    [Fact]
     public async Task PullListReadsAllPages()
     {
         var client = CreateClient(path => path switch
