@@ -1127,7 +1127,7 @@ select:focus-visible {
 }
 
 .attention-pr-signals {
-  grid-column: 3 / 6;
+  grid-column: 3 / 5;
   grid-row: 2;
   display: flex;
   flex-wrap: wrap;
@@ -1135,7 +1135,7 @@ select:focus-visible {
 }
 
 .attention-pr-linked-issues {
-  grid-column: 3 / 6;
+  grid-column: 3 / 5;
   grid-row: 3;
   display: flex;
   flex-wrap: wrap;
