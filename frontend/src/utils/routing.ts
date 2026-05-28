@@ -1,4 +1,5 @@
 import { defaultRepos } from '../constants';
+import type { DashboardMode } from '../types';
 
 export function parseRepositories(value: string) {
   const repositories = value
@@ -20,7 +21,7 @@ export function createBucketHash(bucketId: string) {
 }
 
 export function createBucketUrl(bucketId: string) {
-  return `${window.location.origin}${window.location.pathname}${createBucketHash(bucketId)}`;
+  return `${window.location.origin}${window.location.pathname}${window.location.search}${createBucketHash(bucketId)}`;
 }
 
 export function replaceBucketHistory(bucketId: string) {
@@ -58,6 +59,20 @@ export function parseDetailHash(hash: string) {
     repository: decodeURIComponent(match[1]),
     number: Number.parseInt(match[2], 10),
   };
+}
+
+export function parseDashboardMode(search: string): DashboardMode {
+  const mode = new URLSearchParams(search).get('mode')?.toLowerCase();
+  return mode === 'review' ? 'review' : 'ship';
+}
+
+export function pushDashboardModeHistory(mode: DashboardMode) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('mode', mode);
+  const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+  if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextUrl) {
+    window.history.pushState({ view: 'dashboard', mode }, '', nextUrl);
+  }
 }
 
 export function shortRepoName(repository: string) {

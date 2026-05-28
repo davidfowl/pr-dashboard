@@ -79,6 +79,68 @@ select:focus-visible {
   font-size: 0.95rem;
 }
 
+.hero-mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 0.8rem;
+  align-items: center;
+}
+
+.mode-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.18rem;
+  background: #010409;
+}
+
+.mode-toggle button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.38rem 0.75rem;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.mode-toggle button.selected {
+  color: #052e2b;
+  background: var(--success);
+}
+
+.mode-toggle button:not(.selected):hover {
+  color: var(--text);
+  background: var(--panel-strong);
+}
+
+.mode-status {
+  border: 1px solid var(--mode-status-color, var(--border));
+  border-radius: 999px;
+  padding: 0.34rem 0.7rem;
+  color: var(--muted);
+  background: rgba(139, 148, 158, 0.08);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.mode-status.ship {
+  --mode-status-color: var(--warning);
+  color: #e3b341;
+  background: rgba(210, 153, 34, 0.13);
+}
+
+.mode-status.regular {
+  --mode-status-color: var(--accent-strong);
+  color: #79c0ff;
+  background: rgba(88, 166, 255, 0.12);
+}
+
 .eyebrow {
   margin: 0 0 0.35rem;
   color: var(--accent-strong);
@@ -310,6 +372,15 @@ select:focus-visible {
   opacity: 0.62;
 }
 
+.ship-week-form {
+  border-top: 1px solid rgba(48, 54, 61, 0.72);
+  padding-top: 1rem;
+}
+
+.ship-week-form label:first-child {
+  grid-column: auto;
+}
+
 .error {
   margin-bottom: 1rem;
   border: 1px solid rgba(251, 113, 133, 0.5);
@@ -361,6 +432,159 @@ select:focus-visible {
 .queue-overview {
   display: grid;
   gap: 0.85rem;
+}
+
+.ship-week-section {
+  display: grid;
+  gap: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+.ship-week-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.55rem;
+}
+
+.ship-week-summary-card,
+.ship-week-scope-panel {
+  border: 1px solid var(--ship-week-color, var(--border));
+  border-radius: 0.9rem;
+  padding: 0.75rem 0.9rem;
+  background: #0d1117;
+}
+
+.ship-week-summary-card.accent {
+  --ship-week-color: var(--accent-strong);
+}
+
+.ship-week-critical-panel.accent {
+  --ship-week-color: var(--accent-strong);
+}
+
+.ship-week-summary-card.success,
+.ship-week-critical-panel.success {
+  --ship-week-color: var(--success);
+}
+
+.ship-week-summary-card.warning,
+.ship-week-critical-panel.warning {
+  --ship-week-color: var(--warning);
+}
+
+.ship-week-summary-card.danger {
+  --ship-week-color: var(--danger);
+}
+
+.ship-week-critical-panel.danger {
+  --ship-week-color: var(--danger);
+}
+
+.ship-week-summary-card span,
+.ship-week-summary-card strong {
+  display: block;
+}
+
+.ship-week-summary-card span {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ship-week-summary-card strong {
+  margin-top: 0.2rem;
+  color: var(--text);
+  font-size: 1.35rem;
+}
+
+.ship-week-summary-card p {
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.ship-week-scope-panel .attention-board {
+  margin-top: 0.85rem;
+}
+
+.ship-week-critical-grid {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.ship-week-critical-panel {
+  border: 1px solid var(--ship-week-color, var(--border));
+  border-radius: 0.9rem;
+  padding: 0.85rem 0.95rem;
+  background: #0d1117;
+}
+
+.ship-week-critical-panel > .attention-list,
+.ship-week-critical-panel > .ship-week-issue-list {
+  margin-top: 0.5rem;
+}
+
+.ship-week-issues {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.ship-week-issue-list {
+  display: grid;
+  margin-top: 0.65rem;
+}
+
+.ship-week-issue-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.3rem 0.75rem;
+  border-top: 1px solid rgba(48, 54, 61, 0.62);
+  padding: 0.55rem 0.2rem;
+}
+
+.ship-week-issue-row a {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ship-week-issue-row a:hover {
+  color: #bae6fd;
+}
+
+.ship-week-issue-row span,
+.ship-week-issue-row em {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.ship-week-issue-row em {
+  justify-self: end;
+}
+
+.ship-week-issue-labels {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.ship-week-issue-labels b {
+  border: 1px solid rgba(88, 166, 255, 0.42);
+  border-radius: 999px;
+  padding: 0.08rem 0.42rem;
+  color: #79c0ff;
+  background: rgba(88, 166, 255, 0.12);
+  font-size: 0.66rem;
 }
 
 .queue-stat-grid {
@@ -865,6 +1089,33 @@ select:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
+}
+
+.attention-pr-linked-issues {
+  grid-column: 3 / 5;
+  grid-row: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.attention-pr-linked-issues a {
+  border: 1px solid rgba(139, 148, 158, 0.35);
+  border-radius: 999px;
+  padding: 0.08rem 0.42rem;
+  color: #bae6fd;
+  background: rgba(139, 148, 158, 0.08);
+  font-size: 0.66rem;
+  font-weight: 800;
+  line-height: 1.35;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.attention-pr-linked-issues a:hover {
+  border-color: var(--accent-strong);
+  color: white;
+  background: rgba(88, 166, 255, 0.12);
 }
 
 .attention-list .attention-signal {
@@ -1774,6 +2025,10 @@ select:focus-visible {
     position: static;
     max-height: none;
   }
+
+  .ship-week-critical-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 620px) {
@@ -1798,7 +2053,8 @@ select:focus-visible {
 
   .attention-list strong,
   .attention-pr-meta,
-  .attention-pr-signals {
+  .attention-pr-signals,
+  .attention-pr-linked-issues {
     grid-column: 3;
   }
 
@@ -1809,6 +2065,10 @@ select:focus-visible {
 
   .attention-pr-signals {
     grid-row: 3;
+  }
+
+  .attention-pr-linked-issues {
+    grid-row: 4;
   }
 
   .timeline-header,

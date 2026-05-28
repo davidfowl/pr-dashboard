@@ -5,15 +5,22 @@ import AppInfo from './components/AppInfo';
 import AuthCard from './components/AuthCard';
 import DashboardView from './components/dashboard/DashboardView';
 import DetailView from './components/detail/DetailView';
-import { defaultRepoInput, defaultRepos } from './constants';
+import {
+  currentRelease,
+  defaultRepoInput,
+  defaultRepos,
+  defaultShipWeekReleaseBranch,
+} from './constants';
 import type {
   AuthStatus,
+  DashboardMode,
   MergeableState,
   PullRequestChecksRequest,
   PullRequestChecksResponse,
   PullRequestListResponse,
   PullRequestSummary,
   PullState,
+  ShipWeekResponse,
   TimelineItem,
   TimelineResponse,
   TimelineStats,
@@ -29,7 +36,15 @@ import {
   createTimelineStory,
   createTriageModel,
 } from './utils/models';
-import { parseBucketHash, parseDetailHash, parseRepositories, pushDetailHistory, replaceBucketHistory } from './utils/routing';
+import {
+  parseBucketHash,
+  parseDashboardMode,
+  parseDetailHash,
+  parseRepositories,
+  pushDashboardModeHistory,
+  pushDetailHistory,
+  replaceBucketHistory,
+} from './utils/routing';
 
 type VisibleChecksRequestItem = {
   repository: string;
@@ -42,15 +57,22 @@ function App() {
   const [activeRepo, setActiveRepo] = useState(defaultRepos[0]);
   const [state, setState] = useState<PullState>('open');
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => parseDashboardMode(window.location.search));
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
+  const [shipWeekRepo, setShipWeekRepo] = useState(defaultRepos[0]);
+  const [shipWeekMilestone, setShipWeekMilestone] = useState(currentRelease);
+  const [shipWeekReleaseBranch, setShipWeekReleaseBranch] = useState(defaultShipWeekReleaseBranch);
+  const [shipWeek, setShipWeek] = useState<ShipWeekResponse | null>(null);
   const [selectedPullRequest, setSelectedPullRequest] = useState<PullRequestSummary | null>(null);
   const [timelineItems, setTimelineItems] = useState<TimelineItem[]>([]);
   const [timelineStats, setTimelineStats] = useState<TimelineStats | null>(null);
   const [mergeableState, setMergeableState] = useState<MergeableState | null>(null);
   const [pullsLoading, setPullsLoading] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
+  const [shipWeekLoading, setShipWeekLoading] = useState(false);
   const [loginLoading, setLoginLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [shipWeekError, setShipWeekError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<'dashboard' | 'details'>('dashboard');
   const [locationHash, setLocationHash] = useState(window.location.hash);
   const [selectedBucketId, setSelectedBucketId] = useState(parseBucketHash(window.location.hash)?.bucketId ?? '');
@@ -68,6 +90,7 @@ function App() {
   const selectedTitle = selectedPullRequest
     ? `#${selectedPullRequest.number} ${selectedPullRequest.title}`
     : 'Select a pull request';
+  const currentMilestoneLabel = shipWeek?.milestone ?? shipWeekMilestone;
 
   const groupedTimeline = useMemo(() => {
     return createTimelineStory(timelineItems).reduce<Record<string, TimelineStoryEntry[]>>((groups, entry) => {
@@ -101,7 +124,11 @@ function App() {
 
   useEffect(() => {
     void loadAuthStatus();
-    void loadPullRequests(defaultRepoInput, state);
+    if (dashboardMode === 'ship') {
+      void loadShipWeek(defaultRepos[0], currentRelease, defaultShipWeekReleaseBranch);
+    } else {
+      void loadPullRequests(defaultRepoInput, state);
+    }
     // Initial load intentionally captures the default pull state once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -110,6 +137,7 @@ function App() {
     function onPopState() {
       const hash = window.location.hash;
       setLocationHash(hash);
+      setDashboardMode(parseDashboardMode(window.location.search));
       if (!hash.startsWith('#pr/')) {
         setViewMode('dashboard');
       }
@@ -197,6 +225,8 @@ function App() {
       await readJson(response);
       await loadAuthStatus();
       setPullRequests([]);
+      setShipWeek(null);
+      setShipWeekError(null);
       currentSelectionRef.current = null;
       setSelectedPullRequest(null);
       setTimelineItems([]);
@@ -245,6 +275,29 @@ function App() {
       setPullRequests([]);
     } finally {
       setPullsLoading(false);
+    }
+  }
+
+  async function loadShipWeek(repositoryInput: string, milestoneInput: string, releaseBranchInput: string) {
+    setShipWeekLoading(true);
+    setShipWeekError(null);
+
+    try {
+      const repository = repositoryInput.trim() || defaultRepos[0];
+      const milestone = milestoneInput.trim() || currentRelease;
+      const releaseBranch = releaseBranchInput.trim();
+      const query = new URLSearchParams({ repo: repository, milestone });
+      if (releaseBranch) {
+        query.set('releaseBranch', releaseBranch);
+      }
+
+      const response = await fetch(`/api/github/ship-week?${query}`);
+      setShipWeek(normalizeShipWeekResponse(await readJson<ShipWeekResponse>(response)));
+    } catch (err) {
+      setShipWeekError(err instanceof Error ? err.message : 'Unable to load ship-week data.');
+      setShipWeek(null);
+    } finally {
+      setShipWeekLoading(false);
     }
   }
 
@@ -359,6 +412,22 @@ function App() {
           return checks ? { ...pullRequest, checks } : pullRequest;
         }),
       );
+      setShipWeek((current) =>
+        current
+          ? {
+            ...current,
+            pullRequests: current.pullRequests.map((item) => {
+              const headSha = item.pullRequest.headSha;
+              if (!headSha) {
+                return item;
+              }
+
+              const checks = checksByKey.get(checksRequestKey(item.pullRequest.repository, item.pullRequest.number, headSha));
+              return checks ? { ...item, pullRequest: { ...item.pullRequest, checks } } : item;
+            }),
+          }
+          : current,
+      );
       setSelectedPullRequest((current) => {
         const headSha = current?.headSha;
         if (!current || !headSha) {
@@ -443,6 +512,22 @@ function App() {
     void loadPullRequests(repo.trim(), state);
   }
 
+  function onShipWeekSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    switchDashboardMode('ship');
+    void loadShipWeek(shipWeekRepo, shipWeekMilestone, shipWeekReleaseBranch);
+  }
+
+  function switchDashboardMode(mode: DashboardMode) {
+    pushDashboardModeHistory(mode);
+    setDashboardMode(mode);
+    if (mode === 'ship' && !shipWeek && !shipWeekLoading) {
+      void loadShipWeek(shipWeekRepo, shipWeekMilestone, shipWeekReleaseBranch);
+    } else if (mode === 'review' && pullRequests.length === 0 && !pullsLoading) {
+      void loadPullRequests(repo.trim(), state);
+    }
+  }
+
   function showDashboard(updateHistory = true) {
     setViewMode('dashboard');
     if (updateHistory && window.location.hash) {
@@ -468,8 +553,33 @@ function App() {
         <div>
           <p className="eyebrow">Aspire team focus</p>
           <h1>Aspire PR focus</h1>
+          <div className="hero-mode-row">
+            <div className="mode-toggle" role="group" aria-label="Dashboard mode">
+              <button
+                type="button"
+                className={dashboardMode === 'review' ? 'selected' : undefined}
+                aria-pressed={dashboardMode === 'review'}
+                onClick={() => switchDashboardMode('review')}
+              >
+                Review mode
+              </button>
+              <button
+                type="button"
+                className={dashboardMode === 'ship' ? 'selected' : undefined}
+                aria-pressed={dashboardMode === 'ship'}
+                onClick={() => switchDashboardMode('ship')}
+              >
+                Ship mode
+              </button>
+            </div>
+            {dashboardMode === 'ship' && (
+              <span className="mode-status ship">Milestone {currentMilestoneLabel}</span>
+            )}
+          </div>
           <p className="hero-copy">
-            Find the pull requests that need attention and keep reviews moving.
+            {dashboardMode === 'ship'
+              ? 'Only milestone and base-branch work is shown; the normal attention queue is hidden.'
+              : 'Find the pull requests that need attention and keep reviews moving.'}
           </p>
         </div>
 
@@ -484,6 +594,7 @@ function App() {
       <main className={`workspace ${viewMode}`}>
         {viewMode === 'dashboard' && (
           <DashboardView
+            dashboardMode={dashboardMode}
             repo={repo}
             state={state}
             pullsLoading={pullsLoading}
@@ -492,11 +603,21 @@ function App() {
             developerPullRequestCounts={developerPullRequestCounts}
             attentionBuckets={attentionBuckets}
             forMeItems={forMeItems}
+            shipWeek={shipWeek}
+            shipWeekLoading={shipWeekLoading}
+            shipWeekError={shipWeekError}
+            shipWeekRepo={shipWeekRepo}
+            shipWeekMilestone={shipWeekMilestone}
+            shipWeekReleaseBranch={shipWeekReleaseBranch}
             selectedBucketId={selectedBucketId}
             login={authStatus?.login}
             onRepoChange={setRepo}
             onStateChange={setState}
             onSubmit={onSubmit}
+            onShipWeekRepoChange={setShipWeekRepo}
+            onShipWeekMilestoneChange={setShipWeekMilestone}
+            onShipWeekReleaseBranchChange={setShipWeekReleaseBranch}
+            onShipWeekSubmit={onShipWeekSubmit}
             onSelectBucket={selectBucket}
             onSelectPullRequest={(repository, pullRequest) => void loadTimeline(repository, pullRequest)}
             onVisiblePullRequest={requestVisibleChecks}
@@ -526,6 +647,19 @@ function App() {
 
 function checksRequestKey(repository: string, number: number, headSha: string) {
   return `${repository.toLowerCase()}#${number}:${headSha}`;
+}
+
+function normalizeShipWeekResponse(response: ShipWeekResponse): ShipWeekResponse {
+  return {
+    ...response,
+    pullRequests: response.pullRequests.map((item) => ({
+      ...item,
+      pullRequest: {
+        ...item.pullRequest,
+        repository: item.pullRequest.repository ?? response.repository,
+      },
+    })),
+  };
 }
 
 function isAbortError(err: unknown) {

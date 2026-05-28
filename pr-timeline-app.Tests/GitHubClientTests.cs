@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Encodings.Web;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
@@ -612,6 +613,202 @@ public sealed class GitHubClientTests
         Assert.True(maxActiveHeads <= 4, $"Expected at most 4 concurrent checks fetches but saw {maxActiveHeads}.");
     }
 
+    [Fact]
+    public async Task ShipWeekCombinesMilestoneIssuesAndReleaseBranchPullRequests()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/milestones?state=all&per_page=100" => Json(
+                """
+                [
+                  { "number": 7, "title": "13.4" }
+                ]
+                """),
+            "repos/example/repo/branches/release%2F13.4" => Json("""{ "name": "release/13.4" }"""),
+            "repos/example/repo/issues?state=open&milestone=7&per_page=100" => Json(
+                """
+                [
+                  {
+                    "number": 10,
+                    "title": "Validate CLI channel",
+                    "state": "open",
+                    "user": { "login": "pm" },
+                    "html_url": "https://github.com/example/repo/issues/10",
+                    "repository_url": "https://api.github.com/repos/example/repo",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-05T00:00:00Z",
+                    "labels": [{ "name": "area-cli" }],
+                    "assignees": [{ "login": "owner" }],
+                    "milestone": { "number": 7, "title": "13.4" }
+                  },
+                  {
+                    "number": 1,
+                    "title": "Draft release PR",
+                    "state": "open",
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "repository_url": "https://api.github.com/repos/example/repo",
+                    "created_at": "2026-01-02T00:00:00Z",
+                    "updated_at": "2026-01-06T00:00:00Z",
+                    "labels": [],
+                    "assignees": [],
+                    "milestone": { "number": 7, "title": "13.4" },
+                    "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/1" }
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls?state=open&base=release%2F13.4&sort=created&direction=asc&per_page=100" => Json(
+                $$"""
+                [
+                  {{PullRequestJson(2, title: "Fix linked issue", body: "Fixes #10", headSha: "sha2", baseRef: "release/13.4")}},
+                  {{PullRequestJson(3, title: "Hotfix outside milestone", headSha: "sha3", baseRef: "release/13.4")}}
+                ]
+                """),
+            "repos/example/repo/pulls/1" => Json(PullRequestJson(
+                1,
+                title: "Draft release PR",
+                draft: true,
+                milestone: "13.4",
+                headSha: "sha1",
+                baseRef: "main")),
+            "repos/example/repo/pulls/2" => Json(PullRequestJson(
+                2,
+                title: "Fix linked issue",
+                body: "Fixes #10",
+                headSha: "sha2",
+                baseRef: "release/13.4")),
+            "repos/example/repo/pulls/3" => Json(PullRequestJson(
+                3,
+                title: "Hotfix outside milestone",
+                headSha: "sha3",
+                baseRef: "release/13.4")),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/2/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/3/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/issues/10" => Json(
+                """
+                {
+                  "number": 10,
+                  "title": "Validate CLI channel",
+                  "html_url": "https://github.com/example/repo/issues/10",
+                  "repository_url": "https://api.github.com/repos/example/repo",
+                  "updated_at": "2026-01-05T00:00:00Z",
+                  "labels": [{ "name": "area-cli" }],
+                  "assignees": [{ "login": "owner" }],
+                  "milestone": { "number": 7, "title": "13.4" }
+                }
+                """),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var result = await client.GetShipWeekAsync(
+            new RepositoryName("example", "repo"),
+            "13.4",
+            "release/13.4",
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.Response);
+        var response = result.Response!;
+        Assert.Empty(result.ValidationErrors);
+        Assert.Equal("example/repo", response.Repository);
+        Assert.Equal("13.4", response.Milestone);
+        Assert.Equal("release/13.4", response.ReleaseBranch);
+        Assert.Equal(3, response.PullRequests.Count);
+
+        var draftMilestonePullRequest = response.PullRequests.Single(item => item.PullRequest.Number == 1);
+        Assert.True(draftMilestonePullRequest.PullRequest.Draft);
+        Assert.True(draftMilestonePullRequest.ReleaseScope.InMilestone);
+        Assert.False(draftMilestonePullRequest.ReleaseScope.TargetsReleaseBranch);
+        Assert.False(draftMilestonePullRequest.ReleaseScope.ReleaseBranchException);
+
+        var linkedReleasePullRequest = response.PullRequests.Single(item => item.PullRequest.Number == 2);
+        Assert.True(linkedReleasePullRequest.ReleaseScope.InMilestone);
+        Assert.True(linkedReleasePullRequest.ReleaseScope.TargetsReleaseBranch);
+        Assert.False(linkedReleasePullRequest.ReleaseScope.ReleaseBranchException);
+        Assert.Equal([10], linkedReleasePullRequest.ReleaseScope.MilestoneIssueNumbers);
+
+        var exceptionPullRequest = response.PullRequests.Single(item => item.PullRequest.Number == 3);
+        Assert.False(exceptionPullRequest.ReleaseScope.InMilestone);
+        Assert.True(exceptionPullRequest.ReleaseScope.TargetsReleaseBranch);
+        Assert.True(exceptionPullRequest.ReleaseScope.ReleaseBranchException);
+
+        var issue = Assert.Single(response.Issues);
+        Assert.Equal(10, issue.Number);
+        Assert.Equal([2], issue.LinkedOpenPullRequests);
+    }
+
+    [Fact]
+    public async Task ShipWeekAutoDetectsLatestReleaseBranchWhenNotSpecified()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/milestones?state=all&per_page=100" => Json(
+                """[{ "number": 7, "title": "13.4" }]"""),
+            "repos/example/repo/git/matching-refs/heads/release/" => Json(
+                """
+                [
+                  { "ref": "refs/heads/release/12.9" },
+                  { "ref": "refs/heads/release/13.4" },
+                  { "ref": "refs/heads/release/13.10" }
+                ]
+                """),
+            "repos/example/repo/issues?state=open&milestone=7&per_page=100" => Json("[]"),
+            "repos/example/repo/pulls?state=open&base=release%2F13.10&sort=created&direction=asc&per_page=100" => Json("[]"),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var result = await client.GetShipWeekAsync(
+            new RepositoryName("example", "repo"),
+            "13.4",
+            null,
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(result.Response);
+        Assert.Equal("release/13.10", result.Response!.ReleaseBranch);
+    }
+
+    [Fact]
+    public async Task ShipWeekReturnsValidationWhenMilestoneIsMissing()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/milestones?state=all&per_page=100" => Json("[]"),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var result = await client.GetShipWeekAsync(
+            new RepositoryName("example", "repo"),
+            "13.4",
+            "release/13.4",
+            TestContext.Current.CancellationToken);
+
+        Assert.Null(result.Response);
+        Assert.True(result.ValidationErrors.ContainsKey("milestone"));
+    }
+
+    [Fact]
+    public async Task ShipWeekReturnsValidationWhenReleaseBranchIsMissing()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/milestones?state=all&per_page=100" => Json(
+                """[{ "number": 7, "title": "13.4" }]"""),
+            "repos/example/repo/branches/release%2F13.4" => Json(
+                """{ "message": "Not Found" }""",
+                HttpStatusCode.NotFound),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var result = await client.GetShipWeekAsync(
+            new RepositoryName("example", "repo"),
+            "13.4",
+            "release/13.4",
+            TestContext.Current.CancellationToken);
+
+        Assert.Null(result.Response);
+        Assert.True(result.ValidationErrors.ContainsKey("releaseBranch"));
+    }
+
     private static GitHubClient CreateClient(Func<string, HttpResponseMessage> route)
         => CreateClient((path, _) => Task.FromResult(route(path)));
 
@@ -693,25 +890,52 @@ public sealed class GitHubClientTests
     }
 
     private static string PullRequestDetailsJson(int number) =>
+        PullRequestJson(number);
+
+    private static string PullRequestJson(
+        int number,
+        string title = "Ready for review",
+        string? body = null,
+        bool draft = false,
+        string? milestone = null,
+        string? headSha = null,
+        string? baseRef = null)
+    {
+        var milestoneJson = milestone is null
+            ? "null"
+            : $$"""{ "title": {{JsonSerializer.Serialize(milestone)}} }""";
+        var headJson = headSha is null
+            ? "null"
+            : $$"""{ "sha": {{JsonSerializer.Serialize(headSha)}}, "ref": "feature-{{number}}" }""";
+        var baseJson = baseRef is null
+            ? "null"
+            : $$"""{ "ref": {{JsonSerializer.Serialize(baseRef)}} }""";
+
+        return
         $$"""
         {
           "number": {{number}},
-          "title": "Ready for review",
+          "title": {{JsonSerializer.Serialize(title)}},
           "state": "open",
+          "body": {{JsonSerializer.Serialize(body)}},
           "created_at": "2026-01-01T00:00:00Z",
           "updated_at": "2026-01-02T00:00:00Z",
-          "draft": false,
+          "draft": {{draft.ToString().ToLowerInvariant()}},
           "user": { "login": "octocat" },
           "html_url": "https://github.com/example/repo/pull/{{number}}",
           "labels": [],
           "requested_reviewers": [],
           "requested_teams": [],
+          "milestone": {{milestoneJson}},
           "commits": 1,
           "additions": 10,
           "deletions": 2,
-          "changed_files": 1
+          "changed_files": 1,
+          "head": {{headJson}},
+          "base": {{baseJson}}
         }
         """;
+    }
 
     private sealed class StubGitHubHandler(Func<string, CancellationToken, Task<HttpResponseMessage>> route) : HttpMessageHandler
     {

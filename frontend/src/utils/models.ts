@@ -10,6 +10,10 @@ import type {
   MergeableState,
   PickItem,
   PullRequestSummary,
+  ShipWeekIssueBucket,
+  ShipWeekIssueSummary,
+  ShipWeekResponse,
+  ShipWeekScopeGroup,
   SignalMilestone,
   TimelineItem,
   TimelineStats,
@@ -286,6 +290,140 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
   return buckets.filter((bucket) => bucket.items.length > 0);
 }
 
+export function createShipWeekScopeGroups(shipWeek: ShipWeekResponse): ShipWeekScopeGroup[] {
+  return [
+    {
+      id: 'milestone-prs',
+      label: `Milestone ${shipWeek.milestone}`,
+      summary: 'PRs in or linked to the milestone',
+      tone: 'accent',
+      pullRequests: shipWeek.pullRequests.filter((item) => item.releaseScope.inMilestone),
+    },
+    {
+      id: 'release-branch-prs',
+      label: shipWeek.releaseBranch,
+      summary: 'PRs targeting the selected base branch',
+      tone: 'warning',
+      pullRequests: shipWeek.pullRequests.filter((item) => item.releaseScope.targetsReleaseBranch),
+    },
+    {
+      id: 'release-branch-watchlist',
+      label: 'Outside milestone',
+      summary: 'Base-branch PRs outside the milestone',
+      tone: 'danger',
+      pullRequests: shipWeek.pullRequests.filter((item) => item.releaseScope.releaseBranchException),
+    },
+  ];
+}
+
+const shipWeekIssueBucketDefinitions: Omit<ShipWeekIssueBucket, 'issues'>[] = [
+  {
+    label: 'Needs PR',
+    summary: 'Open milestone issues with no inferred open PR.',
+    tone: 'danger',
+  },
+  {
+    label: 'Needs validation',
+    summary: 'Issues with a PR in flight or explicit validation signals.',
+    tone: 'warning',
+  },
+  {
+    label: 'Installer/acquisition',
+    summary: 'Installer, workload, setup, or acquisition work.',
+    tone: 'accent',
+  },
+  {
+    label: 'TypeScript/polyglot',
+    summary: 'TypeScript, JavaScript, Node, or polyglot work.',
+    tone: 'accent',
+  },
+  {
+    label: 'CLI channel/versioning',
+    summary: 'CLI, channel, feed, template, or versioning work.',
+    tone: 'accent',
+  },
+  {
+    label: 'Docs/release readiness',
+    summary: 'Docs, release notes, announcements, or readiness tasks.',
+    tone: 'success',
+  },
+  {
+    label: 'Unowned',
+    summary: 'No assignee and no domain bucket match.',
+    tone: 'warning',
+  },
+];
+
+export function createShipWeekIssueBuckets(issues: ShipWeekIssueSummary[]): ShipWeekIssueBucket[] {
+  const buckets = shipWeekIssueBucketDefinitions.map((bucket) => ({
+    ...bucket,
+    issues: [] as ShipWeekIssueSummary[],
+  }));
+  const bucketsByLabel = new Map(buckets.map((bucket) => [bucket.label, bucket]));
+
+  for (const issue of issues) {
+    for (const bucketLabel of shipWeekIssueBucketLabels(issue)) {
+      bucketsByLabel.get(bucketLabel)?.issues.push(issue);
+    }
+  }
+
+  return buckets.filter((bucket) => bucket.issues.length > 0);
+}
+
+function shipWeekIssueBucketLabels(issue: ShipWeekIssueSummary) {
+  const labels: string[] = [];
+  let domainMatch = false;
+
+  if (issue.linkedOpenPullRequests.length === 0) {
+    labels.push('Needs PR');
+  }
+
+  if (issue.linkedOpenPullRequests.length > 0 || issueMatchesTerms(issue, validationTerms)) {
+    labels.push('Needs validation');
+  }
+
+  if (issueMatchesTerms(issue, installerTerms)) {
+    labels.push('Installer/acquisition');
+    domainMatch = true;
+  }
+
+  if (issueMatchesTerms(issue, typeScriptTerms)) {
+    labels.push('TypeScript/polyglot');
+    domainMatch = true;
+  }
+
+  if (issueMatchesTerms(issue, cliTerms)) {
+    labels.push('CLI channel/versioning');
+    domainMatch = true;
+  }
+
+  if (issueMatchesTerms(issue, docsTerms)) {
+    labels.push('Docs/release readiness');
+    domainMatch = true;
+  }
+
+  if (issue.assignees.length === 0 && !domainMatch) {
+    labels.push('Unowned');
+  }
+
+  return labels;
+}
+
+const validationTerms = ['validation', 'validate', 'verify', 'verification', 'test', 'e2e', 'servicing validation'];
+const installerTerms = ['installer', 'install', 'workload', 'acquisition', 'setup', 'visual studio', ' vs ', 'sdk'];
+const typeScriptTerms = ['typescript', ' ts ', 'javascript', ' js ', 'node', 'polyglot', 'apphost'];
+const cliTerms = ['cli', 'channel', 'version', 'versioning', 'feed', 'template'];
+const docsTerms = ['docs', 'documentation', 'release notes', 'readme', 'release readiness', 'announcement'];
+
+function issueMatchesTerms(issue: ShipWeekIssueSummary, terms: string[]) {
+  const searchText = ` ${[
+    issue.title,
+    issue.author,
+    ...issue.labels,
+  ].join(' ').toLowerCase()} `;
+  return terms.some((term) => searchText.includes(term));
+}
+
 function reviewBucketLabels(pullRequest: PullRequestSummary) {
   if (pullRequest.draft) {
     return ['Draft'];
@@ -484,6 +622,10 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
 
   if (targetsCurrentRelease(pullRequest)) {
     signals.push({ label: `release ${currentRelease}`, tone: 'danger' });
+  }
+
+  if (pullRequest.baseRef?.startsWith('release/')) {
+    signals.push({ label: `base ${pullRequest.baseRef}`, tone: 'danger' });
   }
 
   const checksSignal = checksAttentionSignal(pullRequest);

@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { dayMs } from '../constants';
-import type { PullRequestSummary } from '../types';
+import type { LinkedIssueSummary, PullRequestSummary } from '../types';
 import PullRequestListItem from './PullRequestListItem';
 import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
 
@@ -8,6 +8,7 @@ export type PullRequestListEntry = {
   pullRequest: PullRequestSummary;
   bucketLabel: string;
   signalProps?: Omit<PullRequestSignalPillsProps, 'pullRequest'>;
+  linkedIssues?: LinkedIssueSummary[];
 };
 
 type PullRequestListProps = {
@@ -55,6 +56,7 @@ function PullRequestList({
           onSelectPullRequest={onSelectPullRequest}
           onVisiblePullRequest={onVisiblePullRequest}
           signalProps={entry.signalProps}
+          linkedIssues={entry.linkedIssues}
         />
       ))}
     </div>

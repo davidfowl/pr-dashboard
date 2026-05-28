@@ -12,6 +12,13 @@ sealed class GitHubPullRequestService(GitHubClient gitHub)
         CancellationToken cancellationToken) =>
         gitHub.GetPullRequestChecksAsync(repositoryName, pullRequests, cancellationToken);
 
+    public Task<ShipWeekLoadResult> GetShipWeekAsync(
+        RepositoryName repositoryName,
+        string milestoneTitle,
+        string? releaseBranch,
+        CancellationToken cancellationToken) =>
+        gitHub.GetShipWeekAsync(repositoryName, milestoneTitle, releaseBranch, cancellationToken);
+
     public async Task<TimelineResponse> GetTimelineAsync(
         RepositoryName repositoryName,
         int number,

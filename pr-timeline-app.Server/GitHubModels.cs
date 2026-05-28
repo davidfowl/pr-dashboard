@@ -43,6 +43,66 @@ record PullRequestChecksResponse(string Repository, IReadOnlyList<PullRequestChe
 
 record PullRequestChecksSummary(int Number, string HeadSha, ChecksStatus Checks);
 
+record ShipWeekLoadResult(ShipWeekResponse? Response, IReadOnlyDictionary<string, string[]> ValidationErrors)
+{
+    public static ShipWeekLoadResult Success(ShipWeekResponse response) => new(response, new Dictionary<string, string[]>());
+
+    public static ShipWeekLoadResult ValidationProblem(string field, string message) =>
+        new(null, new Dictionary<string, string[]> { [field] = [message] });
+}
+
+record ShipWeekResponse(
+    string Repository,
+    string Milestone,
+    string ReleaseBranch,
+    IReadOnlyList<ShipWeekPullRequestSummary> PullRequests,
+    IReadOnlyList<ShipWeekIssueSummary> Issues);
+
+record ShipWeekPullRequestSummary(PullRequestSummary PullRequest, ShipWeekReleaseScope ReleaseScope);
+
+record ShipWeekReleaseScope(
+    bool InMilestone,
+    bool TargetsReleaseBranch,
+    bool ReleaseBranchException,
+    IReadOnlyList<int> MilestoneIssueNumbers);
+
+record ShipWeekIssueSummary(
+    string Repository,
+    int Number,
+    string Title,
+    string HtmlUrl,
+    string Author,
+    IReadOnlyList<string> Labels,
+    IReadOnlyList<string> Assignees,
+    string? Milestone,
+    DateTimeOffset UpdatedAt,
+    IReadOnlyList<int> LinkedOpenPullRequests)
+{
+    public static ShipWeekIssueSummary FromDto(
+        RepositoryName repositoryName,
+        GitHubIssueDto issue,
+        IReadOnlyList<int> linkedOpenPullRequests) =>
+        new(
+            repositoryName.ToString(),
+            issue.Number,
+            issue.Title ?? "",
+            issue.HtmlUrl ?? "",
+            issue.User?.Login ?? "unknown",
+            issue.Labels
+                .Select(label => label.Name)
+                .Where(label => !string.IsNullOrWhiteSpace(label))
+                .Select(label => label!)
+                .ToArray(),
+            issue.Assignees
+                .Select(assignee => assignee.Login)
+                .Where(assignee => !string.IsNullOrWhiteSpace(assignee))
+                .Select(assignee => assignee!)
+                .ToArray(),
+            issue.Milestone?.Title,
+            issue.UpdatedAt,
+            linkedOpenPullRequests);
+}
+
 record PullRequestSummary(
     int Number,
     string Title,
@@ -62,6 +122,7 @@ record PullRequestSummary(
     int ChangedFiles,
     DateTimeOffset? LastCommitAt,
     string? HeadSha,
+    string? BaseRef,
     ReviewStatus Review,
     ChecksStatus Checks)
 {
@@ -94,6 +155,7 @@ record PullRequestSummary(
             pullRequest.ChangedFiles,
             null,
             pullRequest.Head?.Sha,
+            pullRequest.Base?.Ref,
             ReviewStatus.Waiting,
             pullRequest.State?.Equals("open", StringComparison.OrdinalIgnoreCase) is true
                 && !string.IsNullOrEmpty(pullRequest.Head?.Sha)
@@ -436,9 +498,14 @@ record TimelineItem(
 [JsonSerializable(typeof(GitHubCheckRunsResponseDto))]
 [JsonSerializable(typeof(GitHubCombinedStatusDto))]
 [JsonSerializable(typeof(GitHubErrorDto))]
+[JsonSerializable(typeof(GitHubBranchDto))]
+[JsonSerializable(typeof(GitHubBranchDto[]))]
+[JsonSerializable(typeof(GitHubGitReferenceDto[]))]
 [JsonSerializable(typeof(GitHubIssueDto))]
+[JsonSerializable(typeof(GitHubIssueDto[]))]
 [JsonSerializable(typeof(GitHubIssuePullRequestDto))]
 [JsonSerializable(typeof(GitHubMilestoneDto))]
+[JsonSerializable(typeof(GitHubMilestoneDto[]))]
 [JsonSerializable(typeof(GitHubPullRequestCommitDto[]))]
 [JsonSerializable(typeof(GitHubPullRequestDto))]
 [JsonSerializable(typeof(GitHubPullRequestDto[]))]
@@ -470,7 +537,18 @@ sealed class GitHubTeamDto
 
 sealed class GitHubMilestoneDto
 {
+    public int Number { get; init; }
     public string? Title { get; init; }
+}
+
+sealed class GitHubBranchDto
+{
+    public string? Name { get; init; }
+}
+
+sealed class GitHubGitReferenceDto
+{
+    public string? Ref { get; init; }
 }
 
 sealed class GitHubIssuePullRequestDto
@@ -482,9 +560,14 @@ sealed class GitHubIssueDto
 {
     public int Number { get; init; }
     public string? Title { get; init; }
+    public string? State { get; init; }
+    public GitHubActorDto? User { get; init; }
     public string? HtmlUrl { get; init; }
     public string? RepositoryUrl { get; init; }
+    public DateTimeOffset CreatedAt { get; init; }
+    public DateTimeOffset UpdatedAt { get; init; }
     public GitHubLabelDto[] Labels { get; init; } = [];
+    public GitHubActorDto[] Assignees { get; init; } = [];
     public GitHubMilestoneDto? Milestone { get; init; }
     public GitHubIssuePullRequestDto? PullRequest { get; init; }
 }
@@ -510,6 +593,7 @@ sealed class GitHubPullRequestDto
     public int Deletions { get; init; }
     public int ChangedFiles { get; init; }
     public GitHubPullRequestRefDto? Head { get; init; }
+    public GitHubPullRequestRefDto? Base { get; init; }
     public string? MergeableState { get; init; }
 }
 

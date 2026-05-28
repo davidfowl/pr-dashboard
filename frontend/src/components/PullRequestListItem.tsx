@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { CheckState, PullRequestSummary } from '../types';
+import type { CheckState, LinkedIssueSummary, PullRequestSummary } from '../types';
 import { formatRelative } from '../utils/format';
 import PullRequestSignalPills from './PullRequestSignalPills';
 import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
@@ -9,6 +9,7 @@ type PullRequestListItemProps = {
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest?: (repository: string, pullRequest: PullRequestSummary) => void;
   signalProps?: Omit<PullRequestSignalPillsProps, 'pullRequest'>;
+  linkedIssues?: LinkedIssueSummary[];
 };
 
 const checkBadgeGlyphs: Record<Exclude<CheckState, 'none'>, { glyph: string; label: string }> = {
@@ -23,6 +24,7 @@ function PullRequestListItem({
   onSelectPullRequest,
   onVisiblePullRequest,
   signalProps,
+  linkedIssues = [],
 }: PullRequestListItemProps) {
   const itemRef = useRef<HTMLButtonElement | null>(null);
   const checksState = pullRequest.checks?.state;
@@ -93,6 +95,22 @@ function PullRequestListItem({
         {pullRequest.author} · updated {formatRelative(pullRequest.updatedAt)}
       </span>
       <PullRequestSignalPills pullRequest={pullRequest} {...signalProps} />
+      {linkedIssues.length > 0 && (
+        <span className="attention-pr-linked-issues" aria-label="Linked issues">
+          {linkedIssues.slice(0, 3).map((issue) => (
+            <a
+              key={`${issue.repository}#${issue.number}`}
+              href={issue.htmlUrl}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(event) => event.stopPropagation()}
+              title={`${issue.repository}#${issue.number}: ${issue.title}`}
+            >
+              issue #{issue.number}
+            </a>
+          ))}
+        </span>
+      )}
     </button>
   );
 }

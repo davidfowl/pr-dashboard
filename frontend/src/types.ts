@@ -15,6 +15,8 @@ export type AuthStatus = {
 
 export type PullState = 'open' | 'closed' | 'all';
 
+export type DashboardMode = 'review' | 'ship';
+
 export type PullRequestSummary = {
   repository: string;
   number: number;
@@ -35,6 +37,7 @@ export type PullRequestSummary = {
   changedFiles: number;
   lastCommitAt?: string | null;
   headSha?: string | null;
+  baseRef?: string | null;
   review: ReviewStatus;
   checks: ChecksStatus;
 };
@@ -98,6 +101,54 @@ export type PullRequestChecksResponse = {
     headSha: string;
     checks: ChecksStatus;
   }[];
+};
+
+export type ShipWeekResponse = {
+  repository: string;
+  milestone: string;
+  releaseBranch: string;
+  pullRequests: ShipWeekPullRequestSummary[];
+  issues: ShipWeekIssueSummary[];
+};
+
+export type ShipWeekPullRequestSummary = {
+  pullRequest: PullRequestSummary;
+  releaseScope: ShipWeekReleaseScope;
+};
+
+export type ShipWeekReleaseScope = {
+  inMilestone: boolean;
+  targetsReleaseBranch: boolean;
+  releaseBranchException: boolean;
+  milestoneIssueNumbers: number[];
+};
+
+export type ShipWeekIssueSummary = {
+  repository: string;
+  number: number;
+  title: string;
+  htmlUrl: string;
+  author: string;
+  labels: string[];
+  assignees: string[];
+  milestone?: string | null;
+  updatedAt: string;
+  linkedOpenPullRequests: number[];
+};
+
+export type ShipWeekScopeGroup = {
+  id: 'milestone-prs' | 'release-branch-prs' | 'release-branch-watchlist';
+  label: string;
+  summary: string;
+  tone: 'success' | 'warning' | 'danger' | 'accent';
+  pullRequests: ShipWeekPullRequestSummary[];
+};
+
+export type ShipWeekIssueBucket = {
+  label: string;
+  summary: string;
+  tone: 'success' | 'warning' | 'danger' | 'accent';
+  issues: ShipWeekIssueSummary[];
 };
 
 export type TimelineItem = {

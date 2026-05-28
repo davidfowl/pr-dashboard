@@ -49,77 +49,383 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 .Where(pullRequest => !pullRequest.Draft)
                 .ToArray();
 
-            var pullRequests = activePullRequestDtos
-                .Select(PullRequestSummary.FromDto)
-                .ToArray();
-
-            var reviewTasks = pullRequests.ToDictionary(
-                pullRequest => pullRequest.Number,
-                pullRequest => GetReviewStatusAsync(repositoryName, pullRequest.Number, cancellationToken));
-            var linkedIssueTasks = activePullRequestDtos.ToDictionary(
-                pullRequest => pullRequest.Number,
-                pullRequest => GetLinkedIssuesAsync(repositoryName, pullRequest.Body, cancellationToken));
-
-            await Task.WhenAll(reviewTasks.Values);
-            await Task.WhenAll(linkedIssueTasks.Values);
-
-            var reviewsByPullRequest = reviewTasks.ToDictionary(
-                pair => pair.Key,
-                pair => pair.Value.Result);
-            var detailTasks = pullRequests
-                .Where(pullRequest => reviewsByPullRequest[pullRequest.Number].State == "waiting")
-                .ToDictionary(
-                    pullRequest => pullRequest.Number,
-                    pullRequest => GetPullRequestDetailsOrNullAsync(repositoryName, pullRequest.Number, cancellationToken));
-            var lastCommitTasks = pullRequests
-                .Where(pullRequest =>
-                    reviewsByPullRequest[pullRequest.Number] is { LastReviewedAt: not null } review
-                    && (review.State == "reviewed" || review.State == "changes_requested"))
-                .ToDictionary(
-                    pullRequest => pullRequest.Number,
-                    pullRequest => GetLastCommitAtAsync(repositoryName, pullRequest.Number, cancellationToken));
-
-            await Task.WhenAll(detailTasks.Values);
-            await Task.WhenAll(lastCommitTasks.Values);
-
-            var detailsByPullRequest = new Dictionary<int, PullRequestDetails?>(detailTasks.Count);
-            foreach (var (number, task) in detailTasks)
-            {
-                detailsByPullRequest[number] = await task;
-            }
-
-            var lastCommitByPullRequest = new Dictionary<int, DateTimeOffset?>(lastCommitTasks.Count);
-            foreach (var (number, task) in lastCommitTasks)
-            {
-                lastCommitByPullRequest[number] = await task;
-            }
-
-            var linkedIssuesByPullRequest = new Dictionary<int, IReadOnlyList<LinkedIssueSummary>>(linkedIssueTasks.Count);
-            foreach (var (number, task) in linkedIssueTasks)
-            {
-                linkedIssuesByPullRequest[number] = await task;
-            }
-
-            return pullRequests
-                .Select(pullRequest =>
-                {
-                    detailsByPullRequest.TryGetValue(pullRequest.Number, out var details);
-                    lastCommitByPullRequest.TryGetValue(pullRequest.Number, out var lastCommitAt);
-                    return pullRequest with
-                    {
-                        LinkedIssues = linkedIssuesByPullRequest[pullRequest.Number],
-                        CommitCount = details?.CommitCount ?? pullRequest.CommitCount,
-                        Additions = details?.Additions ?? pullRequest.Additions,
-                        Deletions = details?.Deletions ?? pullRequest.Deletions,
-                        ChangedFiles = details?.ChangedFiles ?? pullRequest.ChangedFiles,
-                        LastCommitAt = lastCommitAt,
-                        Review = reviewsByPullRequest[pullRequest.Number],
-                        Checks = pullRequest.Checks
-                    };
-                })
-                .ToArray();
+            return await CreatePullRequestSummariesAsync(repositoryName, activePullRequestDtos, cancellationToken);
         }) ?? [];
     }
+
+    public async Task<ShipWeekLoadResult> GetShipWeekAsync(
+        RepositoryName repositoryName,
+        string milestoneTitle,
+        string? releaseBranch,
+        CancellationToken cancellationToken)
+    {
+        var normalizedMilestoneTitle = milestoneTitle.Trim();
+        var requestedReleaseBranch = releaseBranch?.Trim();
+        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
+        var cacheKey = $"ship-week:{authCacheKey}:{repositoryName}:{normalizedMilestoneTitle}:{requestedReleaseBranch ?? "latest-release"}";
+        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheDuration;
+
+            var milestone = await GetMilestoneByTitleAsync(repositoryName, normalizedMilestoneTitle, cancellationToken);
+            if (milestone is null)
+            {
+                return ShipWeekLoadResult.ValidationProblem(
+                    "milestone",
+                    $"Milestone '{normalizedMilestoneTitle}' was not found in {repositoryName}.");
+            }
+
+            var normalizedReleaseBranch = string.IsNullOrWhiteSpace(requestedReleaseBranch)
+                ? await GetLatestReleaseBranchAsync(repositoryName, cancellationToken)
+                : requestedReleaseBranch;
+
+            if (string.IsNullOrWhiteSpace(normalizedReleaseBranch))
+            {
+                return ShipWeekLoadResult.ValidationProblem(
+                    "releaseBranch",
+                    $"No release/* branches were found in {repositoryName}.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(requestedReleaseBranch)
+                && !await BranchExistsAsync(repositoryName, normalizedReleaseBranch, cancellationToken))
+            {
+                return ShipWeekLoadResult.ValidationProblem(
+                    "releaseBranch",
+                    $"Branch '{normalizedReleaseBranch}' was not found in {repositoryName}.");
+            }
+
+            var milestoneIssuesTask = GetOpenMilestoneIssuesAsync(repositoryName, milestone.Number, cancellationToken);
+            var releaseBranchPullRequestsTask = GetOpenPullRequestsByBaseAsync(repositoryName, normalizedReleaseBranch, cancellationToken);
+            await Task.WhenAll(milestoneIssuesTask, releaseBranchPullRequestsTask);
+
+            var milestoneIssues = await milestoneIssuesTask;
+            var releaseBranchPullRequestDtos = await releaseBranchPullRequestsTask;
+            var pullRequestDtosByNumber = releaseBranchPullRequestDtos
+                .GroupBy(pullRequest => pullRequest.Number)
+                .ToDictionary(group => group.Key, group => group.First());
+            var releaseBranchPullRequestNumbers = pullRequestDtosByNumber.Keys.ToHashSet();
+            var milestonePullRequestNumbers = milestoneIssues
+                .Where(issue => issue.PullRequest is not null)
+                .Select(issue => issue.Number)
+                .ToHashSet();
+
+            var missingMilestonePullRequestTasks = milestonePullRequestNumbers
+                .Where(number => !pullRequestDtosByNumber.ContainsKey(number))
+                .ToDictionary(
+                    number => number,
+                    number => GetPullRequestDtoOrNullAsync(repositoryName, number, cancellationToken));
+
+            await Task.WhenAll(missingMilestonePullRequestTasks.Values);
+
+            foreach (var (number, task) in missingMilestonePullRequestTasks)
+            {
+                if (await task is { } pullRequest)
+                {
+                    pullRequestDtosByNumber[number] = pullRequest;
+                }
+            }
+
+            var pullRequestSummaries = await CreatePullRequestSummariesAsync(
+                repositoryName,
+                pullRequestDtosByNumber.Values
+                    .OrderBy(pullRequest => pullRequest.CreatedAt)
+                    .ToArray(),
+                cancellationToken);
+
+            var nonPullRequestIssues = milestoneIssues
+                .Where(issue => issue.PullRequest is null)
+                .OrderByDescending(issue => issue.UpdatedAt)
+                .ToArray();
+            var milestoneIssueNumbers = nonPullRequestIssues
+                .Select(issue => issue.Number)
+                .ToHashSet();
+            var linkedOpenPullRequestsByIssue = CreateLinkedOpenPullRequestsByIssue(
+                repositoryName,
+                normalizedMilestoneTitle,
+                pullRequestSummaries,
+                milestoneIssueNumbers);
+            var shipWeekIssues = nonPullRequestIssues
+                .Select(issue =>
+                {
+                    var linkedOpenPullRequests = linkedOpenPullRequestsByIssue.TryGetValue(issue.Number, out var linked)
+                        ? linked
+                        : [];
+                    return ShipWeekIssueSummary.FromDto(repositoryName, issue, linkedOpenPullRequests);
+                })
+                .ToArray();
+
+            var shipWeekPullRequests = pullRequestSummaries
+                .Select(pullRequest =>
+                {
+                    var linkedMilestoneIssueNumbers = pullRequest.LinkedIssues
+                        .Where(issue => RepositoryMatches(issue.Repository, repositoryName)
+                            && (MilestoneTitleMatches(issue.Milestone, normalizedMilestoneTitle)
+                                || milestoneIssueNumbers.Contains(issue.Number)))
+                        .Select(issue => issue.Number)
+                        .Distinct()
+                        .OrderBy(number => number)
+                        .ToArray();
+                    var inMilestone = milestonePullRequestNumbers.Contains(pullRequest.Number)
+                        || MilestoneTitleMatches(pullRequest.Milestone, normalizedMilestoneTitle)
+                        || linkedMilestoneIssueNumbers.Length > 0;
+                    var targetsReleaseBranch = releaseBranchPullRequestNumbers.Contains(pullRequest.Number)
+                        || string.Equals(pullRequest.BaseRef, normalizedReleaseBranch, StringComparison.OrdinalIgnoreCase);
+
+                    return new ShipWeekPullRequestSummary(
+                        pullRequest,
+                        new ShipWeekReleaseScope(
+                            InMilestone: inMilestone,
+                            TargetsReleaseBranch: targetsReleaseBranch,
+                            ReleaseBranchException: targetsReleaseBranch && !inMilestone,
+                            MilestoneIssueNumbers: linkedMilestoneIssueNumbers));
+                })
+                .OrderByDescending(item => item.ReleaseScope.ReleaseBranchException)
+                .ThenBy(item => item.PullRequest.CreatedAt)
+                .ToArray();
+
+            return ShipWeekLoadResult.Success(new ShipWeekResponse(
+                repositoryName.ToString(),
+                normalizedMilestoneTitle,
+                normalizedReleaseBranch,
+                shipWeekPullRequests,
+                shipWeekIssues));
+        }) ?? ShipWeekLoadResult.ValidationProblem("shipWeek", "Unable to load ship-week data.");
+    }
+
+    private async Task<IReadOnlyList<PullRequestSummary>> CreatePullRequestSummariesAsync(
+        RepositoryName repositoryName,
+        IReadOnlyList<GitHubPullRequestDto> pullRequestDtos,
+        CancellationToken cancellationToken)
+    {
+        var uniquePullRequestDtos = pullRequestDtos
+            .GroupBy(pullRequest => pullRequest.Number)
+            .Select(group => group.First())
+            .ToArray();
+        var pullRequests = uniquePullRequestDtos
+            .Select(PullRequestSummary.FromDto)
+            .ToArray();
+
+        if (pullRequests.Length == 0)
+        {
+            return [];
+        }
+
+        var reviewTasks = pullRequests.ToDictionary(
+            pullRequest => pullRequest.Number,
+            pullRequest => GetReviewStatusAsync(repositoryName, pullRequest.Number, cancellationToken));
+        var linkedIssueTasks = uniquePullRequestDtos.ToDictionary(
+            pullRequest => pullRequest.Number,
+            pullRequest => GetLinkedIssuesAsync(repositoryName, pullRequest.Body, cancellationToken));
+
+        await Task.WhenAll(reviewTasks.Values);
+        await Task.WhenAll(linkedIssueTasks.Values);
+
+        var reviewsByPullRequest = reviewTasks.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.Result);
+        var detailTasks = pullRequests
+            .Where(pullRequest => reviewsByPullRequest[pullRequest.Number].State == "waiting")
+            .ToDictionary(
+                pullRequest => pullRequest.Number,
+                pullRequest => GetPullRequestDetailsOrNullAsync(repositoryName, pullRequest.Number, cancellationToken));
+        var lastCommitTasks = pullRequests
+            .Where(pullRequest =>
+                reviewsByPullRequest[pullRequest.Number] is { LastReviewedAt: not null } review
+                && (review.State == "reviewed" || review.State == "changes_requested"))
+            .ToDictionary(
+                pullRequest => pullRequest.Number,
+                pullRequest => GetLastCommitAtAsync(repositoryName, pullRequest.Number, cancellationToken));
+
+        await Task.WhenAll(detailTasks.Values);
+        await Task.WhenAll(lastCommitTasks.Values);
+
+        var detailsByPullRequest = new Dictionary<int, PullRequestDetails?>(detailTasks.Count);
+        foreach (var (number, task) in detailTasks)
+        {
+            detailsByPullRequest[number] = await task;
+        }
+
+        var lastCommitByPullRequest = new Dictionary<int, DateTimeOffset?>(lastCommitTasks.Count);
+        foreach (var (number, task) in lastCommitTasks)
+        {
+            lastCommitByPullRequest[number] = await task;
+        }
+
+        var linkedIssuesByPullRequest = new Dictionary<int, IReadOnlyList<LinkedIssueSummary>>(linkedIssueTasks.Count);
+        foreach (var (number, task) in linkedIssueTasks)
+        {
+            linkedIssuesByPullRequest[number] = await task;
+        }
+
+        return pullRequests
+            .Select(pullRequest =>
+            {
+                detailsByPullRequest.TryGetValue(pullRequest.Number, out var details);
+                lastCommitByPullRequest.TryGetValue(pullRequest.Number, out var lastCommitAt);
+                return pullRequest with
+                {
+                    LinkedIssues = linkedIssuesByPullRequest[pullRequest.Number],
+                    CommitCount = details?.CommitCount ?? pullRequest.CommitCount,
+                    Additions = details?.Additions ?? pullRequest.Additions,
+                    Deletions = details?.Deletions ?? pullRequest.Deletions,
+                    ChangedFiles = details?.ChangedFiles ?? pullRequest.ChangedFiles,
+                    LastCommitAt = lastCommitAt,
+                    Review = reviewsByPullRequest[pullRequest.Number],
+                    Checks = pullRequest.Checks
+                };
+            })
+            .ToArray();
+    }
+
+    private async Task<GitHubMilestoneDto?> GetMilestoneByTitleAsync(
+        RepositoryName repositoryName,
+        string milestoneTitle,
+        CancellationToken cancellationToken)
+    {
+        var milestones = await SendPagedGitHubRequestAsync(
+            $"repos/{repositoryName.Owner}/{repositoryName.Name}/milestones?state=all&per_page=100",
+            GitHubJsonSerializerContext.Default.GitHubMilestoneDtoArray,
+            cancellationToken);
+        return milestones.FirstOrDefault(milestone =>
+            string.Equals(milestone.Title?.Trim(), milestoneTitle, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task<string?> GetLatestReleaseBranchAsync(
+        RepositoryName repositoryName,
+        CancellationToken cancellationToken)
+    {
+        var references = await SendGitHubRequestAsync(
+            $"repos/{repositoryName.Owner}/{repositoryName.Name}/git/matching-refs/heads/release/",
+            GitHubJsonSerializerContext.Default.GitHubGitReferenceDtoArray,
+            cancellationToken);
+
+        return references
+            .Select(reference => TryGetBranchName(reference.Ref))
+            .Where(branch => branch is not null)
+            .Select(branch => branch!)
+            .OrderByDescending(ReleaseBranchSortKey)
+            .FirstOrDefault();
+    }
+
+    private static string? TryGetBranchName(string? gitReference)
+    {
+        const string branchPrefix = "refs/heads/";
+        return gitReference?.StartsWith(branchPrefix, StringComparison.OrdinalIgnoreCase) is true
+            ? gitReference[branchPrefix.Length..]
+            : null;
+    }
+
+    private static (int Major, int Minor, int Patch, string Name) ReleaseBranchSortKey(string branch)
+    {
+        var suffix = branch["release/".Length..];
+        var versionParts = suffix.Split(['.', '-', '_'], StringSplitOptions.RemoveEmptyEntries);
+        return (
+            Major: ParseReleaseBranchVersionPart(versionParts, 0),
+            Minor: ParseReleaseBranchVersionPart(versionParts, 1),
+            Patch: ParseReleaseBranchVersionPart(versionParts, 2),
+            Name: branch);
+    }
+
+    private static int ParseReleaseBranchVersionPart(string[] versionParts, int index) =>
+        index < versionParts.Length && int.TryParse(versionParts[index], out var value) ? value : -1;
+
+    private async Task<bool> BranchExistsAsync(
+        RepositoryName repositoryName,
+        string branch,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await SendGitHubRequestAsync(
+                $"repos/{repositoryName.Owner}/{repositoryName.Name}/branches/{Uri.EscapeDataString(branch)}",
+                GitHubJsonSerializerContext.Default.GitHubBranchDto,
+                cancellationToken);
+            return true;
+        }
+        catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+    }
+
+    private async Task<IReadOnlyList<GitHubIssueDto>> GetOpenMilestoneIssuesAsync(
+        RepositoryName repositoryName,
+        int milestoneNumber,
+        CancellationToken cancellationToken) =>
+        await SendPagedGitHubRequestAsync(
+            $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues?state=open&milestone={milestoneNumber}&per_page=100",
+            GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
+            cancellationToken);
+
+    private async Task<IReadOnlyList<GitHubPullRequestDto>> GetOpenPullRequestsByBaseAsync(
+        RepositoryName repositoryName,
+        string baseRef,
+        CancellationToken cancellationToken) =>
+        await SendPagedGitHubRequestAsync(
+            $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls?state=open&base={Uri.EscapeDataString(baseRef)}&sort=created&direction=asc&per_page={PullRequestPageSize}",
+            GitHubJsonSerializerContext.Default.GitHubPullRequestDtoArray,
+            cancellationToken);
+
+    private async Task<GitHubPullRequestDto?> GetPullRequestDtoOrNullAsync(
+        RepositoryName repositoryName,
+        int number,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await SendGitHubRequestAsync(
+                $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}",
+                GitHubJsonSerializerContext.Default.GitHubPullRequestDto,
+                cancellationToken);
+        }
+        catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    private static IReadOnlyDictionary<int, IReadOnlyList<int>> CreateLinkedOpenPullRequestsByIssue(
+        RepositoryName repositoryName,
+        string milestoneTitle,
+        IReadOnlyList<PullRequestSummary> pullRequests,
+        IReadOnlySet<int> milestoneIssueNumbers)
+    {
+        var linkedOpenPullRequestsByIssue = new Dictionary<int, List<int>>();
+
+        foreach (var pullRequest in pullRequests)
+        {
+            foreach (var issue in pullRequest.LinkedIssues)
+            {
+                if (!RepositoryMatches(issue.Repository, repositoryName)
+                    || (!MilestoneTitleMatches(issue.Milestone, milestoneTitle)
+                        && !milestoneIssueNumbers.Contains(issue.Number)))
+                {
+                    continue;
+                }
+
+                if (!linkedOpenPullRequestsByIssue.TryGetValue(issue.Number, out var linkedPullRequests))
+                {
+                    linkedPullRequests = [];
+                    linkedOpenPullRequestsByIssue[issue.Number] = linkedPullRequests;
+                }
+
+                linkedPullRequests.Add(pullRequest.Number);
+            }
+        }
+
+        return linkedOpenPullRequestsByIssue.ToDictionary(
+            pair => pair.Key,
+            pair => (IReadOnlyList<int>)pair.Value
+                .Distinct()
+                .OrderBy(number => number)
+                .ToArray());
+    }
+
+    private static bool RepositoryMatches(string repository, RepositoryName repositoryName) =>
+        repository.Equals(repositoryName.ToString(), StringComparison.OrdinalIgnoreCase);
+
+    private static bool MilestoneTitleMatches(string? milestoneTitle, string expectedMilestoneTitle) =>
+        string.Equals(milestoneTitle?.Trim(), expectedMilestoneTitle, StringComparison.OrdinalIgnoreCase);
 
     public async Task<IReadOnlyList<PullRequestChecksSummary>> GetPullRequestChecksAsync(
         RepositoryName repositoryName,

@@ -33,6 +33,43 @@ public static class GitHubPullRequestRoutes
             return Results.Ok(new PullRequestListResponse(repositoryName.ToString(), pulls));
         });
 
+        api.MapGet("ship-week", async (
+            [FromQuery] string? repo,
+            [FromQuery] string? milestone,
+            [FromQuery] string? releaseBranch,
+            GitHubPullRequestService pullRequests,
+            CancellationToken cancellationToken) =>
+        {
+            if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
+                });
+            }
+
+            var normalizedMilestone = milestone?.Trim();
+            if (string.IsNullOrWhiteSpace(normalizedMilestone))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["milestone"] = ["Milestone is required, for example 13.4."]
+                });
+            }
+
+            var result = await pullRequests.GetShipWeekAsync(
+                repositoryName,
+                normalizedMilestone,
+                releaseBranch?.Trim(),
+                cancellationToken);
+            if (result.Response is null)
+            {
+                return Results.ValidationProblem(result.ValidationErrors);
+            }
+
+            return Results.Ok(result.Response);
+        });
+
         api.MapPost("pulls/checks", async (
             [FromQuery] string? repo,
             PullRequestChecksRequest request,
