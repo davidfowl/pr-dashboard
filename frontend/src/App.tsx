@@ -12,6 +12,7 @@ import {
   defaultShipWeekRepoInput,
   defaultShipWeekRepos,
   defaultShipWeekReleaseBranch,
+  docsFromCodeLabel,
   docsFromCodeRepository,
 } from './constants';
 import type {
@@ -675,6 +676,7 @@ async function loadRepositoryShipWeek(repository: string, milestone: string, rel
 
 async function loadDocsFromCodePullRequests(repository: string) {
   const query = new URLSearchParams({ repo: repository, state: 'open' });
+  query.set('label', docsFromCodeLabel);
   const response = await fetch(`/api/github/pulls?${query}`);
   const data = await readJson<PullRequestListResponse>(response);
   return data.pullRequests

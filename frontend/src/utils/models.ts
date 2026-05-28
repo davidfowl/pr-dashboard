@@ -692,7 +692,11 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
     signals.push({ label: formatCount(pullRequest.review.commentedReviewCount, 'review comment'), tone: 'muted' });
   }
 
-  for (const label of pullRequest.labels.slice(0, 2)) {
+  const computedLabels = isGeneratedDocsPullRequest(pullRequest)
+    ? pullRequest.labels.filter((label) => label.toLowerCase() !== docsFromCodeLabel)
+    : pullRequest.labels;
+
+  for (const label of computedLabels.slice(0, 2)) {
     signals.push({ label, tone: 'accent' });
   }
 

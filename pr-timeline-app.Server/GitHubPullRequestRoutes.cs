@@ -9,6 +9,7 @@ public static class GitHubPullRequestRoutes
         api.MapGet("pulls", async (
             [FromQuery] string? repo,
             [FromQuery] string? state,
+            [FromQuery] string? label,
             GitHubPullRequestService pullRequests,
             CancellationToken cancellationToken) =>
         {
@@ -29,7 +30,9 @@ public static class GitHubPullRequestRoutes
                 });
             }
 
-            var pulls = await pullRequests.GetPullRequestsAsync(repositoryName, normalizedState, cancellationToken);
+            var pulls = string.IsNullOrWhiteSpace(label)
+                ? await pullRequests.GetPullRequestsAsync(repositoryName, normalizedState, cancellationToken)
+                : await pullRequests.GetPullRequestsByLabelAsync(repositoryName, normalizedState, label.Trim(), cancellationToken);
             return Results.Ok(new PullRequestListResponse(repositoryName.ToString(), pulls));
         });
 
