@@ -984,9 +984,9 @@ select:focus-visible {
   margin-top: 0.65rem;
 }
 
-.attention-list button {
+.attention-pr-row {
   display: grid;
-  grid-template-columns: 5rem minmax(10rem, 14rem) minmax(0, 1fr) minmax(8rem, auto);
+  grid-template-columns: 5rem minmax(10rem, 14rem) minmax(0, 1fr) minmax(8rem, auto) auto;
   column-gap: 0.75rem;
   row-gap: 0.35rem;
   align-items: start;
@@ -997,10 +997,9 @@ select:focus-visible {
   color: inherit;
   background: transparent;
   text-align: left;
-  cursor: pointer;
 }
 
-.attention-list button:hover {
+.attention-pr-row:hover .attention-pr-title {
   color: var(--text);
 }
 
@@ -1010,15 +1009,21 @@ select:focus-visible {
   font-weight: 800;
 }
 
-.attention-list strong {
+.attention-pr-title {
   grid-column: 3;
   grid-row: 1;
   overflow: hidden;
   color: var(--text);
   font-size: 0.8rem;
   font-weight: 600;
+  text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.attention-pr-title:hover {
+  color: white;
+  text-decoration: underline;
 }
 
 .attention-pr-number {
@@ -1083,8 +1088,46 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.attention-pr-actions {
+  grid-column: 5;
+  grid-row: 1 / span 2;
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.attention-pr-actions a,
+.attention-pr-actions button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.attention-pr-github-link {
+  color: #052e2b;
+  background: var(--success);
+}
+
+.attention-pr-timeline-button {
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.attention-pr-actions a:hover,
+.attention-pr-actions button:hover {
+  color: var(--text);
+  background: var(--panel-strong);
+}
+
 .attention-pr-signals {
-  grid-column: 3 / 5;
+  grid-column: 3 / 6;
   grid-row: 2;
   display: flex;
   flex-wrap: wrap;
@@ -1092,7 +1135,7 @@ select:focus-visible {
 }
 
 .attention-pr-linked-issues {
-  grid-column: 3 / 5;
+  grid-column: 3 / 6;
   grid-row: 3;
   display: flex;
   flex-wrap: wrap;
@@ -2040,8 +2083,8 @@ select:focus-visible {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .attention-list button {
-    grid-template-columns: auto auto 1fr;
+  .attention-pr-row {
+    grid-template-columns: auto auto minmax(0, 1fr);
     gap: 0.45rem;
     align-items: start;
   }
@@ -2051,8 +2094,9 @@ select:focus-visible {
     grid-template-columns: 1fr;
   }
 
-  .attention-list strong,
+  .attention-pr-title,
   .attention-pr-meta,
+  .attention-pr-actions,
   .attention-pr-signals,
   .attention-pr-linked-issues {
     grid-column: 3;
@@ -2063,12 +2107,17 @@ select:focus-visible {
     text-align: left;
   }
 
-  .attention-pr-signals {
+  .attention-pr-actions {
     grid-row: 3;
+    justify-content: flex-start;
+  }
+
+  .attention-pr-signals {
+    grid-row: 4;
   }
 
   .attention-pr-linked-issues {
-    grid-row: 4;
+    grid-row: 5;
   }
 
   .timeline-header,
