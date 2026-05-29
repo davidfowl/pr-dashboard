@@ -4,7 +4,9 @@
 @import '@fontsource/poppins/700.css';
 
 :root {
-  font-family: 'Poppins', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family:
+    Poppins, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    sans-serif;
   line-height: 1.5;
   font-weight: 400;
 
