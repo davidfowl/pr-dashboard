@@ -566,8 +566,11 @@ function App() {
     <div className="app-shell" style={{ '--repo-accent': repoAccent } as CSSProperties}>
       <header className="hero">
         <div>
-          <p className="eyebrow">Aspire team focus</p>
-          <h1>Aspire PR focus</h1>
+          <div className="hero-brand">
+            <img className="hero-brand-logo" src="/aspire-logo-light-horizontal.svg" alt="Aspire" />
+            <p className="eyebrow">Team focus</p>
+          </div>
+          <h1>PR focus</h1>
           <div className="hero-mode-row">
             <div className="mode-toggle" role="group" aria-label="Dashboard mode">
               <button

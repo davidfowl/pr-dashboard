@@ -1,19 +1,65 @@
 :root {
-  color: #f0f6fc;
-  background: #0d1117;
-  --bg: #0d1117;
-  --panel: #161b22;
-  --panel-strong: #21262d;
-  --border: #30363d;
-  --muted: #8b949e;
-  --text: #f0f6fc;
-  --accent: #2f81f7;
-  --accent-strong: #58a6ff;
-  --success: #3fb950;
-  --warning: #d29922;
-  --danger: #f85149;
-  --done: #a371f7;
-  --shadow: none;
+  color-scheme: dark;
+  --brand-primary: #7455dd;
+  --brand-purple: #512bd4;
+  --brand-secondary: #b9aaee;
+  --brand-muted: #dcd5f6;
+  --brand-grey: #dce0e8;
+  --brand-black: #1f1e33;
+  --brand-white: #ffffff;
+  --accent-magenta: #b30f87;
+  --accent-flamingo: #f65163;
+  --accent-blue: #0078d7;
+  --accent-cyan: #0b7e84;
+  --accent-sky: #1f8fff;
+  --accent-mint: #1ea98c;
+  --accent-emerald: #2eb67d;
+  --accent-yellow: #f0c94b;
+  --bg:
+    radial-gradient(circle at top left, rgba(31, 143, 255, 0.16), transparent 24rem),
+    radial-gradient(circle at top right, rgba(185, 170, 238, 0.16), transparent 28rem),
+    radial-gradient(circle at 12% 48%, rgba(81, 43, 212, 0.14), transparent 24rem),
+    radial-gradient(circle at 82% 42%, rgba(30, 169, 140, 0.12), transparent 28rem),
+    linear-gradient(180deg, #17152a 0%, #0f0d1d 100%);
+  --hero-surface:
+    radial-gradient(circle at 18% 24%, rgba(31, 143, 255, 0.18), transparent 18rem),
+    radial-gradient(circle at 82% 18%, rgba(185, 170, 238, 0.18), transparent 22rem),
+    radial-gradient(circle at 52% 100%, rgba(30, 169, 140, 0.14), transparent 24rem),
+    linear-gradient(160deg, #1f1e33 0%, #201947 54%, #101523 100%);
+  --panel: rgba(31, 30, 51, 0.86);
+  --panel-strong: rgba(43, 39, 75, 0.94);
+  --surface-sunken: rgba(18, 16, 35, 0.78);
+  --surface-ink: #0f0d1d;
+  --border: rgba(185, 170, 238, 0.18);
+  --border-strong: rgba(185, 170, 238, 0.3);
+  --hairline: rgba(185, 170, 238, 0.14);
+  --muted: #c8c2df;
+  --body-text: #d9d5ec;
+  --text: var(--brand-white);
+  --accent: var(--brand-primary);
+  --accent-strong: var(--brand-secondary);
+  --success: var(--accent-emerald);
+  --warning: var(--accent-yellow);
+  --danger: var(--accent-flamingo);
+  --done: var(--brand-secondary);
+  --link: #9ed7ff;
+  --on-accent: var(--brand-white);
+  --on-success: #102c25;
+  --on-warning: #332800;
+  --danger-soft: #ffd7de;
+  --muted-wash: rgba(185, 170, 238, 0.1);
+  --accent-wash: rgba(116, 85, 221, 0.16);
+  --sky-wash: rgba(31, 143, 255, 0.14);
+  --success-wash: rgba(46, 182, 125, 0.13);
+  --warning-wash: rgba(240, 201, 75, 0.14);
+  --danger-wash: rgba(246, 81, 99, 0.14);
+  --success-border: rgba(46, 182, 125, 0.5);
+  --warning-border: rgba(240, 201, 75, 0.5);
+  --danger-border: rgba(246, 81, 99, 0.5);
+  --shadow: 0 32px 90px rgba(0, 0, 0, 0.34);
+  --shadow-strong: 0 42px 120px rgba(0, 0, 0, 0.44);
+  color: var(--text);
+  background: #0f0d1d;
 }
 
 * {
@@ -25,6 +71,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   background: var(--bg);
+  color: var(--text);
 }
 
 button,
@@ -38,7 +85,9 @@ a {
   transition:
     border-color 160ms ease,
     color 160ms ease,
-    background-color 160ms ease;
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
 }
 
 button:focus-visible,
@@ -52,16 +101,55 @@ select:focus-visible {
 .app-shell {
   width: 100%;
   min-height: 100vh;
-  padding: 1rem 1.25rem;
+  padding: 1.5rem 1.25rem;
 }
 
 .hero {
+  position: relative;
+  overflow: hidden;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 1rem;
+  gap: 1.25rem;
   max-width: 1440px;
-  margin: 0 auto 1rem;
+  margin: 0 auto 1.35rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 2rem;
+  padding: clamp(1.1rem, 3vw, 1.8rem);
   align-items: center;
+  background: var(--hero-surface);
+  box-shadow: var(--shadow-strong);
+}
+
+.hero::after {
+  position: absolute;
+  right: -7rem;
+  bottom: -9rem;
+  width: 24rem;
+  height: 24rem;
+  border-radius: 999px;
+  background: rgba(116, 85, 221, 0.22);
+  content: '';
+  filter: blur(48px);
+  pointer-events: none;
+}
+
+.hero > * {
+  position: relative;
+  z-index: 1;
+}
+
+.hero-brand {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  margin-bottom: 0.7rem;
+  align-items: center;
+}
+
+.hero-brand-logo {
+  width: auto;
+  height: 2.1rem;
+  filter: drop-shadow(0 12px 24px rgba(0, 0, 0, 0.28));
 }
 
 .hero h1 {
@@ -70,12 +158,13 @@ select:focus-visible {
   font-size: clamp(1.8rem, 3vw, 3rem);
   line-height: 1;
   letter-spacing: -0.04em;
+  text-shadow: 0 12px 36px rgba(0, 0, 0, 0.34);
 }
 
 .hero-copy {
   max-width: 42rem;
   margin: 0.45rem 0 0;
-  color: var(--muted);
+  color: var(--body-text);
   font-size: 0.95rem;
 }
 
@@ -94,7 +183,8 @@ select:focus-visible {
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0.18rem;
-  background: #010409;
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .mode-toggle button {
@@ -110,13 +200,14 @@ select:focus-visible {
 }
 
 .mode-toggle button.selected {
-  color: #052e2b;
-  background: var(--success);
+  color: var(--on-accent);
+  background: linear-gradient(135deg, var(--brand-primary), var(--accent-blue));
+  box-shadow: 0 14px 32px rgba(81, 43, 212, 0.34);
 }
 
 .mode-toggle button:not(.selected):hover {
   color: var(--text);
-  background: var(--panel-strong);
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .mode-status {
@@ -124,25 +215,25 @@ select:focus-visible {
   border-radius: 999px;
   padding: 0.34rem 0.7rem;
   color: var(--muted);
-  background: rgba(139, 148, 158, 0.08);
+  background: var(--muted-wash);
   font-size: 0.74rem;
   font-weight: 800;
 }
 
 .mode-status.ship {
   --mode-status-color: var(--warning);
-  color: #e3b341;
-  background: rgba(210, 153, 34, 0.13);
+  color: var(--warning);
+  background: var(--warning-wash);
 }
 
 .mode-status.regular {
-  --mode-status-color: var(--accent-strong);
-  color: #79c0ff;
-  background: rgba(88, 166, 255, 0.12);
+  --mode-status-color: var(--accent-sky);
+  color: var(--link);
+  background: var(--sky-wash);
 }
 
 .eyebrow {
-  margin: 0 0 0.35rem;
+  margin: 0;
   color: var(--accent-strong);
   font-size: 0.78rem;
   font-weight: 800;
@@ -155,6 +246,7 @@ select:focus-visible {
   border: 1px solid var(--border);
   background: var(--panel);
   box-shadow: var(--shadow);
+  backdrop-filter: blur(20px);
 }
 
 .auth-card {
@@ -164,6 +256,7 @@ select:focus-visible {
   border-radius: 1rem;
   padding: 0.45rem 0.55rem;
   white-space: nowrap;
+  background: rgba(31, 30, 51, 0.78);
 }
 
 .auth-summary {
@@ -183,12 +276,12 @@ select:focus-visible {
 }
 
 .auth-card.ok span {
-  color: #052e2b;
+  color: var(--on-success);
   background: var(--success);
 }
 
 .auth-card.warning span {
-  color: #422006;
+  color: var(--on-warning);
   background: var(--warning);
 }
 
@@ -212,10 +305,15 @@ select:focus-visible {
   border-radius: 999px;
   padding: 0.35rem 0.55rem;
   color: var(--text);
-  background: #0d1117;
+  background: var(--surface-sunken);
   cursor: pointer;
   font-size: 0.72rem;
   font-weight: 800;
+}
+
+.auth-actions button:hover:not(:disabled) {
+  border-color: var(--accent-strong);
+  background: var(--accent-wash);
 }
 
 .auth-actions button:disabled {
@@ -230,7 +328,7 @@ select:focus-visible {
   border: 1px solid var(--border);
   border-radius: 0.8rem;
   padding: 0.65rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .login-flow b {
@@ -240,7 +338,7 @@ select:focus-visible {
 }
 
 .login-flow a {
-  color: #bae6fd;
+  color: var(--link);
   font-size: 0.82rem;
   font-weight: 800;
   text-decoration: none;
@@ -272,7 +370,7 @@ select:focus-visible {
 
 .site-footer a,
 .site-footer code {
-  color: #bae6fd;
+  color: var(--link);
   font-family: ui-monospace, SFMono-Regular, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
   text-decoration: none;
 }
@@ -283,7 +381,7 @@ select:focus-visible {
 }
 
 .panel {
-  border-radius: 1.5rem;
+  border-radius: 1.4rem;
   padding: 1.25rem;
 }
 
@@ -349,22 +447,24 @@ select:focus-visible {
   border-radius: 0.8rem;
   padding: 0.72rem 0.85rem;
   color: var(--text);
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .repo-form button {
   align-self: end;
-  border: 1px solid rgba(63, 185, 80, 0.55);
+  border: 1px solid rgba(185, 170, 238, 0.36);
   border-radius: 0.8rem;
   padding: 0.76rem 1rem;
   color: white;
-  background: #238636;
+  background: linear-gradient(135deg, var(--brand-primary), var(--accent-blue));
+  box-shadow: 0 14px 32px rgba(81, 43, 212, 0.26);
   font-weight: 800;
   cursor: pointer;
 }
 
 .repo-form button:hover:not(:disabled) {
-  background: #2ea043;
+  border-color: var(--accent-strong);
+  transform: translateY(-1px);
 }
 
 .repo-form button:disabled {
@@ -373,7 +473,7 @@ select:focus-visible {
 }
 
 .ship-week-form {
-  border-top: 1px solid rgba(48, 54, 61, 0.72);
+  border-top: 1px solid var(--hairline);
   padding-top: 1rem;
 }
 
@@ -383,11 +483,11 @@ select:focus-visible {
 
 .error {
   margin-bottom: 1rem;
-  border: 1px solid rgba(251, 113, 133, 0.5);
+  border: 1px solid var(--danger-border);
   border-radius: 0.9rem;
   padding: 0.85rem;
-  color: #fecdd3;
-  background: rgba(127, 29, 29, 0.28);
+  color: var(--danger-soft);
+  background: var(--danger-wash);
 }
 
 .pace-strip {
@@ -401,7 +501,7 @@ select:focus-visible {
   border: 1px solid var(--border);
   border-radius: 0.9rem;
   padding: 0.65rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .pace-strip span,
@@ -451,7 +551,7 @@ select:focus-visible {
   border: 1px solid var(--ship-week-color, var(--border));
   border-radius: 0.9rem;
   padding: 0.75rem 0.9rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .ship-week-summary-card.accent {
@@ -519,7 +619,7 @@ select:focus-visible {
   border: 1px solid var(--ship-week-color, var(--border));
   border-radius: 0.9rem;
   padding: 0.85rem 0.95rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .ship-week-critical-panel > .attention-list,
@@ -541,7 +641,7 @@ select:focus-visible {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.3rem 0.75rem;
-  border-top: 1px solid rgba(48, 54, 61, 0.62);
+  border-top: 1px solid var(--hairline);
   padding: 0.55rem 0.2rem;
 }
 
@@ -556,7 +656,7 @@ select:focus-visible {
 }
 
 .ship-week-issue-row a:hover {
-  color: #bae6fd;
+  color: var(--link);
 }
 
 .ship-week-issue-row span,
@@ -579,11 +679,11 @@ select:focus-visible {
 }
 
 .ship-week-issue-labels b {
-  border: 1px solid rgba(88, 166, 255, 0.42);
+  border: 1px solid rgba(31, 143, 255, 0.42);
   border-radius: 999px;
   padding: 0.08rem 0.42rem;
-  color: #79c0ff;
-  background: rgba(88, 166, 255, 0.12);
+  color: var(--link);
+  background: var(--sky-wash);
   font-size: 0.66rem;
 }
 
@@ -600,7 +700,7 @@ select:focus-visible {
   border: 1px solid var(--queue-color, var(--border));
   border-radius: 0.9rem;
   padding: 0.75rem 0.9rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .queue-stat-card.success {
@@ -664,29 +764,29 @@ select:focus-visible {
 
 .drilldown-tiles button.success {
   --drilldown-tile-color: var(--success);
-  --drilldown-tile-bg: rgba(63, 185, 80, 0.1);
+  --drilldown-tile-bg: var(--success-wash);
 }
 
 .drilldown-tiles button.warning {
   --drilldown-tile-color: var(--warning);
-  --drilldown-tile-bg: rgba(210, 153, 34, 0.11);
+  --drilldown-tile-bg: var(--warning-wash);
 }
 
 .drilldown-tiles button.danger {
   --drilldown-tile-color: var(--danger);
-  --drilldown-tile-bg: rgba(248, 81, 73, 0.11);
+  --drilldown-tile-bg: var(--danger-wash);
 }
 
 .drilldown-tiles button.accent {
   --drilldown-tile-color: var(--accent-strong);
-  --drilldown-tile-bg: rgba(88, 166, 255, 0.08);
+  --drilldown-tile-bg: var(--accent-wash);
 }
 
 .drilldown-tiles button.selected,
 .drilldown-tiles button:hover {
   border-color: var(--drilldown-tile-color, var(--accent-strong));
   color: var(--text);
-  background: var(--drilldown-tile-bg, rgba(88, 166, 255, 0.08));
+  background: var(--drilldown-tile-bg, var(--accent-wash));
 }
 
 .drilldown-tiles span,
@@ -758,7 +858,7 @@ select:focus-visible {
   grid-template-columns: 2.25rem minmax(7rem, 0.8fr) 6rem minmax(0, 1.2fr);
   gap: 0.65rem;
   align-items: center;
-  border-top: 1px solid rgba(48, 54, 61, 0.62);
+  border-top: 1px solid var(--hairline);
   padding: 0.5rem 0.2rem;
 }
 
@@ -779,7 +879,7 @@ select:focus-visible {
   border-radius: 0.9rem;
   margin-bottom: 0.85rem;
   padding: 0.75rem 0.9rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .pick-panel p {
@@ -800,7 +900,7 @@ select:focus-visible {
   row-gap: 0.35rem;
   align-items: start;
   border: 0;
-  border-top: 1px solid rgba(48, 54, 61, 0.62);
+  border-top: 1px solid var(--hairline);
   padding: 0.55rem 0.2rem;
   color: inherit;
   background: transparent;
@@ -868,7 +968,7 @@ select:focus-visible {
   border-radius: 999px;
   padding: 0.08rem 0.42rem;
   color: var(--signal-text, var(--muted));
-  background: var(--signal-bg, rgba(139, 148, 158, 0.08));
+  background: var(--signal-bg, var(--muted-wash));
   font-size: 0.66rem;
   font-weight: 800;
   line-height: 1.35;
@@ -876,7 +976,7 @@ select:focus-visible {
 }
 
 .empty-for-me {
-  border-top: 1px solid rgba(48, 54, 61, 0.62);
+  border-top: 1px solid var(--hairline);
   padding: 0.65rem 0.2rem 0;
 }
 
@@ -884,7 +984,7 @@ select:focus-visible {
   border: 1px solid var(--attention-color, var(--border));
   border-radius: 0.9rem;
   padding: 0.75rem 0.9rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .attention-card.danger {
@@ -942,7 +1042,7 @@ select:focus-visible {
 
 .bucket-link-button:hover {
   border-color: var(--accent-strong);
-  background: rgba(88, 166, 255, 0.12);
+  background: var(--accent-wash);
 }
 
 .attention-card p {
@@ -976,7 +1076,7 @@ select:focus-visible {
 }
 
 .attention-card .bucket-link-status.error {
-  color: #fecdd3;
+  color: var(--danger-soft);
 }
 
 .attention-list {
@@ -991,7 +1091,7 @@ select:focus-visible {
   row-gap: 0.35rem;
   align-items: start;
   border: 0;
-  border-top: 1px solid rgba(48, 54, 61, 0.62);
+  border-top: 1px solid var(--hairline);
   border-radius: 0;
   padding: 0.48rem 0.2rem;
   color: inherit;
@@ -1022,7 +1122,7 @@ select:focus-visible {
 }
 
 .attention-pr-title:hover {
-  color: white;
+  color: var(--accent-strong);
   text-decoration: underline;
 }
 
@@ -1042,7 +1142,7 @@ select:focus-visible {
   height: 1.1rem;
   border-radius: 999px;
   border: 1px solid var(--badge-border, var(--border));
-  background: var(--badge-bg, rgba(139, 148, 158, 0.08));
+  background: var(--badge-bg, var(--muted-wash));
   color: var(--badge-text, var(--muted));
   font-size: 0.7rem;
   font-weight: 800;
@@ -1050,27 +1150,27 @@ select:focus-visible {
 }
 
 .attention-pr-check-badge.success {
-  --badge-border: rgba(63, 185, 80, 0.45);
-  --badge-bg: rgba(63, 185, 80, 0.13);
-  --badge-text: #7ee787;
+  --badge-border: var(--success-border);
+  --badge-bg: var(--success-wash);
+  --badge-text: var(--success);
 }
 
 .attention-pr-check-badge.unknown {
-  --badge-border: rgba(139, 148, 158, 0.35);
-  --badge-bg: rgba(139, 148, 158, 0.1);
+  --badge-border: var(--border-strong);
+  --badge-bg: var(--muted-wash);
   --badge-text: var(--muted);
 }
 
 .attention-pr-check-badge.failure {
-  --badge-border: rgba(248, 81, 73, 0.5);
-  --badge-bg: rgba(248, 81, 73, 0.15);
-  --badge-text: #ff7b72;
+  --badge-border: var(--danger-border);
+  --badge-bg: var(--danger-wash);
+  --badge-text: var(--danger);
 }
 
 .attention-pr-check-badge.pending {
-  --badge-border: rgba(210, 153, 34, 0.5);
-  --badge-bg: rgba(210, 153, 34, 0.15);
-  --badge-text: #e3b341;
+  --badge-border: var(--warning-border);
+  --badge-bg: var(--warning-wash);
+  --badge-text: var(--warning);
 }
 
 .attention-pr-repo {
@@ -1110,7 +1210,7 @@ select:focus-visible {
 }
 
 .attention-pr-github-link {
-  color: #052e2b;
+  color: var(--on-success);
   background: var(--success);
 }
 
@@ -1143,11 +1243,11 @@ select:focus-visible {
 }
 
 .attention-pr-linked-issues a {
-  border: 1px solid rgba(139, 148, 158, 0.35);
+  border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0.08rem 0.42rem;
-  color: #bae6fd;
-  background: rgba(139, 148, 158, 0.08);
+  color: var(--link);
+  background: var(--muted-wash);
   font-size: 0.66rem;
   font-weight: 800;
   line-height: 1.35;
@@ -1157,8 +1257,8 @@ select:focus-visible {
 
 .attention-pr-linked-issues a:hover {
   border-color: var(--accent-strong);
-  color: white;
-  background: rgba(88, 166, 255, 0.12);
+  color: var(--text);
+  background: var(--accent-wash);
 }
 
 .attention-list .attention-signal {
@@ -1166,7 +1266,7 @@ select:focus-visible {
   border-radius: 999px;
   padding: 0.08rem 0.42rem;
   color: var(--signal-text, var(--muted));
-  background: var(--signal-bg, rgba(139, 148, 158, 0.08));
+  background: var(--signal-bg, var(--muted-wash));
   font-size: 0.66rem;
   font-weight: 800;
   line-height: 1.35;
@@ -1174,27 +1274,27 @@ select:focus-visible {
 }
 
 .attention-signal.success {
-  --signal-border: rgba(63, 185, 80, 0.42);
-  --signal-bg: rgba(63, 185, 80, 0.12);
-  --signal-text: #7ee787;
+  --signal-border: var(--success-border);
+  --signal-bg: var(--success-wash);
+  --signal-text: var(--success);
 }
 
 .attention-signal.warning {
-  --signal-border: rgba(210, 153, 34, 0.45);
-  --signal-bg: rgba(210, 153, 34, 0.13);
-  --signal-text: #e3b341;
+  --signal-border: var(--warning-border);
+  --signal-bg: var(--warning-wash);
+  --signal-text: var(--warning);
 }
 
 .attention-signal.danger {
-  --signal-border: rgba(248, 81, 73, 0.46);
-  --signal-bg: rgba(248, 81, 73, 0.13);
-  --signal-text: #ff7b72;
+  --signal-border: var(--danger-border);
+  --signal-bg: var(--danger-wash);
+  --signal-text: var(--danger);
 }
 
 .attention-signal.accent {
-  --signal-border: rgba(88, 166, 255, 0.42);
-  --signal-bg: rgba(88, 166, 255, 0.12);
-  --signal-text: #79c0ff;
+  --signal-border: rgba(31, 143, 255, 0.42);
+  --signal-bg: var(--sky-wash);
+  --signal-text: var(--link);
 }
 
 .pull-list {
@@ -1329,7 +1429,7 @@ select:focus-visible {
   margin-top: 0.65rem;
   overflow: hidden;
   border-radius: 999px;
-  background: #010409;
+  background: var(--surface-ink);
 }
 
 .metric-meter span {
@@ -1351,8 +1451,8 @@ select:focus-visible {
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0.18rem 0.55rem;
-  color: #58a6ff;
-  background: rgba(56, 139, 253, 0.12);
+  color: var(--link);
+  background: var(--sky-wash);
   font-size: 0.72rem;
   font-weight: 800;
 }
@@ -1379,7 +1479,7 @@ select:focus-visible {
   border-radius: 0.75rem;
   padding: 0.5rem 0.75rem;
   color: var(--text);
-  background: #0d1117;
+  background: var(--surface-sunken);
   cursor: pointer;
 }
 
@@ -1389,14 +1489,14 @@ select:focus-visible {
 
 .timeline-header a,
 .timeline-content a {
-  color: #bae6fd;
+  color: var(--link);
   font-weight: 800;
   text-decoration: none;
 }
 
 .timeline-header a:hover,
 .timeline-content a:hover {
-  color: white;
+  color: var(--text);
 }
 
 .timeline {
@@ -1416,7 +1516,7 @@ select:focus-visible {
   border: 1px solid var(--border);
   border-radius: 1rem;
   padding: 0.85rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .stat-card span,
@@ -1450,7 +1550,7 @@ select:focus-visible {
   border: 1px solid var(--focus-color, var(--border));
   border-radius: 1rem;
   padding: 0.85rem 1rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .focus-card.success {
@@ -1504,7 +1604,7 @@ select:focus-visible {
   border: 1px solid var(--triage-color, var(--border));
   border-radius: 1rem;
   padding: 1rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .triage-action.success {
@@ -1543,7 +1643,7 @@ select:focus-visible {
 
 .triage-action p {
   margin: 0.65rem 0 0;
-  color: #cbd5e1;
+  color: var(--body-text);
 }
 
 .triage-signals {
@@ -1558,7 +1658,7 @@ select:focus-visible {
   border-radius: 1rem;
   margin-bottom: 1.5rem;
   padding: 0.9rem 1rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .activity-legend {
@@ -1605,7 +1705,7 @@ select:focus-visible {
   left: 0;
   height: 0.28rem;
   border-radius: 999px;
-  background: rgba(139, 148, 158, 0.18);
+  background: rgba(185, 170, 238, 0.18);
 }
 
 .activity-gap {
@@ -1615,9 +1715,9 @@ select:focus-visible {
   width: var(--gap-width);
   min-width: 3rem;
   overflow: hidden;
-  border-bottom: 0.28rem solid rgba(210, 153, 34, 0.34);
+  border-bottom: 0.28rem solid rgba(240, 201, 75, 0.34);
   padding-bottom: 0.38rem;
-  color: #e3b341;
+  color: var(--warning);
   font-size: 0.68rem;
   font-weight: 900;
   text-align: center;
@@ -1631,7 +1731,7 @@ select:focus-visible {
   left: var(--marker-left);
   width: 1.1rem;
   height: 1.1rem;
-  border: 3px solid #0d1117;
+  border: 3px solid var(--surface-sunken);
   border-radius: 999px;
   background: var(--activity-color, var(--muted));
   transform: translateX(-50%);
@@ -1675,7 +1775,7 @@ select:focus-visible {
 
 .activity-marker.comment,
 .activity-legend .comment {
-  --activity-color: #a371f7;
+  --activity-color: var(--done);
 }
 
 .activity-marker.bot,
@@ -1721,7 +1821,7 @@ select:focus-visible {
   border-left: 3px solid var(--developer-accent, var(--accent));
   border-radius: 0.85rem;
   padding: 0.65rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .developer-card-header {
@@ -1793,7 +1893,7 @@ select:focus-visible {
   border-left-width: 3px;
   border-radius: 0.9rem;
   padding: 0.8rem 0.9rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .checks-card.success {
@@ -1833,13 +1933,13 @@ select:focus-visible {
 
 .checks-counts {
   margin: 0.4rem 0 0;
-  color: #cbd5e1;
+  color: var(--body-text);
   font-size: 0.82rem;
 }
 
 .checks-mergeable {
   margin: 0.55rem 0 0;
-  color: #fda4af;
+  color: var(--danger-soft);
   font-size: 0.82rem;
 }
 
@@ -1859,7 +1959,7 @@ select:focus-visible {
 }
 
 .failing-checks a {
-  color: #bae6fd;
+  color: var(--link);
   text-decoration: none;
   font-weight: 700;
 }
@@ -1886,7 +1986,7 @@ select:focus-visible {
   border-left-width: 3px;
   border-radius: 0.9rem;
   padding: 0.8rem 0.9rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .milestone-card.success {
@@ -1931,14 +2031,14 @@ select:focus-visible {
 
 .milestone-card p {
   margin: 0.45rem 0 0;
-  color: #cbd5e1;
+  color: var(--body-text);
   font-size: 0.82rem;
 }
 
 .milestone-card a {
   display: inline-block;
   margin-top: 0.55rem;
-  color: #bae6fd;
+  color: var(--link);
   font-size: 0.78rem;
   font-weight: 800;
   text-decoration: none;
@@ -1949,7 +2049,7 @@ select:focus-visible {
   border: 1px solid var(--border);
   border-radius: 1rem;
   padding: 0.85rem;
-  background: #0d1117;
+  background: var(--surface-sunken);
 }
 
 .raw-activity summary {
@@ -1973,7 +2073,7 @@ select:focus-visible {
   width: fit-content;
   padding: 0.35rem 0.75rem;
   color: var(--muted);
-  background: rgba(15, 23, 42, 0.92);
+  background: rgba(31, 30, 51, 0.92);
   font-size: 0.82rem;
 }
 
@@ -1992,7 +2092,7 @@ select:focus-visible {
   left: 0.43rem;
   width: 2px;
   content: '';
-  background: rgba(148, 163, 184, 0.22);
+  background: rgba(185, 170, 238, 0.22);
 }
 
 .timeline-item.summary {
@@ -2004,7 +2104,7 @@ select:focus-visible {
   width: 0.9rem;
   height: 0.9rem;
   margin-top: 0.55rem;
-  border: 3px solid rgba(15, 23, 42, 1);
+  border: 3px solid var(--surface-ink);
   border-radius: 999px;
   background: var(--accent-strong);
 }
@@ -2027,7 +2127,7 @@ select:focus-visible {
 
 .timeline-item.summary .timeline-content {
   border-style: dashed;
-  background: rgba(13, 17, 23, 0.72);
+  background: rgba(18, 16, 35, 0.72);
 }
 
 .timeline-content strong {
@@ -2037,7 +2137,7 @@ select:focus-visible {
 
 .timeline-content p {
   margin: 0.6rem 0 0;
-  color: #cbd5e1;
+  color: var(--body-text);
   white-space: pre-wrap;
 }
 
