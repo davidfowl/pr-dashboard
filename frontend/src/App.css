@@ -1094,7 +1094,8 @@ select:focus-visible {
   margin-top: 0.65rem;
 }
 
-.attention-pr-row {
+.attention-pr-row,
+.attention-issue-row {
   display: grid;
   grid-template-columns: 5rem minmax(10rem, 14rem) minmax(0, 1fr) minmax(8rem, auto) auto;
   column-gap: 0.75rem;
@@ -1109,7 +1110,8 @@ select:focus-visible {
   text-align: left;
 }
 
-.attention-pr-row:hover .attention-pr-title {
+.attention-pr-row:hover .attention-pr-title,
+.attention-issue-row:hover .attention-issue-title {
   color: var(--text);
 }
 
@@ -1119,7 +1121,8 @@ select:focus-visible {
   font-weight: 800;
 }
 
-.attention-pr-title {
+.attention-pr-title,
+.attention-issue-title {
   grid-column: 3;
   grid-row: 1;
   overflow: hidden;
@@ -1131,12 +1134,14 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.attention-pr-title:hover {
+.attention-pr-title:hover,
+.attention-issue-title:hover {
   color: var(--accent-strong);
   text-decoration: underline;
 }
 
-.attention-pr-number {
+.attention-pr-number,
+.attention-issue-number {
   grid-row: 1 / span 2;
   font-variant-numeric: tabular-nums;
   display: inline-flex;
@@ -1183,14 +1188,16 @@ select:focus-visible {
   --badge-text: var(--warning);
 }
 
-.attention-pr-repo {
+.attention-pr-repo,
+.attention-issue-repo {
   grid-row: 1 / span 2;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.attention-pr-meta {
+.attention-pr-meta,
+.attention-issue-meta {
   grid-column: 4;
   grid-row: 1;
   text-align: right;
@@ -1198,7 +1205,8 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.attention-pr-actions {
+.attention-pr-actions,
+.attention-issue-actions {
   grid-column: 5;
   grid-row: 1 / span 2;
   display: flex;
@@ -1208,7 +1216,8 @@ select:focus-visible {
 }
 
 .attention-pr-actions a,
-.attention-pr-actions button {
+.attention-pr-actions button,
+.attention-issue-actions a {
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0.25rem 0.55rem;
@@ -1219,7 +1228,8 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.attention-pr-github-link {
+.attention-pr-github-link,
+.attention-issue-github-link {
   color: var(--on-success);
   background: var(--success);
 }
@@ -1231,12 +1241,14 @@ select:focus-visible {
 }
 
 .attention-pr-actions a:hover,
-.attention-pr-actions button:hover {
+.attention-pr-actions button:hover,
+.attention-issue-actions a:hover {
   color: var(--text);
   background: var(--panel-strong);
 }
 
-.attention-pr-signals {
+.attention-pr-signals,
+.attention-issue-signals {
   grid-column: 3 / 5;
   grid-row: 2;
   display: flex;
@@ -1244,7 +1256,8 @@ select:focus-visible {
   gap: 0.3rem;
 }
 
-.attention-pr-linked-issues {
+.attention-pr-linked-issues,
+.attention-issue-linked-pulls {
   grid-column: 3 / 5;
   grid-row: 3;
   display: flex;
@@ -1252,7 +1265,8 @@ select:focus-visible {
   gap: 0.3rem;
 }
 
-.attention-pr-linked-issues a {
+.attention-pr-linked-issues a,
+.attention-issue-linked-pulls a {
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 0.08rem 0.42rem;
@@ -1265,7 +1279,8 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.attention-pr-linked-issues a:hover {
+.attention-pr-linked-issues a:hover,
+.attention-issue-linked-pulls a:hover {
   border-color: var(--accent-strong);
   color: var(--text);
   background: var(--accent-wash);
@@ -2335,6 +2350,7 @@ select:focus-visible {
 
 .pick-card,
 .attention-pr-row,
+.attention-issue-row,
 .ship-week-issue-row,
 .core-member-row {
   border-top-color: var(--hairline);
@@ -2351,13 +2367,15 @@ select:focus-visible {
 }
 
 .attention-pr-title:hover,
+.attention-issue-title:hover,
 .ship-week-issue-row a:hover,
 .timeline-header a:hover,
 .timeline-content a:hover {
   color: var(--link-hover);
 }
 
-.attention-pr-github-link {
+.attention-pr-github-link,
+.attention-issue-github-link {
   color: var(--on-accent);
   background: var(--accent-strong);
 }
@@ -2370,6 +2388,7 @@ select:focus-visible {
 
 .attention-pr-actions a:hover,
 .attention-pr-actions button:hover,
+.attention-issue-actions a:hover,
 .bucket-link-button:hover,
 .details-actions button:hover,
 .drilldown-header button:hover {
@@ -2420,7 +2439,8 @@ select:focus-visible {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .attention-pr-row {
+  .attention-pr-row,
+  .attention-issue-row {
     grid-template-columns: auto auto minmax(0, 1fr);
     gap: 0.45rem;
     align-items: start;
@@ -2432,28 +2452,37 @@ select:focus-visible {
   }
 
   .attention-pr-title,
+  .attention-issue-title,
   .attention-pr-meta,
+  .attention-issue-meta,
   .attention-pr-actions,
+  .attention-issue-actions,
   .attention-pr-signals,
-  .attention-pr-linked-issues {
+  .attention-issue-signals,
+  .attention-pr-linked-issues,
+  .attention-issue-linked-pulls {
     grid-column: 3;
   }
 
-  .attention-pr-meta {
+  .attention-pr-meta,
+  .attention-issue-meta {
     grid-row: 2;
     text-align: left;
   }
 
-  .attention-pr-actions {
+  .attention-pr-actions,
+  .attention-issue-actions {
     grid-row: 3;
     justify-content: flex-start;
   }
 
-  .attention-pr-signals {
+  .attention-pr-signals,
+  .attention-issue-signals {
     grid-row: 4;
   }
 
-  .attention-pr-linked-issues {
+  .attention-pr-linked-issues,
+  .attention-issue-linked-pulls {
     grid-row: 5;
   }
 

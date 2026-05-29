@@ -1,9 +1,9 @@
-import type { AttentionSignal, PullRequestSummary } from '../types';
-import { createAttentionSignals } from '../utils/models';
+import type { AttentionSignal, ShipWeekIssueSummary } from '../types';
+import { createIssueSignals } from '../utils/models';
 import SignalPills from './SignalPills';
 
-export type PullRequestSignalPillsProps = {
-  pullRequest: PullRequestSummary;
+export type IssueSignalPillsProps = {
+  issue: ShipWeekIssueSummary;
   className?: string;
   leadingSignals?: AttentionSignal[];
   trailingSignals?: AttentionSignal[];
@@ -12,17 +12,17 @@ export type PullRequestSignalPillsProps = {
   showActionSignal?: boolean;
 };
 
-function PullRequestSignalPills({
-  pullRequest,
-  className = 'attention-pr-signals',
+function IssueSignalPills({
+  issue,
+  className = 'attention-issue-signals',
   leadingSignals = [],
   trailingSignals = [],
   computedSignalLimit,
   excludeComputedLabels = [],
   showActionSignal = true,
-}: PullRequestSignalPillsProps) {
+}: IssueSignalPillsProps) {
   const excludedComputedLabels = new Set(excludeComputedLabels);
-  const [actionSignal, ...stateSignals] = createAttentionSignals({ pullRequest, reason: '' });
+  const [actionSignal, ...stateSignals] = createIssueSignals(issue);
   let computedSignals = showActionSignal && actionSignal
     ? [actionSignal, ...stateSignals]
     : stateSignals;
@@ -41,4 +41,4 @@ function PullRequestSignalPills({
   );
 }
 
-export default PullRequestSignalPills;
+export default IssueSignalPills;
