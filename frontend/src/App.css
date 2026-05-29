@@ -38,10 +38,11 @@
   --accent: var(--brand-primary);
   --accent-strong: var(--brand-primary);
   --success: var(--accent-emerald);
-  --warning: var(--accent-yellow);
+  --warning: #f3d46b;
   --danger: var(--accent-flamingo);
   --done: var(--brand-secondary);
   --link: #7ab9ff;
+  --link-hover: var(--brand-white);
   --on-accent: var(--brand-white);
   --on-success: #071f17;
   --on-warning: #211b05;
@@ -2353,7 +2354,7 @@ select:focus-visible {
 .ship-week-issue-row a:hover,
 .timeline-header a:hover,
 .timeline-content a:hover {
-  color: var(--brand-primary);
+  color: var(--link-hover);
 }
 
 .attention-pr-github-link {
