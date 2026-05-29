@@ -472,6 +472,23 @@ select:focus-visible {
   cursor: pointer;
 }
 
+.repo-form-actions {
+  align-self: end;
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.repo-form .repo-form-actions button {
+  align-self: auto;
+}
+
+.repo-form button.secondary {
+  color: var(--text);
+  background: var(--surface-sunken);
+  box-shadow: none;
+}
+
 .repo-form button:hover:not(:disabled) {
   border-color: var(--accent-strong);
   transform: translateY(-1px);
@@ -2314,6 +2331,18 @@ select:focus-visible {
   transform: none;
 }
 
+.repo-form button.secondary {
+  color: var(--text);
+  background: var(--surface-sunken);
+  box-shadow: none;
+}
+
+.repo-form button.secondary:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text);
+  background: var(--surface);
+}
+
 .error,
 .login-flow,
 .pace-strip div,
@@ -2433,6 +2462,14 @@ select:focus-visible {
 @media (max-width: 620px) {
   .repo-form {
     grid-template-columns: 1fr;
+  }
+
+  .repo-form-actions {
+    width: 100%;
+  }
+
+  .repo-form-actions button {
+    flex: 1 1 8rem;
   }
 
   .pace-strip {

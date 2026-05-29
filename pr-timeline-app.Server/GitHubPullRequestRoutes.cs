@@ -10,6 +10,7 @@ public static class GitHubPullRequestRoutes
             [FromQuery] string? repo,
             [FromQuery] string? state,
             [FromQuery] string? label,
+            [FromQuery] bool? refresh,
             GitHubPullRequestService pullRequests,
             CancellationToken cancellationToken) =>
         {
@@ -30,9 +31,10 @@ public static class GitHubPullRequestRoutes
                 });
             }
 
+            var forceRefresh = refresh == true;
             var pulls = string.IsNullOrWhiteSpace(label)
-                ? await pullRequests.GetPullRequestsAsync(repositoryName, normalizedState, cancellationToken)
-                : await pullRequests.GetPullRequestsByLabelAsync(repositoryName, normalizedState, label.Trim(), cancellationToken);
+                ? await pullRequests.GetPullRequestsAsync(repositoryName, normalizedState, forceRefresh, cancellationToken)
+                : await pullRequests.GetPullRequestsByLabelAsync(repositoryName, normalizedState, label.Trim(), forceRefresh, cancellationToken);
             return Results.Ok(new PullRequestListResponse(repositoryName.ToString(), pulls));
         });
 
@@ -40,6 +42,7 @@ public static class GitHubPullRequestRoutes
             [FromQuery] string? repo,
             [FromQuery] string? milestone,
             [FromQuery] string? releaseBranch,
+            [FromQuery] bool? refresh,
             GitHubPullRequestService pullRequests,
             CancellationToken cancellationToken) =>
         {
@@ -64,6 +67,7 @@ public static class GitHubPullRequestRoutes
                 repositoryName,
                 normalizedMilestone,
                 releaseBranch?.Trim(),
+                refresh == true,
                 cancellationToken);
             if (result.Response is null)
             {
@@ -75,6 +79,7 @@ public static class GitHubPullRequestRoutes
 
         api.MapPost("pulls/checks", async (
             [FromQuery] string? repo,
+            [FromQuery] bool? refresh,
             PullRequestChecksRequest request,
             GitHubPullRequestService pullRequests,
             CancellationToken cancellationToken) =>
@@ -99,6 +104,7 @@ public static class GitHubPullRequestRoutes
             var checks = await pullRequests.GetPullRequestChecksAsync(
                 repositoryName,
                 requestedPullRequests,
+                refresh == true,
                 cancellationToken);
             return Results.Ok(new PullRequestChecksResponse(repositoryName.ToString(), checks));
         });
@@ -106,6 +112,7 @@ public static class GitHubPullRequestRoutes
         api.MapGet("pulls/{number:int}/timeline", async (
             int number,
             [FromQuery] string? repo,
+            [FromQuery] bool? refresh,
             GitHubPullRequestService pullRequests,
             CancellationToken cancellationToken) =>
         {
@@ -125,7 +132,7 @@ public static class GitHubPullRequestRoutes
                 });
             }
 
-            return Results.Ok(await pullRequests.GetTimelineAsync(repositoryName, number, cancellationToken));
+            return Results.Ok(await pullRequests.GetTimelineAsync(repositoryName, number, refresh == true, cancellationToken));
         });
 
         return endpoints;

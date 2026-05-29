@@ -57,6 +57,10 @@ type VisibleChecksRequestItem = {
   headSha: string;
 };
 
+type LoadOptions = {
+  forceRefresh?: boolean;
+};
+
 function App() {
   const [repo, setRepo] = useState(defaultRepoInput);
   const [activeRepo, setActiveRepo] = useState(defaultRepos[0]);
@@ -91,6 +95,7 @@ function App() {
   const pendingVisibleChecksRef = useRef(new Set<string>());
   const visibleChecksTimerRef = useRef<number | null>(null);
   const visibleChecksAbortControllerRef = useRef<AbortController | null>(null);
+  const forceVisibleChecksRefreshRef = useRef(false);
 
   const selectedTitle = selectedPullRequest
     ? `#${selectedPullRequest.number} ${selectedPullRequest.title}`
@@ -243,10 +248,11 @@ function App() {
     }
   }
 
-  async function loadPullRequests(repositoryInput: string, pullState: PullState) {
+  async function loadPullRequests(repositoryInput: string, pullState: PullState, options: LoadOptions = {}) {
     setPullsLoading(true);
     setError(null);
     beginVisibleChecksRequestScope();
+    forceVisibleChecksRefreshRef.current = options.forceRefresh ?? false;
     currentSelectionRef.current = null;
     setSelectedPullRequest(null);
     setTimelineItems([]);
@@ -259,6 +265,9 @@ function App() {
       const responses = await Promise.all(
         repositories.map(async (repository) => {
           const query = new URLSearchParams({ repo: repository, state: pullState });
+          if (options.forceRefresh) {
+            query.set('refresh', 'true');
+          }
           const response = await fetch(`/api/github/pulls?${query}`);
           return await readJson<PullRequestListResponse>(response);
         }),
@@ -283,9 +292,16 @@ function App() {
     }
   }
 
-  async function loadShipWeek(repositoryInput: string, milestoneInput: string, releaseBranchInput: string) {
+  async function loadShipWeek(
+    repositoryInput: string,
+    milestoneInput: string,
+    releaseBranchInput: string,
+    options: LoadOptions = {},
+  ) {
     setShipWeekLoading(true);
     setShipWeekError(null);
+    beginVisibleChecksRequestScope();
+    forceVisibleChecksRefreshRef.current = options.forceRefresh ?? false;
 
     try {
       const repositories = parseRepositories(repositoryInput, defaultShipWeekRepos);
@@ -295,8 +311,8 @@ function App() {
       const docsRepositories = repositories.filter(isDocsFromCodeRepository);
       const [releaseResponses, docsPullRequests] = await Promise.all([
         Promise.all(releaseScopeRepositories.map((repository) =>
-          loadRepositoryShipWeek(repository, milestone, releaseBranch))),
-        Promise.all(docsRepositories.map(loadDocsFromCodePullRequests)),
+          loadRepositoryShipWeek(repository, milestone, releaseBranch, options))),
+        Promise.all(docsRepositories.map((repository) => loadDocsFromCodePullRequests(repository, options))),
       ]);
 
       const shipWeek = combineShipWeekResponses(
@@ -373,6 +389,10 @@ function App() {
 
     const abortController = visibleChecksAbortControllerRef.current ?? new AbortController();
     visibleChecksAbortControllerRef.current = abortController;
+    const forceRefresh = forceVisibleChecksRefreshRef.current;
+    if (forceRefresh) {
+      forceVisibleChecksRefreshRef.current = false;
+    }
     const itemsByRepository = queuedItems.reduce((groups, item) => {
       const repositoryItems = groups.get(item.repository) ?? [];
       repositoryItems.push(item);
@@ -380,7 +400,7 @@ function App() {
       return groups;
     }, new Map<string, VisibleChecksRequestItem[]>());
     await Promise.all([...itemsByRepository].map(([repository, items]) =>
-      loadVisibleChecks(repository, items, requestVersion, abortController.signal)));
+      loadVisibleChecks(repository, items, requestVersion, abortController.signal, forceRefresh)));
   }
 
   async function loadVisibleChecks(
@@ -388,10 +408,14 @@ function App() {
     items: VisibleChecksRequestItem[],
     requestVersion: number,
     signal: AbortSignal,
+    forceRefresh: boolean,
   ) {
     const requestedKeys = items.map((item) => checksRequestKey(item.repository, item.number, item.headSha));
     try {
       const query = new URLSearchParams({ repo: repository });
+      if (forceRefresh) {
+        query.set('refresh', 'true');
+      }
       const body: PullRequestChecksRequest = {
         pullRequests: items.map((item) => ({
           number: item.number,
@@ -533,6 +557,14 @@ function App() {
     void loadShipWeek(shipWeekRepo, shipWeekMilestone, shipWeekReleaseBranch);
   }
 
+  function onRefresh() {
+    if (dashboardMode === 'ship') {
+      void loadShipWeek(shipWeekRepo, shipWeekMilestone, shipWeekReleaseBranch, { forceRefresh: true });
+    } else {
+      void loadPullRequests(repo.trim(), state, { forceRefresh: true });
+    }
+  }
+
   function switchDashboardMode(mode: DashboardMode) {
     pushDashboardModeHistory(mode);
     setDashboardMode(mode);
@@ -632,6 +664,7 @@ function App() {
             onRepoChange={setRepo}
             onStateChange={setState}
             onSubmit={onSubmit}
+            onRefresh={onRefresh}
             onShipWeekRepoChange={setShipWeekRepo}
             onShipWeekMilestoneChange={setShipWeekMilestone}
             onShipWeekReleaseBranchChange={setShipWeekReleaseBranch}
@@ -667,19 +700,30 @@ function checksRequestKey(repository: string, number: number, headSha: string) {
   return `${repository.toLowerCase()}#${number}:${headSha}`;
 }
 
-async function loadRepositoryShipWeek(repository: string, milestone: string, releaseBranch: string) {
+async function loadRepositoryShipWeek(
+  repository: string,
+  milestone: string,
+  releaseBranch: string,
+  options: LoadOptions = {},
+) {
   const query = new URLSearchParams({ repo: repository, milestone });
   if (releaseBranch) {
     query.set('releaseBranch', releaseBranch);
+  }
+  if (options.forceRefresh) {
+    query.set('refresh', 'true');
   }
 
   const response = await fetch(`/api/github/ship-week?${query}`);
   return normalizeShipWeekResponse(await readJson<ShipWeekResponse>(response));
 }
 
-async function loadDocsFromCodePullRequests(repository: string) {
+async function loadDocsFromCodePullRequests(repository: string, options: LoadOptions = {}) {
   const query = new URLSearchParams({ repo: repository, state: 'open' });
   query.set('label', docsFromCodeLabel);
+  if (options.forceRefresh) {
+    query.set('refresh', 'true');
+  }
   const response = await fetch(`/api/github/pulls?${query}`);
   const data = await readJson<PullRequestListResponse>(response);
   return data.pullRequests
