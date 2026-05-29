@@ -33,6 +33,7 @@ type DashboardViewProps = {
   onRepoChange: (value: string) => void;
   onStateChange: (value: PullState) => void;
   onSubmit: FormEventHandler<HTMLFormElement>;
+  onRefresh: () => void;
   onShipWeekRepoChange: (value: string) => void;
   onShipWeekMilestoneChange: (value: string) => void;
   onShipWeekReleaseBranchChange: (value: string) => void;
@@ -63,6 +64,7 @@ function DashboardView({
   onRepoChange,
   onStateChange,
   onSubmit,
+  onRefresh,
   onShipWeekRepoChange,
   onShipWeekMilestoneChange,
   onShipWeekReleaseBranchChange,
@@ -114,6 +116,7 @@ function DashboardView({
         onRepoChange={onRepoChange}
         onStateChange={onStateChange}
         onSubmit={onSubmit}
+        onRefresh={onRefresh}
         onShipWeekRepoChange={onShipWeekRepoChange}
         onShipWeekMilestoneChange={onShipWeekMilestoneChange}
         onShipWeekReleaseBranchChange={onShipWeekReleaseBranchChange}

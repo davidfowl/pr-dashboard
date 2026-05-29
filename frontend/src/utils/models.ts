@@ -35,6 +35,7 @@ import {
   formatDuration,
   formatRelative,
 } from './format';
+import { dedupeSignals } from './signals';
 
 const approvedAgingMs = 2 * dayMs;
 const communityWaitMs = 12 * hourMs;
@@ -360,6 +361,11 @@ const shipWeekIssueBucketDefinitions: Omit<ShipWeekIssueBucket, 'issues'>[] = [
     tone: 'warning',
   },
 ];
+const shipWeekIssueBucketToneByLabel = new Map(
+  shipWeekIssueBucketDefinitions.map((bucket) => [bucket.label, bucket.tone]),
+);
+const staleIssueMs = 7 * dayMs;
+const coldIssueMs = 14 * dayMs;
 
 export function createShipWeekIssueBuckets(issues: ShipWeekIssueSummary[]): ShipWeekIssueBucket[] {
   const buckets = shipWeekIssueBucketDefinitions.map((bucket) => ({
@@ -375,6 +381,61 @@ export function createShipWeekIssueBuckets(issues: ShipWeekIssueSummary[]): Ship
   }
 
   return buckets.filter((bucket) => bucket.issues.length > 0);
+}
+
+export function createIssueSignals(issue: ShipWeekIssueSummary): AttentionSignal[] {
+  const action = issueActionSignal(issue);
+  const signals: AttentionSignal[] = [action];
+
+  if (targetsCurrentReleaseIssue(issue)) {
+    signals.push({ label: `release ${currentRelease}`, tone: 'danger' });
+  }
+
+  if (issue.linkedOpenPullRequests.length > 0) {
+    signals.push({ label: formatCount(issue.linkedOpenPullRequests.length, 'open PR'), tone: 'warning' });
+  }
+
+  for (const bucketLabel of shipWeekIssueBucketLabels(issue)) {
+    if (bucketLabel !== action.label) {
+      signals.push({
+        label: bucketLabel,
+        tone: shipWeekIssueBucketToneByLabel.get(bucketLabel) ?? 'muted',
+      });
+    }
+  }
+
+  const updatedAge = ageMs(issue.updatedAt);
+  if (updatedAge >= coldIssueMs) {
+    signals.push({ label: `idle ${formatAge(issue.updatedAt)}`, tone: 'danger' });
+  } else if (updatedAge >= staleIssueMs) {
+    signals.push({ label: `idle ${formatAge(issue.updatedAt)}`, tone: 'warning' });
+  }
+
+  if (issue.milestone) {
+    signals.push({ label: 'milestone', tone: 'accent' });
+  }
+
+  for (const label of issue.labels.slice(0, 2)) {
+    signals.push({ label, tone: 'accent' });
+  }
+
+  if (isBotAuthor(issue.author)) {
+    signals.push({ label: 'bot', tone: 'accent' });
+  }
+
+  return dedupeSignals(signals).slice(0, 7);
+}
+
+function issueActionSignal(issue: ShipWeekIssueSummary): AttentionSignal {
+  if (issue.linkedOpenPullRequests.length === 0) {
+    return { label: 'Needs PR', tone: 'danger' };
+  }
+
+  if (issue.assignees.length === 0) {
+    return { label: 'Unowned', tone: 'warning' };
+  }
+
+  return { label: 'Needs validation', tone: 'warning' };
 }
 
 function shipWeekIssueBucketLabels(issue: ShipWeekIssueSummary) {
@@ -414,6 +475,14 @@ function shipWeekIssueBucketLabels(issue: ShipWeekIssueSummary) {
   }
 
   return labels;
+}
+
+function targetsCurrentReleaseIssue(issue: ShipWeekIssueSummary) {
+  return [
+    issue.title,
+    issue.milestone,
+    ...issue.labels,
+  ].some((value) => value !== undefined && value !== null && releaseSignalMatches(value, currentRelease));
 }
 
 const validationTerms = ['validation', 'validate', 'verify', 'verification', 'test', 'e2e', 'servicing validation'];
@@ -1042,18 +1111,6 @@ function preferredParticipantName(actors: string[]) {
     || first.localeCompare(second));
 
   return sorted[0] ?? '';
-}
-
-function dedupeSignals(signals: AttentionSignal[]) {
-  const seen = new Set<string>();
-  return signals.filter((signal) => {
-    if (seen.has(signal.label)) {
-      return false;
-    }
-
-    seen.add(signal.label);
-    return true;
-  });
 }
 
 function createSignalMilestones(pullRequest: PullRequestSummary, items: TimelineItem[]): SignalMilestone[] {

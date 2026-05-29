@@ -6,7 +6,8 @@ import type {
   ShipWeekPullRequestSummary,
   ShipWeekResponse,
 } from '../../types';
-import { formatCount, formatRelative } from '../../utils/format';
+import { formatCount } from '../../utils/format';
+import IssueListItem from '../IssueListItem';
 import PullRequestList from '../PullRequestList';
 
 type ShipWeekSectionProps = {
@@ -230,17 +231,14 @@ function ShipModePullRequestList({
 
 function ShipWeekIssueList({ issues }: { issues: ShipWeekIssueSummary[] }) {
   return (
-    <div className="ship-week-issue-list">
+    <div className="attention-list">
       {issues.length === 0 && <p className="empty-for-me">No open non-PR issues in this milestone.</p>}
       {issues.map((issue) => (
-        <article key={`${issue.repository}#${issue.number}`} className="ship-week-issue-row">
-          <a href={issue.htmlUrl} target="_blank" rel="noreferrer">
-            #{issue.number} {issue.title}
-          </a>
-          <span>
-            {issue.assignees.length > 0 ? issue.assignees.join(', ') : 'unowned'} · updated {formatRelative(issue.updatedAt)}
-          </span>
-        </article>
+        <IssueListItem
+          key={`${issue.repository}#${issue.number}`}
+          issue={issue}
+          signalProps={{ computedSignalLimit: 5 }}
+        />
       ))}
     </div>
   );

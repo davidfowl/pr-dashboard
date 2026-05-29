@@ -49,6 +49,7 @@ public sealed class GitHubClientTests
         var pullRequests = await client.GetPullRequestsAsync(
             new RepositoryName("example", "repo"),
             "open",
+            false,
             TestContext.Current.CancellationToken);
 
         var pullRequest = Assert.Single(pullRequests);
@@ -105,6 +106,7 @@ public sealed class GitHubClientTests
         var pullRequests = await client.GetPullRequestsAsync(
             new RepositoryName("example", "repo"),
             "open",
+            false,
             TestContext.Current.CancellationToken);
 
         var pullRequest = Assert.Single(pullRequests);
@@ -145,6 +147,7 @@ public sealed class GitHubClientTests
         var pullRequests = await client.GetPullRequestsAsync(
             new RepositoryName("example", "repo"),
             "open",
+            false,
             TestContext.Current.CancellationToken);
 
         var pullRequest = Assert.Single(pullRequests);
@@ -198,6 +201,7 @@ public sealed class GitHubClientTests
         var pullRequests = await client.GetPullRequestsAsync(
             new RepositoryName("example", "repo"),
             "open",
+            false,
             TestContext.Current.CancellationToken);
 
         var pullRequest = Assert.Single(pullRequests);
@@ -270,6 +274,7 @@ public sealed class GitHubClientTests
             new RepositoryName("example", "repo"),
             "open",
             "docs-from-code",
+            false,
             TestContext.Current.CancellationToken);
 
         var pullRequest = Assert.Single(pullRequests);
@@ -334,6 +339,7 @@ public sealed class GitHubClientTests
         var pullRequests = await client.GetPullRequestsAsync(
             new RepositoryName("example", "repo"),
             "open",
+            false,
             TestContext.Current.CancellationToken);
 
         Assert.Equal([1, 2], pullRequests.Select(pullRequest => pullRequest.Number));
@@ -390,6 +396,7 @@ public sealed class GitHubClientTests
         var pullRequests = await client.GetPullRequestsAsync(
             new RepositoryName("example", "repo"),
             "open",
+            false,
             TestContext.Current.CancellationToken);
 
         var pullRequest = Assert.Single(pullRequests);
@@ -430,6 +437,7 @@ public sealed class GitHubClientTests
         var pullRequests = await client.GetPullRequestChecksAsync(
             new RepositoryName("example", "repo"),
             [new PullRequestChecksRequestItem(1, "abc123")],
+            false,
             TestContext.Current.CancellationToken);
 
         var pullRequest = Assert.Single(pullRequests);
@@ -466,6 +474,7 @@ public sealed class GitHubClientTests
         var pullRequests = await client.GetPullRequestChecksAsync(
             new RepositoryName("example", "repo"),
             [new PullRequestChecksRequestItem(1, "def456")],
+            false,
             TestContext.Current.CancellationToken);
 
         var pullRequest = Assert.Single(pullRequests);
@@ -507,6 +516,7 @@ public sealed class GitHubClientTests
         var pullRequests = await client.GetPullRequestsAsync(
             new RepositoryName("example", "repo"),
             "closed",
+            false,
             TestContext.Current.CancellationToken);
 
         var pullRequest = Assert.Single(pullRequests);
@@ -536,6 +546,7 @@ public sealed class GitHubClientTests
         var pullRequests = await client.GetPullRequestChecksAsync(
             new RepositoryName("example", "repo"),
             [new PullRequestChecksRequestItem(1, "neu789")],
+            false,
             TestContext.Current.CancellationToken);
 
         var pullRequest = Assert.Single(pullRequests);
@@ -563,6 +574,7 @@ public sealed class GitHubClientTests
         var pullRequests = await client.GetPullRequestChecksAsync(
             new RepositoryName("example", "repo"),
             [new PullRequestChecksRequestItem(1, "rl1")],
+            false,
             TestContext.Current.CancellationToken);
 
         var pullRequest = Assert.Single(pullRequests);
@@ -622,6 +634,7 @@ public sealed class GitHubClientTests
         var pullRequests = await client.GetPullRequestsAsync(
             new RepositoryName("example", "repo"),
             "all",
+            false,
             TestContext.Current.CancellationToken);
 
         Assert.Equal(2, pullRequests.Count);
@@ -682,10 +695,51 @@ public sealed class GitHubClientTests
             Enumerable.Range(1, pullRequestCount)
                 .Select(number => new PullRequestChecksRequestItem(number, $"sha{number}"))
                 .ToArray(),
+            false,
             TestContext.Current.CancellationToken);
 
         Assert.Equal(pullRequestCount, pullRequests.Count);
         Assert.True(maxActiveHeads <= 4, $"Expected at most 4 concurrent checks fetches but saw {maxActiveHeads}.");
+    }
+
+    [Fact]
+    public async Task PullRequestChecksForceRefreshBypassesCachedStatus()
+    {
+        var requestCount = 0;
+        var client = CreateClient(path =>
+        {
+            requestCount++;
+            return path switch
+            {
+                "repos/example/repo/commits/cache123/check-runs?filter=latest&per_page=100" => Json(
+                    """{ "total_count": 0, "check_runs": [] }"""),
+                "repos/example/repo/commits/cache123/status?per_page=100" => Json(
+                    """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+        var request = new[] { new PullRequestChecksRequestItem(1, "cache123") };
+
+        await client.GetPullRequestChecksAsync(
+            new RepositoryName("example", "repo"),
+            request,
+            false,
+            TestContext.Current.CancellationToken);
+        await client.GetPullRequestChecksAsync(
+            new RepositoryName("example", "repo"),
+            request,
+            false,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, requestCount);
+
+        await client.GetPullRequestChecksAsync(
+            new RepositoryName("example", "repo"),
+            request,
+            true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(4, requestCount);
     }
 
     [Fact]
@@ -780,6 +834,7 @@ public sealed class GitHubClientTests
             new RepositoryName("example", "repo"),
             "13.4",
             "release/13.4",
+            false,
             TestContext.Current.CancellationToken);
 
         Assert.NotNull(result.Response);
@@ -836,6 +891,7 @@ public sealed class GitHubClientTests
             new RepositoryName("example", "repo"),
             "13.4",
             null,
+            false,
             TestContext.Current.CancellationToken);
 
         Assert.NotNull(result.Response);
@@ -855,6 +911,7 @@ public sealed class GitHubClientTests
             new RepositoryName("example", "repo"),
             "13.4",
             "release/13.4",
+            false,
             TestContext.Current.CancellationToken);
 
         Assert.Null(result.Response);
@@ -878,6 +935,7 @@ public sealed class GitHubClientTests
             new RepositoryName("example", "repo"),
             "13.4",
             "release/13.4",
+            false,
             TestContext.Current.CancellationToken);
 
         Assert.Null(result.Response);
