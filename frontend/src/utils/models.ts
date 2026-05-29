@@ -35,6 +35,7 @@ import {
   formatDuration,
   formatRelative,
 } from './format';
+import { dedupeSignals } from './signals';
 
 const approvedAgingMs = 2 * dayMs;
 const communityWaitMs = 12 * hourMs;
@@ -1110,18 +1111,6 @@ function preferredParticipantName(actors: string[]) {
     || first.localeCompare(second));
 
   return sorted[0] ?? '';
-}
-
-function dedupeSignals(signals: AttentionSignal[]) {
-  const seen = new Set<string>();
-  return signals.filter((signal) => {
-    if (seen.has(signal.label)) {
-      return false;
-    }
-
-    seen.add(signal.label);
-    return true;
-  });
 }
 
 function createSignalMilestones(pullRequest: PullRequestSummary, items: TimelineItem[]): SignalMilestone[] {

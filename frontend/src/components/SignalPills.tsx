@@ -1,4 +1,5 @@
 import type { AttentionSignal } from '../types';
+import { dedupeSignals } from '../utils/signals';
 
 type SignalPillsProps = {
   signals: AttentionSignal[];
@@ -15,18 +16,6 @@ function SignalPills({ signals, className }: SignalPillsProps) {
       ))}
     </span>
   );
-}
-
-function dedupeSignals(signals: AttentionSignal[]) {
-  const seen = new Set<string>();
-  return signals.filter((signal) => {
-    if (seen.has(signal.label)) {
-      return false;
-    }
-
-    seen.add(signal.label);
-    return true;
-  });
 }
 
 export default SignalPills;
