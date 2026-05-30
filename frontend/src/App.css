@@ -607,12 +607,19 @@ select:focus-visible {
   --ship-week-color: var(--danger);
 }
 
-.ship-week-summary-card span,
-.ship-week-summary-card strong {
+.ship-week-summary-card-label,
+.ship-week-summary-card-value {
   display: block;
 }
 
-.ship-week-summary-card span {
+.ship-week-summary-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.ship-week-summary-card-label {
   color: var(--muted);
   font-size: 0.68rem;
   font-weight: 900;
@@ -620,7 +627,7 @@ select:focus-visible {
   text-transform: uppercase;
 }
 
-.ship-week-summary-card strong {
+.ship-week-summary-card-value {
   margin-top: 0.2rem;
   color: var(--text);
   font-size: 1.35rem;
@@ -652,6 +659,47 @@ select:focus-visible {
 .ship-week-critical-panel > .attention-list,
 .ship-week-critical-panel > .ship-week-issue-list {
   margin-top: 0.5rem;
+}
+
+.section-loading-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.loading-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.loading-badge span {
+  display: inline-block;
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: var(--loading-badge-color, var(--ship-week-color, var(--queue-color, var(--attention-color, var(--accent-strong)))));
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--loading-badge-color, var(--ship-week-color, var(--queue-color, var(--attention-color, var(--accent-strong))))) 38%, transparent);
+  animation: loading-badge-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes loading-badge-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
 
 .ship-week-issues {
@@ -816,13 +864,21 @@ select:focus-visible {
   background: var(--drilldown-tile-bg, var(--accent-wash));
 }
 
-.drilldown-tiles span,
+.drilldown-tile-label,
 .drilldown-tiles strong,
 .drilldown-tiles em {
   display: block;
 }
 
-.drilldown-tiles span {
+.drilldown-tile-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+  --loading-badge-color: var(--drilldown-tile-color, var(--accent-strong));
+}
+
+.drilldown-tile-label {
   font-size: 0.68rem;
   font-weight: 900;
   letter-spacing: 0.08em;
@@ -1048,6 +1104,21 @@ select:focus-visible {
   font-size: 0.9rem;
   font-weight: 900;
   white-space: nowrap;
+}
+
+.attention-card-header .loading-badge {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.attention-card-header .loading-badge span {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: var(--loading-badge-color, var(--ship-week-color, var(--queue-color, var(--attention-color, var(--accent-strong)))));
 }
 
 .bucket-card-actions {
@@ -1844,6 +1915,12 @@ select:focus-visible {
 .section-title-row h3 {
   margin: 0;
   font-size: 1rem;
+}
+
+.section-title-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .board-guidance {

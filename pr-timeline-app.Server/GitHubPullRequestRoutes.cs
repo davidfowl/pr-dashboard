@@ -1,7 +1,12 @@
+using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 
 public static class GitHubPullRequestRoutes
 {
+    private static readonly JsonSerializerOptions s_streamJsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly byte[] s_newLine = [(byte)'\n'];
+
     public static IEndpointRouteBuilder MapGitHubPullRequestRoutes(this IEndpointRouteBuilder endpoints)
     {
         var api = endpoints.MapGroup("/api/github");
@@ -36,6 +41,41 @@ public static class GitHubPullRequestRoutes
                 ? await pullRequests.GetPullRequestsAsync(repositoryName, normalizedState, forceRefresh, cancellationToken)
                 : await pullRequests.GetPullRequestsByLabelAsync(repositoryName, normalizedState, label.Trim(), forceRefresh, cancellationToken);
             return Results.Ok(new PullRequestListResponse(repositoryName.ToString(), pulls));
+        });
+
+        api.MapGet("pulls/stream", (
+            [FromQuery] string? repo,
+            [FromQuery] string? state,
+            [FromQuery] string? label,
+            [FromQuery] bool? refresh,
+            GitHubPullRequestService pullRequests,
+            CancellationToken cancellationToken) =>
+        {
+            if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
+                });
+            }
+
+            var normalizedState = string.IsNullOrWhiteSpace(state) ? "open" : state.Trim().ToLowerInvariant();
+            if (normalizedState is not ("open" or "closed" or "all"))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["state"] = ["State must be open, closed, or all."]
+                });
+            }
+
+            var forceRefresh = refresh == true;
+            var stream = string.IsNullOrWhiteSpace(label)
+                ? pullRequests.StreamPullRequestsAsync(repositoryName, normalizedState, forceRefresh, cancellationToken)
+                : pullRequests.StreamPullRequestsByLabelAsync(repositoryName, normalizedState, label.Trim(), forceRefresh, cancellationToken);
+
+            return JsonLines(
+                CreatePullRequestStreamItems(repositoryName.ToString(), stream, cancellationToken),
+                cancellationToken);
         });
 
         api.MapGet("regression-issues", async (
@@ -168,5 +208,27 @@ public static class GitHubPullRequestRoutes
         });
 
         return endpoints;
+    }
+
+    private static IResult JsonLines<T>(IAsyncEnumerable<T> items, CancellationToken cancellationToken) =>
+        Results.Stream(async stream =>
+        {
+            await foreach (var item in items.WithCancellation(cancellationToken))
+            {
+                await JsonSerializer.SerializeAsync(stream, item, s_streamJsonOptions, cancellationToken);
+                await stream.WriteAsync(s_newLine, cancellationToken);
+                await stream.FlushAsync(cancellationToken);
+            }
+        }, "application/x-ndjson");
+
+    private static async IAsyncEnumerable<PullRequestStreamItem> CreatePullRequestStreamItems(
+        string repository,
+        IAsyncEnumerable<PullRequestSummary> pullRequests,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var pullRequest in pullRequests.WithCancellation(cancellationToken))
+        {
+            yield return new PullRequestStreamItem(repository, pullRequest);
+        }
     }
 }

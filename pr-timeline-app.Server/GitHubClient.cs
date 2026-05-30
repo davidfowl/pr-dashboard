@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.Caching.Memory;
@@ -9,6 +10,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
     private const int PullRequestPageSize = 100;
+    private const int PullRequestStreamBatchSize = 20;
     private const int MaxLinkedIssuesPerPullRequest = 10;
     private const int MaxGitHubRedirects = 3;
     private const int MaxConcurrentChecksFetches = 4;
@@ -63,6 +65,41 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         }) ?? [];
     }
 
+    public async IAsyncEnumerable<PullRequestSummary> StreamPullRequestsAsync(
+        RepositoryName repositoryName,
+        string state,
+        bool forceRefresh,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
+        var cacheKey = $"pulls:{authCacheKey}:{repositoryName}:{state}";
+        RemoveCacheEntry(cacheKey, forceRefresh);
+
+        if (!forceRefresh && cache.TryGetValue(cacheKey, out IReadOnlyList<PullRequestSummary>? cachedPullRequests) && cachedPullRequests is not null)
+        {
+            foreach (var pullRequest in cachedPullRequests)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return pullRequest;
+            }
+
+            yield break;
+        }
+
+        var streamedPullRequests = new List<PullRequestSummary>();
+        await foreach (var pullRequest in CreatePullRequestSummariesInBatchesAsync(
+            repositoryName,
+            StreamPullRequestDtosAsync(repositoryName, state, cancellationToken),
+            forceRefresh,
+            cancellationToken))
+        {
+            streamedPullRequests.Add(pullRequest);
+            yield return pullRequest;
+        }
+
+        cache.Set(cacheKey, streamedPullRequests.ToArray(), CacheDuration);
+    }
+
     public async Task<IReadOnlyList<PullRequestSummary>> GetPullRequestsByLabelAsync(
         RepositoryName repositoryName,
         string state,
@@ -113,6 +150,53 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 forceRefresh,
                 cancellationToken);
         }) ?? [];
+    }
+
+    public async IAsyncEnumerable<PullRequestSummary> StreamPullRequestsByLabelAsync(
+        RepositoryName repositoryName,
+        string state,
+        string label,
+        bool forceRefresh,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var normalizedLabel = label.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedLabel))
+        {
+            await foreach (var pullRequest in StreamPullRequestsAsync(repositoryName, state, forceRefresh, cancellationToken))
+            {
+                yield return pullRequest;
+            }
+
+            yield break;
+        }
+
+        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
+        var cacheKey = $"pulls:{authCacheKey}:{repositoryName}:{state}:label:{normalizedLabel}";
+        RemoveCacheEntry(cacheKey, forceRefresh);
+
+        if (!forceRefresh && cache.TryGetValue(cacheKey, out IReadOnlyList<PullRequestSummary>? cachedPullRequests) && cachedPullRequests is not null)
+        {
+            foreach (var pullRequest in cachedPullRequests)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return pullRequest;
+            }
+
+            yield break;
+        }
+
+        var streamedPullRequests = new List<PullRequestSummary>();
+        await foreach (var pullRequest in CreatePullRequestSummariesInBatchesAsync(
+            repositoryName,
+            StreamPullRequestDtosByLabelAsync(repositoryName, state, normalizedLabel, cancellationToken),
+            forceRefresh,
+            cancellationToken))
+        {
+            streamedPullRequests.Add(pullRequest);
+            yield return pullRequest;
+        }
+
+        cache.Set(cacheKey, streamedPullRequests.ToArray(), CacheDuration);
     }
 
     public async Task<IReadOnlyList<ShipWeekIssueSummary>> GetRegressionIssuesAsync(
@@ -291,6 +375,141 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 shipWeekPullRequests,
                 shipWeekIssues));
         }) ?? ShipWeekLoadResult.ValidationProblem("shipWeek", "Unable to load ship-week data.");
+    }
+
+    private async IAsyncEnumerable<PullRequestSummary> CreatePullRequestSummariesInBatchesAsync(
+        RepositoryName repositoryName,
+        IAsyncEnumerable<GitHubPullRequestDto> pullRequestDtos,
+        bool forceRefresh,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var seenPullRequests = new HashSet<int>();
+        var batch = new List<GitHubPullRequestDto>(PullRequestStreamBatchSize);
+
+        await foreach (var pullRequestDto in pullRequestDtos.WithCancellation(cancellationToken))
+        {
+            if (!seenPullRequests.Add(pullRequestDto.Number))
+            {
+                continue;
+            }
+
+            batch.Add(pullRequestDto);
+            if (batch.Count < PullRequestStreamBatchSize)
+            {
+                continue;
+            }
+
+            foreach (var pullRequest in await CreatePullRequestSummariesAsync(repositoryName, batch, forceRefresh, cancellationToken))
+            {
+                yield return pullRequest;
+            }
+
+            batch.Clear();
+        }
+
+        if (batch.Count == 0)
+        {
+            yield break;
+        }
+
+        foreach (var pullRequest in await CreatePullRequestSummariesAsync(repositoryName, batch, forceRefresh, cancellationToken))
+        {
+            yield return pullRequest;
+        }
+    }
+
+    private async IAsyncEnumerable<GitHubPullRequestDto> StreamPullRequestDtosAsync(
+        RepositoryName repositoryName,
+        string state,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var sort = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "created" : "updated";
+        var direction = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "asc" : "desc";
+        var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls?state={Uri.EscapeDataString(state)}&sort={sort}&direction={direction}&per_page={PullRequestPageSize}";
+
+        await foreach (var pullRequest in SendPagedGitHubRequestStreamAsync(
+            url,
+            GitHubJsonSerializerContext.Default.GitHubPullRequestDtoArray,
+            cancellationToken))
+        {
+            if (!pullRequest.Draft)
+            {
+                yield return pullRequest;
+            }
+        }
+    }
+
+    private async IAsyncEnumerable<GitHubPullRequestDto> StreamPullRequestDtosByLabelAsync(
+        RepositoryName repositoryName,
+        string state,
+        string label,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var sort = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "created" : "updated";
+        var direction = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "asc" : "desc";
+        var issueUrl = $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues?state={Uri.EscapeDataString(state)}&labels={Uri.EscapeDataString(label)}&sort={sort}&direction={direction}&per_page={PullRequestPageSize}";
+        var issueBatch = new List<int>(PullRequestStreamBatchSize);
+
+        await foreach (var issue in SendPagedGitHubRequestStreamAsync(
+            issueUrl,
+            GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
+            cancellationToken))
+        {
+            if (issue.PullRequest is null)
+            {
+                continue;
+            }
+
+            issueBatch.Add(issue.Number);
+            if (issueBatch.Count < PullRequestStreamBatchSize)
+            {
+                continue;
+            }
+
+            foreach (var pullRequest in await GetPullRequestDtosByNumberAsync(repositoryName, issueBatch, cancellationToken))
+            {
+                yield return pullRequest;
+            }
+
+            issueBatch.Clear();
+        }
+
+        if (issueBatch.Count == 0)
+        {
+            yield break;
+        }
+
+        foreach (var pullRequest in await GetPullRequestDtosByNumberAsync(repositoryName, issueBatch, cancellationToken))
+        {
+            yield return pullRequest;
+        }
+    }
+
+    private async Task<IReadOnlyList<GitHubPullRequestDto>> GetPullRequestDtosByNumberAsync(
+        RepositoryName repositoryName,
+        IReadOnlyList<int> numbers,
+        CancellationToken cancellationToken)
+    {
+        var pullRequestTasks = numbers
+            .Distinct()
+            .ToDictionary(
+                number => number,
+                number => GetPullRequestDtoOrNullAsync(repositoryName, number, cancellationToken));
+
+        await Task.WhenAll(pullRequestTasks.Values);
+
+        var pullRequests = new List<GitHubPullRequestDto>(pullRequestTasks.Count);
+        foreach (var task in pullRequestTasks.Values)
+        {
+            if (await task is { Draft: false } pullRequest)
+            {
+                pullRequests.Add(pullRequest);
+            }
+        }
+
+        return pullRequests
+            .OrderBy(pullRequest => pullRequest.CreatedAt)
+            .ToArray();
     }
 
     private async Task<IReadOnlyList<PullRequestSummary>> CreatePullRequestSummariesAsync(
@@ -1131,6 +1350,28 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         }
 
         return items;
+    }
+
+    private async IAsyncEnumerable<T> SendPagedGitHubRequestStreamAsync<T>(
+        string url,
+        JsonTypeInfo<T[]> jsonTypeInfo,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        string? nextUrl = url;
+
+        while (nextUrl is not null)
+        {
+            using var response = await SendAuthorizedRequestAsync(nextUrl, cancellationToken);
+            var pageItems = await ReadGitHubJsonAsync(response, jsonTypeInfo, cancellationToken);
+
+            foreach (var item in pageItems)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return item;
+            }
+
+            nextUrl = GetNextPageUrl(response);
+        }
     }
 
     private async Task<HttpResponseMessage> SendAuthorizedRequestAsync(string url, CancellationToken cancellationToken)

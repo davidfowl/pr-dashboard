@@ -3,16 +3,19 @@ import type {
   AttentionSignal,
   PullRequestSummary,
   ShipWeekIssueSummary,
+  ShipWeekLoadingState,
   ShipWeekPullRequestSummary,
   ShipWeekResponse,
 } from '../../types';
 import { formatCount } from '../../utils/format';
 import IssueListItem from '../IssueListItem';
+import LoadingBadge from '../LoadingBadge';
 import PullRequestList from '../PullRequestList';
 
 type ShipWeekSectionProps = {
   shipWeek: ShipWeekResponse | null;
   loading: boolean;
+  sectionLoading: ShipWeekLoadingState;
   error: string | null;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
@@ -27,6 +30,7 @@ type ShipModePullRequestItem = {
 function ShipWeekSection({
   shipWeek,
   loading,
+  sectionLoading,
   error,
   onSelectPullRequest,
   onVisiblePullRequest,
@@ -47,12 +51,12 @@ function ShipWeekSection({
         </p>
       </div>
 
-      {loading && <p className="empty-for-me">Loading ship mode data...</p>}
       {error && (
         <div className="error" role="alert">
           {error}
         </div>
       )}
+      {loading && !shipWeek && <p className="empty-for-me">Loading ship mode sections...</p>}
 
       {shipWeek && model && (
         <>
@@ -62,30 +66,35 @@ function ShipWeekSection({
               value={shipWeek.issues.length}
               detail={shipWeek.issues.length === 0 ? 'complete' : 'need PR/backport'}
               tone={shipWeek.issues.length > 0 ? 'danger' : 'success'}
+              loading={sectionLoading.issues}
             />
             <SummaryCard
               label="Needs work"
               value={model.needsWorkCount}
               detail="CI or author response"
               tone={model.needsWorkCount > 0 ? 'danger' : 'success'}
+              loading={sectionLoading.milestone || sectionLoading.baseBranch || sectionLoading.docs}
             />
             <SummaryCard
               label="Pending review"
               value={model.pendingReviewCount}
               detail="needs review or re-review"
               tone={model.pendingReviewCount > 0 ? 'warning' : 'success'}
+              loading={sectionLoading.milestone || sectionLoading.baseBranch || sectionLoading.docs}
             />
             <SummaryCard
               label="Ready"
               value={model.readyCount}
               detail="approved and unblocked"
               tone="success"
+              loading={sectionLoading.milestone || sectionLoading.baseBranch || sectionLoading.docs}
             />
             <SummaryCard
               label="Docs"
               value={model.docsFromCodePullRequests.length}
               detail="generated PRs"
               tone={model.docsFromCodePullRequests.length > 0 ? 'accent' : 'success'}
+              loading={sectionLoading.docs}
             />
           </div>
 
@@ -93,11 +102,14 @@ function ShipWeekSection({
             <section className="ship-week-critical-panel accent" aria-label={`Pull requests in ${shipWeek.milestone}`}>
               <div className="attention-card-header">
                 <span>PRs in {shipWeek.milestone}</span>
-                <strong>{formatCount(model.milestonePullRequests.length, 'PR')}</strong>
+                <div className="section-loading-meta">
+                  {sectionLoading.milestone && <SectionLoadingIndicator />}
+                  <strong>{formatCount(model.milestonePullRequests.length, 'PR')}</strong>
+                </div>
               </div>
               <ShipModePullRequestList
                 items={model.milestonePullRequests}
-                emptyState="No open PRs are in or linked to this milestone."
+                emptyState={sectionLoading.milestone ? 'Loading milestone PRs...' : 'No open PRs are in or linked to this milestone.'}
                 onSelectPullRequest={onSelectPullRequest}
                 onVisiblePullRequest={onVisiblePullRequest}
               />
@@ -106,25 +118,31 @@ function ShipWeekSection({
             <section className="ship-week-critical-panel warning" aria-label={`Pull requests targeting ${shipWeek.releaseBranch}`}>
               <div className="attention-card-header">
                 <span>PRs targeting {shipWeek.releaseBranch}</span>
-                <strong>{formatCount(model.baseBranchPullRequests.length, 'PR')}</strong>
+                <div className="section-loading-meta">
+                  {sectionLoading.baseBranch && <SectionLoadingIndicator />}
+                  <strong>{formatCount(model.baseBranchPullRequests.length, 'PR')}</strong>
+                </div>
               </div>
               <ShipModePullRequestList
                 items={model.baseBranchPullRequests}
-                emptyState="No open PRs target the selected base branch."
+                emptyState={sectionLoading.baseBranch ? 'Loading base-branch PRs...' : 'No open PRs target the selected base branch.'}
                 onSelectPullRequest={onSelectPullRequest}
                 onVisiblePullRequest={onVisiblePullRequest}
               />
             </section>
 
-            {model.docsFromCodePullRequests.length > 0 && (
+            {(sectionLoading.docs || model.docsFromCodePullRequests.length > 0) && (
               <section className="ship-week-critical-panel accent" aria-label="Generated docs pull requests">
                 <div className="attention-card-header">
                   <span>Generated docs PRs</span>
-                  <strong>{formatCount(model.docsFromCodePullRequests.length, 'PR')}</strong>
+                  <div className="section-loading-meta">
+                    {sectionLoading.docs && <SectionLoadingIndicator />}
+                    <strong>{formatCount(model.docsFromCodePullRequests.length, 'PR')}</strong>
+                  </div>
                 </div>
                 <ShipModePullRequestList
                   items={model.docsFromCodePullRequests}
-                  emptyState="No open generated docs PRs are loaded."
+                  emptyState={sectionLoading.docs ? 'Loading generated docs PRs...' : 'No open generated docs PRs are loaded.'}
                   onSelectPullRequest={onSelectPullRequest}
                   onVisiblePullRequest={onVisiblePullRequest}
                 />
@@ -135,15 +153,22 @@ function ShipWeekSection({
           <section className="ship-week-critical-panel danger" aria-label="Open milestone issues TBD">
             <div className="attention-card-header">
               <span>Open issues TBD</span>
-              <strong>{formatCount(shipWeek.issues.length, 'issue')}</strong>
+              <div className="section-loading-meta">
+                {sectionLoading.issues && <SectionLoadingIndicator />}
+                <strong>{formatCount(shipWeek.issues.length, 'issue')}</strong>
+              </div>
             </div>
             <p className="board-guidance">These are open milestone issues that are not PRs yet. Treat as TBD until there is a PR/backport path.</p>
-            <ShipWeekIssueList issues={shipWeek.issues} />
+            <ShipWeekIssueList issues={shipWeek.issues} emptyState={sectionLoading.issues ? 'Loading milestone issues...' : 'No open non-PR issues in this milestone.'} />
           </section>
         </>
       )}
     </section>
   );
+}
+
+function SectionLoadingIndicator() {
+  return <LoadingBadge ariaLabel="Still loading" />;
 }
 
 function createShipModeModel(shipWeek: ShipWeekResponse) {
@@ -229,10 +254,10 @@ function ShipModePullRequestList({
   );
 }
 
-function ShipWeekIssueList({ issues }: { issues: ShipWeekIssueSummary[] }) {
+function ShipWeekIssueList({ issues, emptyState }: { issues: ShipWeekIssueSummary[]; emptyState: string }) {
   return (
     <div className="attention-list">
-      {issues.length === 0 && <p className="empty-for-me">No open non-PR issues in this milestone.</p>}
+      {issues.length === 0 && <p className="empty-for-me">{emptyState}</p>}
       {issues.map((issue) => (
         <IssueListItem
           key={`${issue.repository}#${issue.number}`}
@@ -260,16 +285,21 @@ function SummaryCard({
   value,
   detail,
   tone = 'accent',
+  loading = false,
 }: {
   label: string;
   value: number | string;
   detail: string;
   tone?: 'accent' | 'warning' | 'danger' | 'success';
+  loading?: boolean;
 }) {
   return (
     <article className={`ship-week-summary-card ${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
+      <div className="ship-week-summary-card-header">
+        <span className="ship-week-summary-card-label">{label}</span>
+        {loading && <SectionLoadingIndicator />}
+      </div>
+      <strong className="ship-week-summary-card-value">{value}</strong>
       <p>{detail}</p>
     </article>
   );

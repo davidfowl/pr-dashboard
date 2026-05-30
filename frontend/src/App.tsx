@@ -22,10 +22,10 @@ import type {
   MergeableState,
   PullRequestChecksRequest,
   PullRequestChecksResponse,
-  PullRequestListResponse,
   PullRequestSummary,
   PullState,
   ShipWeekIssueSummary,
+  ShipWeekLoadingState,
   ShipWeekResponse,
   TimelineItem,
   TimelineResponse,
@@ -34,6 +34,8 @@ import type {
 } from './types';
 import { colorForText } from './utils/format';
 import { readJson } from './utils/http';
+import { beginAbortableLoad } from './utils/loadLifecycle';
+import { streamPullRequests, upsertByUpdatedAt, upsertManyByUpdatedAt } from './utils/pullRequests';
 import {
   createActivityModel,
   createAttentionBuckets,
@@ -64,6 +66,13 @@ type LoadOptions = {
   forceRefresh?: boolean;
 };
 
+const emptyShipWeekLoadingState: ShipWeekLoadingState = {
+  milestone: false,
+  baseBranch: false,
+  docs: false,
+  issues: false,
+};
+
 function App() {
   const [repo, setRepo] = useState(defaultRepoInput);
   const [activeRepo, setActiveRepo] = useState(defaultRepos[0]);
@@ -83,6 +92,7 @@ function App() {
   const [pullsLoading, setPullsLoading] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [shipWeekLoading, setShipWeekLoading] = useState(false);
+  const [shipWeekSectionLoading, setShipWeekSectionLoading] = useState<ShipWeekLoadingState>(emptyShipWeekLoadingState);
   const [loginLoading, setLoginLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shipWeekError, setShipWeekError] = useState<string | null>(null);
@@ -100,6 +110,10 @@ function App() {
   const visibleChecksTimerRef = useRef<number | null>(null);
   const visibleChecksAbortControllerRef = useRef<AbortController | null>(null);
   const forceVisibleChecksRefreshRef = useRef(false);
+  const pullRequestsLoadVersionRef = useRef(0);
+  const pullRequestsAbortControllerRef = useRef<AbortController | null>(null);
+  const shipWeekLoadVersionRef = useRef(0);
+  const shipWeekAbortControllerRef = useRef<AbortController | null>(null);
 
   const selectedTitle = selectedPullRequest
     ? `#${selectedPullRequest.number} ${selectedPullRequest.title}`
@@ -258,6 +272,9 @@ function App() {
   }
 
   async function loadPullRequests(repositoryInput: string, pullState: PullState, options: LoadOptions = {}) {
+    const load = beginAbortableLoad(pullRequestsLoadVersionRef, pullRequestsAbortControllerRef);
+    const { abortController, isCurrentLoad } = load;
+
     setPullsLoading(true);
     setError(null);
     beginVisibleChecksRequestScope();
@@ -271,51 +288,60 @@ function App() {
 
     try {
       const repositories = parseRepositories(repositoryInput);
-      const [responses, regressionIssueResponses] = await Promise.all([
-        Promise.all(
-          repositories.map(async (repository) => {
-            const query = new URLSearchParams({ repo: repository, state: pullState });
-            if (options.forceRefresh) {
-              query.set('refresh', 'true');
+      setActiveRepo(repositories.length === 1 ? repositories[0] : `${repositories.length} repos`);
+      setPullRequests([]);
+      setReviewRegressionIssues([]);
+
+      const pullRequestTasks = repositories.map(async (repository) => {
+        const query = new URLSearchParams({ repo: repository, state: pullState });
+        if (options.forceRefresh) {
+          query.set('refresh', 'true');
+        }
+
+        await streamPullRequests(`/api/github/pulls/stream?${query}`, {
+          signal: abortController.signal,
+          onPullRequest: (pullRequest) => {
+            if (!isCurrentLoad()) {
+              return;
             }
-            const response = await fetch(`/api/github/pulls?${query}`);
-            return await readJson<PullRequestListResponse>(response);
-          }),
-        ),
+
+            setPullRequests((currentPullRequests) => upsertByUpdatedAt(currentPullRequests, pullRequest));
+          },
+        });
+      });
+
+      await Promise.all([
+        Promise.all(pullRequestTasks),
         Promise.all(
           repositories.map(async (repository) => {
             const query = new URLSearchParams({ repo: repository, state: 'open' });
             if (options.forceRefresh) {
               query.set('refresh', 'true');
             }
-            const response = await fetch(`/api/github/regression-issues?${query}`);
-            return await readJson<IssueListResponse>(response);
+
+            const response = await fetch(`/api/github/regression-issues?${query}`, { signal: abortController.signal });
+            const data = await readJson<IssueListResponse>(response);
+            if (!isCurrentLoad()) {
+              return;
+            }
+
+            setReviewRegressionIssues((currentIssues) => upsertManyByUpdatedAt(currentIssues, data.issues));
           }),
         ),
       ]);
-
-      const pullRequests = responses
-        .flatMap((data) =>
-          data.pullRequests.map((pullRequest) => ({
-            ...pullRequest,
-            repository: data.repository,
-          })),
-        )
-        .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime());
-
-      setActiveRepo(repositories.length === 1 ? responses[0]?.repository ?? repositories[0] : `${repositories.length} repos`);
-      setPullRequests(pullRequests);
-      setReviewRegressionIssues(
-        regressionIssueResponses
-          .flatMap((data) => data.issues)
-          .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime()),
-      );
     } catch (err) {
+      if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
+        return;
+      }
+
       setError(err instanceof Error ? err.message : 'Unable to load pull requests.');
       setPullRequests([]);
       setReviewRegressionIssues([]);
     } finally {
-      setPullsLoading(false);
+      if (isCurrentLoad()) {
+        setPullsLoading(false);
+        load.finish();
+      }
     }
   }
 
@@ -325,7 +351,11 @@ function App() {
     releaseBranchInput: string,
     options: LoadOptions = {},
   ) {
+    const load = beginAbortableLoad(shipWeekLoadVersionRef, shipWeekAbortControllerRef);
+    const { abortController, isCurrentLoad } = load;
+
     setShipWeekLoading(true);
+    setShipWeekSectionLoading(emptyShipWeekLoadingState);
     setShipWeekError(null);
     beginVisibleChecksRequestScope();
     forceVisibleChecksRefreshRef.current = options.forceRefresh ?? false;
@@ -336,26 +366,75 @@ function App() {
       const releaseBranch = releaseBranchInput.trim();
       const releaseScopeRepositories = repositories.filter((repository) => !isDocsFromCodeRepository(repository));
       const docsRepositories = repositories.filter(isDocsFromCodeRepository);
-      const [releaseResponses, docsPullRequests] = await Promise.all([
-        Promise.all(releaseScopeRepositories.map((repository) =>
-          loadRepositoryShipWeek(repository, milestone, releaseBranch, options))),
-        Promise.all(docsRepositories.map((repository) => loadDocsFromCodePullRequests(repository, options))),
-      ]);
-
-      const shipWeek = combineShipWeekResponses(
-        repositories,
-        milestone,
-        releaseBranch,
-        releaseResponses,
-        docsPullRequests.flat(),
-      );
       setActiveRepo(repositories.length === 1 ? repositories[0] : `${repositories.length} repos`);
-      setShipWeek(shipWeek);
+      setShipWeek(null);
+      setShipWeekSectionLoading({
+        milestone: releaseScopeRepositories.length > 0,
+        baseBranch: releaseScopeRepositories.length > 0,
+        docs: docsRepositories.length > 0,
+        issues: releaseScopeRepositories.length > 0,
+      });
+
+      let releaseResponses: ShipWeekResponse[] = [];
+      let docsPullRequests: PullRequestSummary[] = [];
+      const publishShipWeek = () => {
+        if (!isCurrentLoad()) {
+          return;
+        }
+
+        setShipWeek(combineShipWeekResponses(
+          repositories,
+          milestone,
+          releaseBranch,
+          releaseResponses,
+          docsPullRequests,
+        ));
+      };
+
+      const releaseTasks = releaseScopeRepositories.map(async (repository) => {
+        const response = await loadRepositoryShipWeek(repository, milestone, releaseBranch, options, abortController.signal);
+        releaseResponses = [...releaseResponses, response];
+        publishShipWeek();
+      });
+      const docsTasks = docsRepositories.map((repository) =>
+        loadDocsFromCodePullRequests(repository, options, abortController.signal, (pullRequest) => {
+          docsPullRequests = upsertByUpdatedAt(docsPullRequests, pullRequest);
+          publishShipWeek();
+        }));
+      const releaseDoneTask = Promise.all(releaseTasks).finally(() => {
+        if (isCurrentLoad()) {
+          setShipWeekSectionLoading((current) => ({
+            ...current,
+            milestone: false,
+            baseBranch: false,
+            issues: false,
+          }));
+        }
+      });
+      const docsDoneTask = Promise.all(docsTasks).finally(() => {
+        if (isCurrentLoad()) {
+          setShipWeekSectionLoading((current) => ({
+            ...current,
+            docs: false,
+          }));
+        }
+      });
+
+      publishShipWeek();
+      await Promise.all([releaseDoneTask, docsDoneTask]);
     } catch (err) {
+      if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
+        return;
+      }
+
       setShipWeekError(err instanceof Error ? err.message : 'Unable to load ship-week data.');
       setShipWeek(null);
     } finally {
-      setShipWeekLoading(false);
+      if (isCurrentLoad()) {
+        setShipWeekLoading(false);
+        setShipWeekSectionLoading(emptyShipWeekLoadingState);
+        load.finish();
+      }
     }
   }
 
@@ -683,6 +762,7 @@ function App() {
             forMeItems={forMeItems}
             shipWeek={shipWeek}
             shipWeekLoading={shipWeekLoading}
+            shipWeekSectionLoading={shipWeekSectionLoading}
             shipWeekError={shipWeekError}
             shipWeekRepo={shipWeekRepo}
             shipWeekMilestone={shipWeekMilestone}
@@ -733,6 +813,7 @@ async function loadRepositoryShipWeek(
   milestone: string,
   releaseBranch: string,
   options: LoadOptions = {},
+  signal?: AbortSignal,
 ) {
   const query = new URLSearchParams({ repo: repository, milestone });
   if (releaseBranch) {
@@ -742,24 +823,27 @@ async function loadRepositoryShipWeek(
     query.set('refresh', 'true');
   }
 
-  const response = await fetch(`/api/github/ship-week?${query}`);
+  const response = await fetch(`/api/github/ship-week?${query}`, { signal });
   return normalizeShipWeekResponse(await readJson<ShipWeekResponse>(response));
 }
 
-async function loadDocsFromCodePullRequests(repository: string, options: LoadOptions = {}) {
+function loadDocsFromCodePullRequests(
+  repository: string,
+  options: LoadOptions = {},
+  signal?: AbortSignal,
+  onPullRequest?: (pullRequest: PullRequestSummary) => void,
+) {
   const query = new URLSearchParams({ repo: repository, state: 'open' });
   query.set('label', docsFromCodeLabel);
   if (options.forceRefresh) {
     query.set('refresh', 'true');
   }
-  const response = await fetch(`/api/github/pulls?${query}`);
-  const data = await readJson<PullRequestListResponse>(response);
-  return data.pullRequests
-    .map((pullRequest) => ({
-      ...pullRequest,
-      repository: data.repository,
-    }))
-    .filter(isGeneratedDocsPullRequest);
+
+  return streamPullRequests(`/api/github/pulls/stream?${query}`, {
+    signal,
+    filter: isGeneratedDocsPullRequest,
+    onPullRequest,
+  });
 }
 
 function combineShipWeekResponses(

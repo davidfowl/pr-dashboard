@@ -37,6 +37,10 @@ record PullRequestListResponse(string Repository, IReadOnlyList<PullRequestSumma
 
 record IssueListResponse(string Repository, IReadOnlyList<ShipWeekIssueSummary> Issues);
 
+record PullRequestStreamItem(string Repository, PullRequestSummary PullRequest);
+
+record IssueStreamItem(string Repository, ShipWeekIssueSummary Issue);
+
 record PullRequestChecksRequest(IReadOnlyList<PullRequestChecksRequestItem>? PullRequests);
 
 record PullRequestChecksRequestItem(int Number, string? HeadSha);

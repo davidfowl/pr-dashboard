@@ -3,6 +3,7 @@ import type { AttentionBucket, AttentionIssueBucket, PullRequestSummary } from '
 import { formatCount } from '../../utils/format';
 import { bucketRouteId, createBucketUrl } from '../../utils/routing';
 import IssueListItem from '../IssueListItem';
+import LoadingBadge from '../LoadingBadge';
 import PullRequestList from '../PullRequestList';
 import TileDrilldown from './TileDrilldown';
 import type { DrilldownTile } from './TileDrilldown';
@@ -10,6 +11,7 @@ import type { DrilldownTile } from './TileDrilldown';
 type AttentionBoardProps = {
   buckets: AttentionBucket[];
   regressionIssueBuckets: AttentionIssueBucket[];
+  loading: boolean;
   selectedBucketId: string;
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
@@ -33,6 +35,7 @@ type CopyStatus = {
 function AttentionBoard({
   buckets,
   regressionIssueBuckets,
+  loading,
   selectedBucketId,
   onSelectBucket,
   onSelectPullRequest,
@@ -45,6 +48,7 @@ function AttentionBoard({
     count: bucket.items.length,
     summary: bucket.metric,
     tone: bucket.tone,
+    loading,
     bucket,
     url: createBucketUrl(bucketRouteId(bucket.label)),
   }));
@@ -54,6 +58,7 @@ function AttentionBoard({
     if (existingTile) {
       existingTile.count += issueBucket.issues.length;
       existingTile.issueBucket = issueBucket;
+      existingTile.loading = existingTile.loading || loading;
     } else {
       bucketTiles.push({
         id,
@@ -61,6 +66,7 @@ function AttentionBoard({
         count: issueBucket.issues.length,
         summary: issueBucket.metric,
         tone: issueBucket.tone,
+        loading,
         issueBucket,
         url: createBucketUrl(id),
       });
@@ -99,7 +105,10 @@ function AttentionBoard({
     <section className="attention-board" aria-label="Review signal lanes">
       <div className="section-title-row">
         <p className="eyebrow">Team review board</p>
-        <h3>Review signal lanes</h3>
+        <div className="section-title-heading">
+          <h3>Review signal lanes</h3>
+          {loading && <LoadingBadge />}
+        </div>
         <p className="board-guidance">
           Lanes can overlap: automation, docs, stale, and review-state signals stay visible without hiding each other.
         </p>
@@ -136,6 +145,7 @@ function AttentionBoard({
               <div className="attention-card-header">
                 <span>{tile.label}</span>
                 <div className="bucket-card-actions">
+                  {tile.loading && <LoadingBadge />}
                   <strong>{countLabel || formatCount(0, 'item')}</strong>
                   <button
                     type="button"

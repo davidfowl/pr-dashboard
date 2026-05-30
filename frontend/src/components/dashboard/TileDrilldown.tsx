@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import LoadingBadge from '../LoadingBadge';
 
 export type DrilldownTileTone = 'success' | 'warning' | 'danger' | 'accent';
 
@@ -8,6 +9,7 @@ export type DrilldownTile<TId extends string = string> = {
   count: number;
   summary: string;
   tone?: DrilldownTileTone;
+  loading?: boolean;
 };
 
 type TileDrilldownProps<TId extends string, TTile extends DrilldownTile<TId>> = {
@@ -56,7 +58,10 @@ function TileDrilldown<TId extends string, TTile extends DrilldownTile<TId>>({
             aria-controls={panelId(idPrefix, tile.id)}
             aria-selected={activeId === tile.id}
           >
-            <span>{tile.label}</span>
+            <div className="drilldown-tile-title">
+              <span className="drilldown-tile-label">{tile.label}</span>
+              {tile.loading && <LoadingBadge />}
+            </div>
             <strong>{tile.count}</strong>
             <em>{tile.summary}</em>
           </button>

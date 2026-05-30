@@ -10,6 +10,7 @@ import type {
   PullRequestSummary,
 } from '../../types';
 import { colorForText, formatCount, formatRelative, initials } from '../../utils/format';
+import LoadingBadge from '../LoadingBadge';
 import PullRequestList from '../PullRequestList';
 import AttentionBoard from './AttentionBoard';
 
@@ -18,6 +19,7 @@ type QueueOverviewProps = {
   attentionBuckets: AttentionBucket[];
   regressionIssueBuckets: AttentionIssueBucket[];
   forMeItems: PickItem[];
+  loading: boolean;
   selectedBucketId: string;
   login?: string;
   onSelectBucket: (bucketId: string) => void;
@@ -51,6 +53,7 @@ function QueueOverview({
   attentionBuckets,
   regressionIssueBuckets,
   forMeItems,
+  loading,
   selectedBucketId,
   login,
   onSelectBucket,
@@ -109,7 +112,7 @@ function QueueOverview({
           </button>
         </div>
         {visibleCoreCounts.length === 0 ? (
-          <p className="empty-for-me">No loaded open PRs from core team members.</p>
+          <p className="empty-for-me">{loading ? 'Loading core team ownership...' : 'No loaded open PRs from core team members.'}</p>
         ) : (
           <div className="core-member-list">
             {visibleCoreCounts.map((count) => (
@@ -148,7 +151,10 @@ function QueueOverview({
       <section className="focus-panel" aria-label="Focused attention queue">
         <div className="attention-card-header">
           <span>Needs attention</span>
-          <strong>{formatCount(Math.min(focusItems.length, pullRequestListLimit), 'shown')}</strong>
+          <div className="section-loading-meta">
+            {loading && <LoadingBadge />}
+            <strong>{formatCount(Math.min(focusItems.length, pullRequestListLimit), 'shown')}</strong>
+          </div>
         </div>
         <p>Actionable PRs across the loaded repositories.</p>
 
@@ -162,7 +168,7 @@ function QueueOverview({
             },
           }))}
           limit={pullRequestListLimit}
-          emptyState="No recent non-automation PRs need attention in the current results."
+          emptyState={loading ? 'Loading review queue...' : 'No recent non-automation PRs need attention in the current results.'}
           onSelectPullRequest={onSelectPullRequest}
           onVisiblePullRequest={onVisiblePullRequest}
         />
@@ -171,16 +177,20 @@ function QueueOverview({
       <section className="owner-drilldown" aria-label="Core team ownership breakdown">
         <div className="attention-card-header">
           <span>Core team ownership</span>
-          <strong>{formatCount(coreOpenCount, 'open PR')}</strong>
+          <div className="section-loading-meta">
+            {loading && <LoadingBadge />}
+            <strong>{formatCount(coreOpenCount, 'open PR')}</strong>
+          </div>
         </div>
         <p className="board-guidance">{formatCount(activeCoreCounts.length, 'active author')} in the loaded queue.</p>
         {renderCoreOwnerDetails()}
       </section>
 
-      {(reviewBuckets.length > 0 || regressionIssueBuckets.length > 0) && (
+      {(loading || reviewBuckets.length > 0 || regressionIssueBuckets.length > 0) && (
         <AttentionBoard
           buckets={reviewBuckets}
           regressionIssueBuckets={regressionIssueBuckets}
+          loading={loading}
           selectedBucketId={selectedBucketId}
           onSelectBucket={onSelectBucket}
           onSelectPullRequest={onSelectPullRequest}

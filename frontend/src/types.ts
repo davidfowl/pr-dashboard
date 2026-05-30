@@ -87,6 +87,11 @@ export type PullRequestListResponse = {
   pullRequests: Omit<PullRequestSummary, 'repository'>[];
 };
 
+export type PullRequestStreamItem = {
+  repository: string;
+  pullRequest: Omit<PullRequestSummary, 'repository'>;
+};
+
 export type IssueListResponse = {
   repository: string;
   issues: ShipWeekIssueSummary[];
@@ -114,6 +119,13 @@ export type ShipWeekResponse = {
   releaseBranch: string;
   pullRequests: ShipWeekPullRequestSummary[];
   issues: ShipWeekIssueSummary[];
+};
+
+export type ShipWeekLoadingState = {
+  milestone: boolean;
+  baseBranch: boolean;
+  docs: boolean;
+  issues: boolean;
 };
 
 export type ShipWeekPullRequestSummary = {

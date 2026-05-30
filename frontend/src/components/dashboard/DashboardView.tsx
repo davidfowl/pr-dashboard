@@ -7,6 +7,7 @@ import type {
   PickItem,
   PullRequestSummary,
   PullState,
+  ShipWeekLoadingState,
   ShipWeekResponse,
 } from '../../types';
 import DashboardFilters from './DashboardFilters';
@@ -26,6 +27,7 @@ type DashboardViewProps = {
   forMeItems: PickItem[];
   shipWeek: ShipWeekResponse | null;
   shipWeekLoading: boolean;
+  shipWeekSectionLoading: ShipWeekLoadingState;
   shipWeekError: string | null;
   shipWeekRepo: string;
   shipWeekMilestone: string;
@@ -58,6 +60,7 @@ function DashboardView({
   forMeItems,
   shipWeek,
   shipWeekLoading,
+  shipWeekSectionLoading,
   shipWeekError,
   shipWeekRepo,
   shipWeekMilestone,
@@ -80,12 +83,13 @@ function DashboardView({
 
   return (
     <>
-      {(shipModeActive || pullRequests.length > 0 || attentionBuckets.length > 0 || regressionIssueBuckets.length > 0) && (
+      {(shipModeActive || pullsLoading || pullRequests.length > 0 || attentionBuckets.length > 0 || regressionIssueBuckets.length > 0) && (
         <section className="panel queue-panel" aria-label="Review queue">
           {shipModeActive ? (
             <ShipWeekSection
               shipWeek={shipWeek}
               loading={shipWeekLoading}
+              sectionLoading={shipWeekSectionLoading}
               error={shipWeekError}
               onSelectPullRequest={onSelectPullRequest}
               onVisiblePullRequest={onVisiblePullRequest}
@@ -96,6 +100,7 @@ function DashboardView({
               attentionBuckets={attentionBuckets}
               regressionIssueBuckets={regressionIssueBuckets}
               forMeItems={forMeItems}
+              loading={pullsLoading}
               selectedBucketId={selectedBucketId}
               login={login}
               onSelectBucket={onSelectBucket}
