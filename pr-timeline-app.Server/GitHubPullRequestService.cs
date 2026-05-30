@@ -15,6 +15,13 @@ sealed class GitHubPullRequestService(GitHubClient gitHub)
         CancellationToken cancellationToken) =>
         gitHub.GetPullRequestsByLabelAsync(repositoryName, state, label, forceRefresh, cancellationToken);
 
+    public Task<IReadOnlyList<ShipWeekIssueSummary>> GetRegressionIssuesAsync(
+        RepositoryName repositoryName,
+        string state,
+        bool forceRefresh,
+        CancellationToken cancellationToken) =>
+        gitHub.GetRegressionIssuesAsync(repositoryName, state, forceRefresh, cancellationToken);
+
     public Task<IReadOnlyList<PullRequestChecksSummary>> GetPullRequestChecksAsync(
         RepositoryName repositoryName,
         IReadOnlyList<PullRequestChecksRequestItem> pullRequests,

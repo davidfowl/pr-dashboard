@@ -1,6 +1,7 @@
 import type { FormEventHandler } from 'react';
 import type {
   AttentionBucket,
+  AttentionIssueBucket,
   DashboardMode,
   DeveloperPullRequestCount,
   PickItem,
@@ -21,6 +22,7 @@ type DashboardViewProps = {
   error: string | null;
   developerPullRequestCounts: DeveloperPullRequestCount[];
   attentionBuckets: AttentionBucket[];
+  regressionIssueBuckets: AttentionIssueBucket[];
   forMeItems: PickItem[];
   shipWeek: ShipWeekResponse | null;
   shipWeekLoading: boolean;
@@ -52,6 +54,7 @@ function DashboardView({
   error,
   developerPullRequestCounts,
   attentionBuckets,
+  regressionIssueBuckets,
   forMeItems,
   shipWeek,
   shipWeekLoading,
@@ -77,7 +80,7 @@ function DashboardView({
 
   return (
     <>
-      {(shipModeActive || pullRequests.length > 0 || attentionBuckets.length > 0) && (
+      {(shipModeActive || pullRequests.length > 0 || attentionBuckets.length > 0 || regressionIssueBuckets.length > 0) && (
         <section className="panel queue-panel" aria-label="Review queue">
           {shipModeActive ? (
             <ShipWeekSection
@@ -87,10 +90,11 @@ function DashboardView({
               onSelectPullRequest={onSelectPullRequest}
               onVisiblePullRequest={onVisiblePullRequest}
             />
-          ) : pullRequests.length > 0 && (
+          ) : (pullRequests.length > 0 || regressionIssueBuckets.length > 0) && (
             <QueueOverview
               counts={developerPullRequestCounts}
               attentionBuckets={attentionBuckets}
+              regressionIssueBuckets={regressionIssueBuckets}
               forMeItems={forMeItems}
               selectedBucketId={selectedBucketId}
               login={login}

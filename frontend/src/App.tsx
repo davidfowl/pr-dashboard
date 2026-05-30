@@ -18,12 +18,14 @@ import {
 import type {
   AuthStatus,
   DashboardMode,
+  IssueListResponse,
   MergeableState,
   PullRequestChecksRequest,
   PullRequestChecksResponse,
   PullRequestListResponse,
   PullRequestSummary,
   PullState,
+  ShipWeekIssueSummary,
   ShipWeekResponse,
   TimelineItem,
   TimelineResponse,
@@ -37,6 +39,7 @@ import {
   createAttentionBuckets,
   createDeveloperPullRequestCounts,
   createForMeItems,
+  createRegressionIssueBuckets,
   createTimelineStory,
   createTriageModel,
   isGeneratedDocsPullRequest,
@@ -68,6 +71,7 @@ function App() {
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => parseDashboardMode(window.location.search));
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
+  const [reviewRegressionIssues, setReviewRegressionIssues] = useState<ShipWeekIssueSummary[]>([]);
   const [shipWeekRepo, setShipWeekRepo] = useState(defaultShipWeekRepoInput);
   const [shipWeekMilestone, setShipWeekMilestone] = useState(currentRelease);
   const [shipWeekReleaseBranch, setShipWeekReleaseBranch] = useState(defaultShipWeekReleaseBranch);
@@ -119,6 +123,10 @@ function App() {
   const repoAccent = useMemo(() => colorForText(activeRepo), [activeRepo]);
   const developerPullRequestCounts = useMemo(() => createDeveloperPullRequestCounts(pullRequests), [pullRequests]);
   const attentionBuckets = useMemo(() => createAttentionBuckets(pullRequests), [pullRequests]);
+  const regressionIssueBuckets = useMemo(
+    () => createRegressionIssueBuckets(reviewRegressionIssues),
+    [reviewRegressionIssues],
+  );
   const forMeItems = useMemo(
     () => createForMeItems(pullRequests, authStatus?.login),
     [authStatus?.login, pullRequests],
@@ -235,6 +243,7 @@ function App() {
       await readJson(response);
       await loadAuthStatus();
       setPullRequests([]);
+      setReviewRegressionIssues([]);
       setShipWeek(null);
       setShipWeekError(null);
       currentSelectionRef.current = null;
@@ -262,16 +271,28 @@ function App() {
 
     try {
       const repositories = parseRepositories(repositoryInput);
-      const responses = await Promise.all(
-        repositories.map(async (repository) => {
-          const query = new URLSearchParams({ repo: repository, state: pullState });
-          if (options.forceRefresh) {
-            query.set('refresh', 'true');
-          }
-          const response = await fetch(`/api/github/pulls?${query}`);
-          return await readJson<PullRequestListResponse>(response);
-        }),
-      );
+      const [responses, regressionIssueResponses] = await Promise.all([
+        Promise.all(
+          repositories.map(async (repository) => {
+            const query = new URLSearchParams({ repo: repository, state: pullState });
+            if (options.forceRefresh) {
+              query.set('refresh', 'true');
+            }
+            const response = await fetch(`/api/github/pulls?${query}`);
+            return await readJson<PullRequestListResponse>(response);
+          }),
+        ),
+        Promise.all(
+          repositories.map(async (repository) => {
+            const query = new URLSearchParams({ repo: repository, state: pullState });
+            if (options.forceRefresh) {
+              query.set('refresh', 'true');
+            }
+            const response = await fetch(`/api/github/regression-issues?${query}`);
+            return await readJson<IssueListResponse>(response);
+          }),
+        ),
+      ]);
 
       const pullRequests = responses
         .flatMap((data) =>
@@ -284,9 +305,15 @@ function App() {
 
       setActiveRepo(repositories.length === 1 ? responses[0]?.repository ?? repositories[0] : `${repositories.length} repos`);
       setPullRequests(pullRequests);
+      setReviewRegressionIssues(
+        regressionIssueResponses
+          .flatMap((data) => data.issues)
+          .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime()),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load pull requests.');
       setPullRequests([]);
+      setReviewRegressionIssues([]);
     } finally {
       setPullsLoading(false);
     }
@@ -652,6 +679,7 @@ function App() {
             error={error}
             developerPullRequestCounts={developerPullRequestCounts}
             attentionBuckets={attentionBuckets}
+            regressionIssueBuckets={regressionIssueBuckets}
             forMeItems={forMeItems}
             shipWeek={shipWeek}
             shipWeekLoading={shipWeekLoading}

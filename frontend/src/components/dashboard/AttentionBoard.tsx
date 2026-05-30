@@ -1,13 +1,15 @@
 import { useState } from 'react';
-import type { AttentionBucket, PullRequestSummary } from '../../types';
+import type { AttentionBucket, AttentionIssueBucket, PullRequestSummary } from '../../types';
 import { formatCount } from '../../utils/format';
 import { bucketRouteId, createBucketUrl } from '../../utils/routing';
+import IssueListItem from '../IssueListItem';
 import PullRequestList from '../PullRequestList';
 import TileDrilldown from './TileDrilldown';
 import type { DrilldownTile } from './TileDrilldown';
 
 type AttentionBoardProps = {
   buckets: AttentionBucket[];
+  regressionIssueBuckets: AttentionIssueBucket[];
   selectedBucketId: string;
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
@@ -15,7 +17,8 @@ type AttentionBoardProps = {
 };
 
 type ReviewBucketTile = DrilldownTile & {
-  bucket: AttentionBucket;
+  bucket?: AttentionBucket;
+  issueBucket?: AttentionIssueBucket;
   url: string;
 };
 
@@ -29,6 +32,7 @@ type CopyStatus = {
 
 function AttentionBoard({
   buckets,
+  regressionIssueBuckets,
   selectedBucketId,
   onSelectBucket,
   onSelectPullRequest,
@@ -44,6 +48,24 @@ function AttentionBoard({
     bucket,
     url: createBucketUrl(bucketRouteId(bucket.label)),
   }));
+  for (const issueBucket of regressionIssueBuckets) {
+    const id = bucketRouteId(issueBucket.label);
+    const existingTile = bucketTiles.find((tile) => tile.id === id);
+    if (existingTile) {
+      existingTile.count += issueBucket.issues.length;
+      existingTile.issueBucket = issueBucket;
+    } else {
+      bucketTiles.push({
+        id,
+        label: issueBucket.label,
+        count: issueBucket.issues.length,
+        summary: issueBucket.metric,
+        tone: issueBucket.tone,
+        issueBucket,
+        url: createBucketUrl(id),
+      });
+    }
+  }
 
   async function copyBucketLink(tile: ReviewBucketTile) {
     onSelectBucket(tile.id);
@@ -93,16 +115,28 @@ function AttentionBoard({
         onSelect={onSelectBucket}
         renderDetails={(tile) => {
           const { bucket } = tile;
-          const visibleCount = Math.min(bucket.items.length, bucketItemLimit);
-          const hiddenCount = bucket.items.length - visibleCount;
+          const issueBucket = tile.issueBucket;
+          const pullRequestCount = bucket?.items.length ?? 0;
+          const issueCount = issueBucket?.issues.length ?? 0;
+          const visiblePullRequestCount = Math.min(pullRequestCount, bucketItemLimit);
+          const hiddenPullRequestCount = pullRequestCount - visiblePullRequestCount;
+          const visibleIssueCount = Math.min(issueCount, bucketItemLimit);
+          const hiddenIssueCount = issueCount - visibleIssueCount;
           const currentCopyStatus = copyStatus?.bucketId === tile.id ? copyStatus : null;
+          const detailTone = bucket?.tone ?? issueBucket?.tone ?? tile.tone;
+          const detailSummary = bucket?.summary ?? issueBucket?.summary ?? '';
+          const detailMetric = bucket?.metric ?? issueBucket?.metric ?? tile.summary;
+          const countLabel = [
+            pullRequestCount > 0 ? formatCount(pullRequestCount, 'open PR') : null,
+            issueCount > 0 ? formatCount(issueCount, 'open issue') : null,
+          ].filter(Boolean).join(' · ');
 
           return (
-            <section className={`drilldown-panel attention-card ${bucket.tone}`} aria-label={`${bucket.label} pull requests`}>
+            <section className={`drilldown-panel attention-card ${detailTone}`} aria-label={`${tile.label} review items`}>
               <div className="attention-card-header">
-                <span>{bucket.label}</span>
+                <span>{tile.label}</span>
                 <div className="bucket-card-actions">
-                  <strong>{formatCount(bucket.items.length, 'open PR')}</strong>
+                  <strong>{countLabel || formatCount(0, 'item')}</strong>
                   <button
                     type="button"
                     className="bucket-link-button"
@@ -112,7 +146,7 @@ function AttentionBoard({
                   </button>
                 </div>
               </div>
-              <p>{bucket.summary} <em>{bucket.metric}</em></p>
+              <p>{detailSummary} <em>{detailMetric}</em></p>
               {currentCopyStatus && (
                 <p
                   className={`bucket-link-status ${currentCopyStatus.kind}`}
@@ -121,25 +155,49 @@ function AttentionBoard({
                   {currentCopyStatus.message}
                 </p>
               )}
-              {hiddenCount > 0 && (
+              {hiddenPullRequestCount > 0 && (
                 <p className="bucket-limit-note">
-                  Showing top {visibleCount} of {bucket.items.length}. Resolve these and the next ranked PRs will surface on refresh.
+                  Showing top {visiblePullRequestCount} of {pullRequestCount}. Resolve these and the next ranked PRs will surface on refresh.
                 </p>
               )}
-              <PullRequestList
-                entries={bucket.items.map((item) => ({
-                  pullRequest: item.pullRequest,
-                  bucketLabel: bucket.label,
-                  signalProps: {
-                    leadingSignals: [{ label: item.reason, tone: bucket.tone }],
-                    excludeComputedLabels: [item.reason],
-                    computedSignalLimit: 4,
-                  },
-                }))}
-                limit={bucketItemLimit}
-                onSelectPullRequest={onSelectPullRequest}
-                onVisiblePullRequest={onVisiblePullRequest}
-              />
+              {bucket && (
+                <PullRequestList
+                  entries={bucket.items.map((item) => ({
+                    pullRequest: item.pullRequest,
+                    bucketLabel: bucket.label,
+                    signalProps: {
+                      leadingSignals: [{ label: item.reason, tone: bucket.tone }],
+                      excludeComputedLabels: [item.reason],
+                      computedSignalLimit: 4,
+                    },
+                  }))}
+                  limit={bucketItemLimit}
+                  onSelectPullRequest={onSelectPullRequest}
+                  onVisiblePullRequest={onVisiblePullRequest}
+                />
+              )}
+              {issueBucket && (
+                <>
+                  {hiddenIssueCount > 0 && (
+                    <p className="bucket-limit-note">
+                      Showing top {visibleIssueCount} of {issueCount} regression issues.
+                    </p>
+                  )}
+                  <div className="attention-list">
+                    {issueBucket.issues.slice(0, bucketItemLimit).map((issue) => (
+                      <IssueListItem
+                        key={`${issue.repository}#${issue.number}`}
+                        issue={issue}
+                        signalProps={{
+                          leadingSignals: [{ label: issueBucket.label, tone: issueBucket.tone }],
+                          excludeComputedLabels: [issueBucket.label],
+                          computedSignalLimit: 4,
+                        }}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
             </section>
           );
         }}

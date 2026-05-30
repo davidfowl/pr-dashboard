@@ -115,6 +115,42 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         }) ?? [];
     }
 
+    public async Task<IReadOnlyList<ShipWeekIssueSummary>> GetRegressionIssuesAsync(
+        RepositoryName repositoryName,
+        string state,
+        bool forceRefresh,
+        CancellationToken cancellationToken)
+    {
+        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
+        var cacheKey = $"regression-issues:{authCacheKey}:{repositoryName}:{state}";
+        RemoveCacheEntry(cacheKey, forceRefresh);
+        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = CacheDuration;
+            var regressionLabels = await GetRegressionLabelNamesAsync(repositoryName, forceRefresh, cancellationToken);
+            if (regressionLabels.Count == 0)
+            {
+                return [];
+            }
+
+            var issueTasks = regressionLabels
+                .ToDictionary(
+                    label => label,
+                    label => GetIssuesByLabelAsync(repositoryName, state, label, cancellationToken));
+
+            await Task.WhenAll(issueTasks.Values);
+
+            return issueTasks.Values
+                .SelectMany(task => task.Result)
+                .Where(issue => issue.PullRequest is null && HasRegressionLabel(issue.Labels))
+                .GroupBy(issue => issue.Number)
+                .Select(group => group.First())
+                .OrderByDescending(issue => issue.UpdatedAt)
+                .Select(issue => ShipWeekIssueSummary.FromDto(repositoryName, issue, []))
+                .ToArray();
+        }) ?? [];
+    }
+
     public async Task<ShipWeekLoadResult> GetShipWeekAsync(
         RepositoryName repositoryName,
         string milestoneTitle,
@@ -423,6 +459,41 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
             cancellationToken);
 
+    private async Task<IReadOnlyList<string>> GetRegressionLabelNamesAsync(
+        RepositoryName repositoryName,
+        bool forceRefresh,
+        CancellationToken cancellationToken)
+    {
+        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
+        var cacheKey = $"regression-labels:{authCacheKey}:{repositoryName}";
+        RemoveCacheEntry(cacheKey, forceRefresh);
+        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        {
+            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);
+            var labels = await SendPagedGitHubRequestAsync(
+                $"repos/{repositoryName.Owner}/{repositoryName.Name}/labels?per_page=100",
+                GitHubJsonSerializerContext.Default.GitHubLabelDtoArray,
+                cancellationToken);
+            return labels
+                .Select(label => label.Name)
+                .Where(label => !string.IsNullOrWhiteSpace(label))
+                .Select(label => label!)
+                .Where(label => label.Contains("regression", StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }) ?? [];
+    }
+
+    private async Task<IReadOnlyList<GitHubIssueDto>> GetIssuesByLabelAsync(
+        RepositoryName repositoryName,
+        string state,
+        string label,
+        CancellationToken cancellationToken) =>
+        await SendPagedGitHubRequestAsync(
+            $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues?state={Uri.EscapeDataString(state)}&labels={Uri.EscapeDataString(label)}&sort=updated&direction=desc&per_page=100",
+            GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
+            cancellationToken);
+
     private async Task<IReadOnlyList<GitHubPullRequestDto>> GetOpenPullRequestsByBaseAsync(
         RepositoryName repositoryName,
         string baseRef,
@@ -489,6 +560,9 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
 
     private static bool RepositoryMatches(string repository, RepositoryName repositoryName) =>
         repository.Equals(repositoryName.ToString(), StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasRegressionLabel(IEnumerable<GitHubLabelDto> labels) =>
+        labels.Any(label => label.Name?.Contains("regression", StringComparison.OrdinalIgnoreCase) is true);
 
     private static bool MilestoneTitleMatches(string? milestoneTitle, string expectedMilestoneTitle) =>
         string.Equals(milestoneTitle?.Trim(), expectedMilestoneTitle, StringComparison.OrdinalIgnoreCase);

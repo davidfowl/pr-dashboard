@@ -1,7 +1,14 @@
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { dayMs } from '../../constants';
-import type { AttentionBucket, AttentionItem, DeveloperPullRequestCount, PickItem, PullRequestSummary } from '../../types';
+import type {
+  AttentionBucket,
+  AttentionIssueBucket,
+  AttentionItem,
+  DeveloperPullRequestCount,
+  PickItem,
+  PullRequestSummary,
+} from '../../types';
 import { colorForText, formatCount, formatRelative, initials } from '../../utils/format';
 import PullRequestList from '../PullRequestList';
 import AttentionBoard from './AttentionBoard';
@@ -9,6 +16,7 @@ import AttentionBoard from './AttentionBoard';
 type QueueOverviewProps = {
   counts: DeveloperPullRequestCount[];
   attentionBuckets: AttentionBucket[];
+  regressionIssueBuckets: AttentionIssueBucket[];
   forMeItems: PickItem[];
   selectedBucketId: string;
   login?: string;
@@ -27,6 +35,7 @@ const focusAgeLimitMs = 14 * dayMs;
 const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community']);
 const disqualifyingFocusBucketLabels = new Set(['Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community']);
 const focusBucketRanks = new Map([
+  ['Regression', -2],
   ['CI failing', -1],
   ['Approved but aging', 0],
   ['Re-review needed', 1],
@@ -40,6 +49,7 @@ const focusBucketRanks = new Map([
 function QueueOverview({
   counts,
   attentionBuckets,
+  regressionIssueBuckets,
   forMeItems,
   selectedBucketId,
   login,
@@ -167,9 +177,10 @@ function QueueOverview({
         {renderCoreOwnerDetails()}
       </section>
 
-      {reviewBuckets.length > 0 && (
+      {(reviewBuckets.length > 0 || regressionIssueBuckets.length > 0) && (
         <AttentionBoard
           buckets={reviewBuckets}
+          regressionIssueBuckets={regressionIssueBuckets}
           selectedBucketId={selectedBucketId}
           onSelectBucket={onSelectBucket}
           onSelectPullRequest={onSelectPullRequest}

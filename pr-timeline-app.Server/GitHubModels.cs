@@ -35,6 +35,8 @@ record AuthStatusResponse(bool Authenticated, bool Configured, bool CanLogin, st
 
 record PullRequestListResponse(string Repository, IReadOnlyList<PullRequestSummary> PullRequests);
 
+record IssueListResponse(string Repository, IReadOnlyList<ShipWeekIssueSummary> Issues);
+
 record PullRequestChecksRequest(IReadOnlyList<PullRequestChecksRequestItem>? PullRequests);
 
 record PullRequestChecksRequestItem(int Number, string? HeadSha);
@@ -505,6 +507,7 @@ record TimelineItem(
 [JsonSerializable(typeof(GitHubIssueDto))]
 [JsonSerializable(typeof(GitHubIssueDto[]))]
 [JsonSerializable(typeof(GitHubIssuePullRequestDto))]
+[JsonSerializable(typeof(GitHubLabelDto[]))]
 [JsonSerializable(typeof(GitHubMilestoneDto))]
 [JsonSerializable(typeof(GitHubMilestoneDto[]))]
 [JsonSerializable(typeof(GitHubPullRequestCommitDto[]))]

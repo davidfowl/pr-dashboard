@@ -286,6 +286,86 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task RegressionIssuesDiscoverLabelsAndExcludePullRequests()
+    {
+        var requestedPaths = new List<string>();
+        var client = CreateClient(path =>
+        {
+            requestedPaths.Add(path);
+            return path switch
+            {
+                "repos/example/repo/labels?per_page=100" => Json(
+                    """
+                    [
+                      { "name": "area-cli" },
+                      { "name": "regression-from-last-release" }
+                    ]
+                    """),
+                "repos/example/repo/issues?state=open&labels=regression-from-last-release&sort=updated&direction=desc&per_page=100" => Json(
+                    """
+                    [
+                      {
+                        "number": 10,
+                        "title": "Broken from last release",
+                        "state": "open",
+                        "user": { "login": "reporter" },
+                        "html_url": "https://github.com/example/repo/issues/10",
+                        "repository_url": "https://api.github.com/repos/example/repo",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-05T00:00:00Z",
+                        "labels": [{ "name": "regression-from-last-release" }],
+                        "assignees": [{ "login": "owner" }]
+                      },
+                      {
+                        "number": 11,
+                        "title": "Regression PR",
+                        "state": "open",
+                        "user": { "login": "contributor" },
+                        "html_url": "https://github.com/example/repo/pull/11",
+                        "repository_url": "https://api.github.com/repos/example/repo",
+                        "created_at": "2026-01-02T00:00:00Z",
+                        "updated_at": "2026-01-06T00:00:00Z",
+                        "labels": [{ "name": "regression-from-last-release" }],
+                        "assignees": [],
+                        "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/11" }
+                      },
+                      {
+                        "number": 12,
+                        "title": "Wrong label",
+                        "state": "open",
+                        "user": { "login": "reporter" },
+                        "html_url": "https://github.com/example/repo/issues/12",
+                        "repository_url": "https://api.github.com/repos/example/repo",
+                        "created_at": "2026-01-03T00:00:00Z",
+                        "updated_at": "2026-01-07T00:00:00Z",
+                        "labels": [{ "name": "area-cli" }],
+                        "assignees": []
+                      }
+                    ]
+                    """),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var issues = await client.GetRegressionIssuesAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var issue = Assert.Single(issues);
+        Assert.Equal(10, issue.Number);
+        Assert.Equal("example/repo", issue.Repository);
+        Assert.Equal(["regression-from-last-release"], issue.Labels);
+        Assert.Equal(["owner"], issue.Assignees);
+        Assert.Contains("repos/example/repo/labels?per_page=100", requestedPaths);
+        Assert.Contains("repos/example/repo/issues?state=open&labels=regression-from-last-release&sort=updated&direction=desc&per_page=100", requestedPaths);
+        Assert.DoesNotContain(
+            "repos/example/repo/issues?state=open&sort=updated&direction=desc&per_page=100",
+            requestedPaths);
+    }
+
+    [Fact]
     public async Task PullListReadsAllPages()
     {
         var client = CreateClient(path => path switch

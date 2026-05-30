@@ -87,6 +87,11 @@ export type PullRequestListResponse = {
   pullRequests: Omit<PullRequestSummary, 'repository'>[];
 };
 
+export type IssueListResponse = {
+  repository: string;
+  issues: ShipWeekIssueSummary[];
+};
+
 export type PullRequestChecksRequest = {
   pullRequests: {
     number: number;
@@ -229,6 +234,14 @@ export type AttentionBucket = {
   tone: 'success' | 'warning' | 'danger' | 'accent';
   metric: string;
   items: AttentionItem[];
+};
+
+export type AttentionIssueBucket = {
+  label: string;
+  summary: string;
+  tone: 'success' | 'warning' | 'danger' | 'accent';
+  metric: string;
+  issues: ShipWeekIssueSummary[];
 };
 
 export type AttentionSignal = {

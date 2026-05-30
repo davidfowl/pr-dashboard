@@ -10,6 +10,7 @@ import type {
   ActivityMarker,
   ActivityModel,
   AttentionBucket,
+  AttentionIssueBucket,
   AttentionItem,
   AttentionSignal,
   DeveloperPullRequestCount,
@@ -43,6 +44,7 @@ const needsReviewFreshMs = 2 * dayMs;
 const quickWinLineThreshold = 80;
 const quickWinFileThreshold = 3;
 const approvedButAgingBucketLabel = 'Approved but aging';
+const regressionBucketLabel = 'Regression';
 
 export function createDeveloperPullRequestCounts(pullRequests: PullRequestSummary[]): DeveloperPullRequestCount[] {
   const coreTeamKeys = new Set(coreTeamMembers.map(actorIdentityKey));
@@ -186,6 +188,13 @@ function sameLogin(first: string, second: string) {
 export function createAttentionBuckets(pullRequests: PullRequestSummary[]): AttentionBucket[] {
   const buckets: AttentionBucket[] = [
     {
+      label: regressionBucketLabel,
+      summary: 'PRs or linked issues tagged as regressions, including Aspire last-release regressions.',
+      tone: 'danger',
+      metric: 'regression watch',
+      items: [],
+    },
+    {
       label: approvedButAgingBucketLabel,
       summary: 'Approved PRs that have been waiting to land for multiple days.',
       tone: 'danger',
@@ -298,6 +307,24 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
   return buckets.filter((bucket) => bucket.items.length > 0);
 }
 
+export function createRegressionIssueBuckets(issues: ShipWeekIssueSummary[]): AttentionIssueBucket[] {
+  const regressionIssues = issues
+    .filter((issue) => hasRegressionLabel(issue.labels))
+    .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime());
+
+  return regressionIssues.length === 0
+    ? []
+    : [
+      {
+        label: regressionBucketLabel,
+        summary: 'Open issues tagged as regressions, including Aspire last-release regressions.',
+        tone: 'danger',
+        metric: 'regression watch',
+        issues: regressionIssues,
+      },
+    ];
+}
+
 export function createShipWeekScopeGroups(shipWeek: ShipWeekResponse): ShipWeekScopeGroup[] {
   return [
     {
@@ -325,6 +352,11 @@ export function createShipWeekScopeGroups(shipWeek: ShipWeekResponse): ShipWeekS
 }
 
 const shipWeekIssueBucketDefinitions: Omit<ShipWeekIssueBucket, 'issues'>[] = [
+  {
+    label: regressionBucketLabel,
+    summary: 'Issues tagged as regressions, including Aspire last-release regressions.',
+    tone: 'danger',
+  },
   {
     label: 'Needs PR',
     summary: 'Open milestone issues with no inferred open PR.',
@@ -427,6 +459,10 @@ export function createIssueSignals(issue: ShipWeekIssueSummary): AttentionSignal
 }
 
 function issueActionSignal(issue: ShipWeekIssueSummary): AttentionSignal {
+  if (hasRegressionLabel(issue.labels)) {
+    return { label: regressionBucketLabel, tone: 'danger' };
+  }
+
   if (issue.linkedOpenPullRequests.length === 0) {
     return { label: 'Needs PR', tone: 'danger' };
   }
@@ -441,6 +477,10 @@ function issueActionSignal(issue: ShipWeekIssueSummary): AttentionSignal {
 function shipWeekIssueBucketLabels(issue: ShipWeekIssueSummary) {
   const labels: string[] = [];
   let domainMatch = false;
+
+  if (hasRegressionLabel(issue.labels)) {
+    labels.push(regressionBucketLabel);
+  }
 
   if (issue.linkedOpenPullRequests.length === 0) {
     labels.push('Needs PR');
@@ -501,11 +541,16 @@ function issueMatchesTerms(issue: ShipWeekIssueSummary, terms: string[]) {
 }
 
 function reviewBucketLabels(pullRequest: PullRequestSummary) {
-  if (pullRequest.draft) {
-    return ['Draft'];
+  const labels: string[] = [];
+
+  if (hasRegressionSignal(pullRequest)) {
+    labels.push(regressionBucketLabel);
   }
 
-  const labels: string[] = [];
+  if (pullRequest.draft) {
+    labels.push('Draft');
+    return labels;
+  }
 
   if (isBotAuthor(pullRequest.author)) {
     labels.push('Bots / automation');
@@ -573,6 +618,8 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
 
   const approvedAt = approvalAgeAt(pullRequest);
   switch (bucketLabel) {
+    case regressionBucketLabel:
+      return regressionSignal(pullRequest);
     case approvedButAgingBucketLabel:
       return approvedAt ? `Approved ${formatAge(approvedAt)}` : 'Approved';
     case 'CI failing':
@@ -619,6 +666,24 @@ function isChecksFailing(pullRequest: PullRequestSummary) {
 
 function isChecksPending(pullRequest: PullRequestSummary) {
   return pullRequest.checks?.state === 'pending' || pullRequest.checks?.state === 'unknown';
+}
+
+function hasRegressionSignal(pullRequest: PullRequestSummary) {
+  return hasRegressionLabel(pullRequest.labels)
+    || pullRequest.linkedIssues.some((issue) => hasRegressionLabel(issue.labels));
+}
+
+function hasRegressionLabel(labels: readonly string[]) {
+  return labels.some((label) => label.toLowerCase().includes('regression'));
+}
+
+function regressionSignal(pullRequest: PullRequestSummary) {
+  if (hasRegressionLabel(pullRequest.labels)) {
+    return 'Regression label';
+  }
+
+  const issue = pullRequest.linkedIssues.find((linkedIssue) => hasRegressionLabel(linkedIssue.labels));
+  return issue ? `Regression issue #${issue.number}` : 'Regression';
 }
 
 function approvalAgeAt(pullRequest: PullRequestSummary) {
@@ -698,6 +763,10 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
 
   if (targetsCurrentRelease(pullRequest)) {
     signals.push({ label: `release ${currentRelease}`, tone: 'danger' });
+  }
+
+  if (hasRegressionSignal(pullRequest)) {
+    signals.push({ label: regressionBucketLabel.toLowerCase(), tone: 'danger' });
   }
 
   if (pullRequest.baseRef?.startsWith('release/')) {
@@ -836,6 +905,10 @@ function oldFirstSignal(pullRequest: PullRequestSummary): AttentionSignal | null
 }
 
 function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {
+  if (hasRegressionSignal(pullRequest)) {
+    return { label: regressionBucketLabel.toLowerCase(), tone: 'danger' };
+  }
+
   if (pullRequest.draft) {
     return { label: 'draft', tone: 'muted' };
   }
