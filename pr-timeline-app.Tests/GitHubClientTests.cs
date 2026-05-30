@@ -426,6 +426,174 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task StreamPullRequestsYieldsFirstEnrichedBatchBeforeFetchingNextPage()
+    {
+        var secondPageRequested = false;
+        var client = CreateClient(path =>
+        {
+            if (TryGetPullRequestNumber(path, "/reviews?per_page=100", out _))
+            {
+                return Json("[]");
+            }
+
+            if (TryGetPullRequestNumber(path, "", out var detailsNumber))
+            {
+                return Json(PullRequestDetailsJson(detailsNumber));
+            }
+
+            if (path == "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2")
+            {
+                secondPageRequested = true;
+                return Json(PullRequestsJson(new[] { PullRequestJson(21, title: "Second page") }));
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    PullRequestsJson(Enumerable.Range(1, 20)
+                        .Select(number => PullRequestJson(
+                            number,
+                            title: $"First page {number}",
+                            body: number == 1 ? "Fixes #404" : null))),
+                    linkHeader: "<https://api.github.com/repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2>; rel=\"next\""),
+                "repos/example/repo/issues/404" => Json(
+                    """
+                    {
+                      "number": 404,
+                      "title": "Linked issue",
+                      "html_url": "https://github.com/example/repo/issues/404",
+                      "repository_url": "https://api.github.com/repos/example/repo",
+                      "labels": []
+                    }
+                    """),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        await using var enumerator = client.StreamPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
+
+        Assert.True(await enumerator.MoveNextAsync());
+        Assert.False(secondPageRequested);
+        Assert.Equal(1, enumerator.Current.Number);
+        var linkedIssue = Assert.Single(enumerator.Current.LinkedIssues);
+        Assert.Equal(404, linkedIssue.Number);
+
+        var streamedNumbers = new List<int> { enumerator.Current.Number };
+        while (await enumerator.MoveNextAsync())
+        {
+            streamedNumbers.Add(enumerator.Current.Number);
+        }
+
+        Assert.True(secondPageRequested);
+        Assert.Equal(Enumerable.Range(1, 21), streamedNumbers);
+    }
+
+    [Fact]
+    public async Task StreamPullRequestsByLabelReadsPagedIssuesAndFiltersPullRequests()
+    {
+        var requestedPaths = new List<string>();
+        var client = CreateClient(path =>
+        {
+            requestedPaths.Add(path);
+
+            if (TryGetPullRequestNumber(path, "/reviews?per_page=100", out _))
+            {
+                return Json("[]");
+            }
+
+            return path switch
+            {
+                "repos/example/repo/issues?state=open&labels=docs-from-code&sort=created&direction=asc&per_page=100" => Json(
+                    """
+                    [
+                      {
+                        "number": 5,
+                        "title": "Generated docs",
+                        "state": "open",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-02T00:00:00Z",
+                        "user": { "login": "octocat" },
+                        "html_url": "https://github.com/example/repo/pull/5",
+                        "labels": [{ "name": "docs-from-code" }],
+                        "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/5" }
+                      },
+                      {
+                        "number": 6,
+                        "title": "Plain issue",
+                        "state": "open",
+                        "created_at": "2026-01-03T00:00:00Z",
+                        "updated_at": "2026-01-04T00:00:00Z",
+                        "user": { "login": "octocat" },
+                        "html_url": "https://github.com/example/repo/issues/6",
+                        "labels": [{ "name": "docs-from-code" }]
+                      },
+                      {
+                        "number": 7,
+                        "title": "Draft generated docs",
+                        "state": "open",
+                        "created_at": "2026-01-05T00:00:00Z",
+                        "updated_at": "2026-01-06T00:00:00Z",
+                        "user": { "login": "octocat" },
+                        "html_url": "https://github.com/example/repo/pull/7",
+                        "labels": [{ "name": "docs-from-code" }],
+                        "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/7" }
+                      }
+                    ]
+                    """,
+                    linkHeader: "<https://api.github.com/repos/example/repo/issues?state=open&labels=docs-from-code&sort=created&direction=asc&per_page=100&page=2>; rel=\"next\""),
+                "repos/example/repo/issues?state=open&labels=docs-from-code&sort=created&direction=asc&per_page=100&page=2" => Json(
+                    """
+                    [
+                      {
+                        "number": 8,
+                        "title": "Second page docs",
+                        "state": "open",
+                        "created_at": "2026-01-07T00:00:00Z",
+                        "updated_at": "2026-01-08T00:00:00Z",
+                        "user": { "login": "octocat" },
+                        "html_url": "https://github.com/example/repo/pull/8",
+                        "labels": [{ "name": "docs-from-code" }],
+                        "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/8" }
+                      }
+                    ]
+                    """),
+                "repos/example/repo/pulls/5" => Json(PullRequestJson(5, title: "Generated docs", body: "Fixes #10")),
+                "repos/example/repo/pulls/7" => Json(PullRequestJson(7, title: "Draft generated docs", draft: true)),
+                "repos/example/repo/pulls/8" => Json(PullRequestJson(8, title: "Second page docs")),
+                "repos/example/repo/issues/10" => Json(
+                    """
+                    {
+                      "number": 10,
+                      "title": "Source docs issue",
+                      "html_url": "https://github.com/example/repo/issues/10",
+                      "repository_url": "https://api.github.com/repos/example/repo",
+                      "labels": []
+                    }
+                    """),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var pullRequests = await EnumerateAsync(client.StreamPullRequestsByLabelAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            "docs-from-code",
+            false,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal([5, 8], pullRequests.Select(pullRequest => pullRequest.Number));
+        Assert.Equal(10, Assert.Single(pullRequests[0].LinkedIssues).Number);
+        Assert.DoesNotContain("repos/example/repo/pulls/6", requestedPaths);
+        Assert.DoesNotContain(
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100",
+            requestedPaths);
+    }
+
+    [Fact]
     public async Task PullListIncludesLastCommitAfterReviewForReReviewSignals()
     {
         var client = CreateClient(path => path switch
@@ -1066,6 +1234,36 @@ public sealed class GitHubClientTests
         return true;
     }
 
+    private static bool TryGetPullRequestNumber(string path, string suffix, out int number)
+    {
+        number = 0;
+        const string prefix = "repos/example/repo/pulls/";
+        if (!path.StartsWith(prefix, StringComparison.Ordinal)
+            || (suffix.Length > 0 && !path.EndsWith(suffix, StringComparison.Ordinal)))
+        {
+            return false;
+        }
+
+        var numberText = path[prefix.Length..];
+        if (suffix.Length > 0)
+        {
+            numberText = numberText[..^suffix.Length];
+        }
+
+        return int.TryParse(numberText, out number);
+    }
+
+    private static async Task<IReadOnlyList<T>> EnumerateAsync<T>(IAsyncEnumerable<T> source)
+    {
+        var items = new List<T>();
+        await foreach (var item in source.WithCancellation(TestContext.Current.CancellationToken))
+        {
+            items.Add(item);
+        }
+
+        return items;
+    }
+
     private static DefaultHttpContext CreateHttpContextWithGitHubToken()
     {
         var context = new DefaultHttpContext();
@@ -1104,6 +1302,9 @@ public sealed class GitHubClientTests
 
     private static string PullRequestDetailsJson(int number) =>
         PullRequestJson(number);
+
+    private static string PullRequestsJson(IEnumerable<string> pullRequests) =>
+        $"[\n{string.Join(",\n", pullRequests)}\n]";
 
     private static string PullRequestJson(
         int number,
