@@ -284,7 +284,7 @@ function App() {
         ),
         Promise.all(
           repositories.map(async (repository) => {
-            const query = new URLSearchParams({ repo: repository, state: pullState });
+            const query = new URLSearchParams({ repo: repository, state: 'open' });
             if (options.forceRefresh) {
               query.set('refresh', 'true');
             }
