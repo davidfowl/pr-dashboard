@@ -162,13 +162,6 @@ export type ShipWeekScopeGroup = {
   pullRequests: ShipWeekPullRequestSummary[];
 };
 
-export type ShipWeekIssueBucket = {
-  label: string;
-  summary: string;
-  tone: 'success' | 'warning' | 'danger' | 'accent';
-  issues: ShipWeekIssueSummary[];
-};
-
 export type TimelineItem = {
   id: string;
   event: string;
