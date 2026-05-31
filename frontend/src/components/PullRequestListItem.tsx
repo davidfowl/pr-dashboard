@@ -96,7 +96,14 @@ function PullRequestListItem({
         {pullRequest.title}
       </a>
       <span className="attention-pr-meta">
-        {pullRequest.author} · updated {formatRelative(pullRequest.updatedAt)}
+        {pullRequest.author} · GitHub updated {formatRelative(pullRequest.updatedAt)} ·
+        {' '}
+        <span
+          className="attention-data-freshness"
+          title={`Data fetched ${new Date(pullRequest.fetchedAt).toLocaleString()}`}
+        >
+          data fetched {formatRelative(pullRequest.fetchedAt)}
+        </span>
       </span>
       <div className="attention-pr-actions">
         <a

@@ -27,6 +27,7 @@ export type PullRequestSummary = {
   htmlUrl: string;
   createdAt: string;
   updatedAt: string;
+  fetchedAt: string;
   labels: string[];
   requestedReviewers: string[];
   milestone?: string;
@@ -151,6 +152,7 @@ export type ShipWeekIssueSummary = {
   assignees: string[];
   milestone?: string | null;
   updatedAt: string;
+  fetchedAt: string;
   linkedOpenPullRequests: number[];
 };
 

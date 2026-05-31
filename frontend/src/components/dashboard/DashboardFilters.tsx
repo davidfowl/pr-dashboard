@@ -16,7 +16,6 @@ type DashboardFiltersProps = {
   onRepoChange: (value: string) => void;
   onStateChange: (value: PullState) => void;
   onSubmit: FormEventHandler<HTMLFormElement>;
-  onRefresh: () => void;
   onShipWeekRepoChange: (value: string) => void;
   onShipWeekMilestoneChange: (value: string) => void;
   onShipWeekReleaseBranchChange: (value: string) => void;
@@ -37,7 +36,6 @@ function DashboardFilters({
   onRepoChange,
   onStateChange,
   onSubmit,
-  onRefresh,
   onShipWeekRepoChange,
   onShipWeekMilestoneChange,
   onShipWeekReleaseBranchChange,
@@ -76,9 +74,6 @@ function DashboardFilters({
             <div className="repo-form-actions">
               <button type="submit" disabled={pullsLoading}>
                 {pullsLoading ? 'Loading...' : 'Load PRs'}
-              </button>
-              <button type="button" className="secondary" onClick={onRefresh} disabled={pullsLoading}>
-                Refresh
               </button>
             </div>
           </form>
@@ -132,9 +127,6 @@ function DashboardFilters({
           <div className="repo-form-actions">
             <button type="submit" disabled={shipWeekLoading}>
               {shipWeekLoading ? 'Loading...' : 'Load ship mode'}
-            </button>
-            <button type="button" className="secondary" onClick={onRefresh} disabled={shipWeekLoading}>
-              Refresh
             </button>
           </div>
         </form>

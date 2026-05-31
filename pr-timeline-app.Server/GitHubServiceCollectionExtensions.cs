@@ -56,7 +56,8 @@ public static class GitHubServiceCollectionExtensions
         {
             // GitHub redirects old repository names to canonical repository IDs. HttpClient drops
             // Authorization when it auto-follows redirects, so GitHub sees the redirected request as anonymous.
-            AllowAutoRedirect = false
+            AllowAutoRedirect = false,
+            MaxConnectionsPerServer = GitHubClient.MaxConcurrentGitHubRequests
         });
 
         return services;

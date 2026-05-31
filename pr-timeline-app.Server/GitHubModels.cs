@@ -83,6 +83,8 @@ record ShipWeekIssueSummary(
     DateTimeOffset UpdatedAt,
     IReadOnlyList<int> LinkedOpenPullRequests)
 {
+    public DateTimeOffset FetchedAt { get; init; }
+
     public static ShipWeekIssueSummary FromDto(
         RepositoryName repositoryName,
         GitHubIssueDto issue,
@@ -131,6 +133,8 @@ record PullRequestSummary(
     ReviewStatus Review,
     ChecksStatus Checks)
 {
+    public DateTimeOffset FetchedAt { get; init; }
+
     public static PullRequestSummary FromDto(GitHubPullRequestDto pullRequest) =>
         new(
             pullRequest.Number,
