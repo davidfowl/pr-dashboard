@@ -4,9 +4,17 @@ export function formatCount(count: number, singular: string, plural = `${singula
 
 export function formatRelative(value: string) {
   const date = new Date(value);
-  const diffMs = Date.now() - date.getTime();
-  const diffHours = Math.max(1, Math.round(diffMs / 1000 / 60 / 60));
+  const diffSeconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+  if (diffSeconds < 60) {
+    return 'just now';
+  }
 
+  const diffMinutes = Math.round(diffSeconds / 60);
+  if (diffMinutes < 60) {
+    return `${diffMinutes}m ago`;
+  }
+
+  const diffHours = Math.round(diffMinutes / 60);
   if (diffHours < 24) {
     return `${diffHours}h ago`;
   }

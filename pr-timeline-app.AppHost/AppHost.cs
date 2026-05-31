@@ -27,7 +27,6 @@ if (builder.ExecutionContext.IsPublishMode)
 if (builder.Configuration.GetValue("IncludeFrontend", true))
 {
     var webfrontend = builder.AddViteApp("webfrontend", "../frontend")
-        .WithHttpEndpoint(port: 5173)
         .WithReference(server)
         .WaitFor(server);
 

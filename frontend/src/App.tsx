@@ -64,7 +64,26 @@ type VisibleChecksRequestItem = {
 
 type LoadOptions = {
   forceRefresh?: boolean;
+  preserveResults?: boolean;
 };
+
+type ReviewRefreshParams = {
+  repositoryInput: string;
+  pullState: PullState;
+};
+
+type ShipWeekRefreshParams = {
+  repositoryInput: string;
+  milestoneInput: string;
+  releaseBranchInput: string;
+};
+
+const autoRefreshIntervalMs = 5 * 60_000;
+const autoRefreshJitterMs = 60_000;
+
+function getAutoRefreshDelayMs() {
+  return autoRefreshIntervalMs + Math.floor(Math.random() * autoRefreshJitterMs);
+}
 
 const emptyShipWeekLoadingState: ShipWeekLoadingState = {
   milestone: false,
@@ -81,10 +100,12 @@ function App() {
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => parseDashboardMode(window.location.search));
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
   const [reviewRegressionIssues, setReviewRegressionIssues] = useState<ShipWeekIssueSummary[]>([]);
+  const [reviewLastUpdatedAt, setReviewLastUpdatedAt] = useState<string | null>(null);
   const [shipWeekRepo, setShipWeekRepo] = useState(defaultShipWeekRepoInput);
   const [shipWeekMilestone, setShipWeekMilestone] = useState(currentRelease);
   const [shipWeekReleaseBranch, setShipWeekReleaseBranch] = useState(defaultShipWeekReleaseBranch);
   const [shipWeek, setShipWeek] = useState<ShipWeekResponse | null>(null);
+  const [shipWeekLastUpdatedAt, setShipWeekLastUpdatedAt] = useState<string | null>(null);
   const [selectedPullRequest, setSelectedPullRequest] = useState<PullRequestSummary | null>(null);
   const [timelineItems, setTimelineItems] = useState<TimelineItem[]>([]);
   const [timelineStats, setTimelineStats] = useState<TimelineStats | null>(null);
@@ -114,6 +135,15 @@ function App() {
   const pullRequestsAbortControllerRef = useRef<AbortController | null>(null);
   const shipWeekLoadVersionRef = useRef(0);
   const shipWeekAbortControllerRef = useRef<AbortController | null>(null);
+  const reviewRefreshParamsRef = useRef<ReviewRefreshParams>({
+    repositoryInput: defaultRepoInput,
+    pullState: 'open',
+  });
+  const shipWeekRefreshParamsRef = useRef<ShipWeekRefreshParams>({
+    repositoryInput: defaultShipWeekRepoInput,
+    milestoneInput: currentRelease,
+    releaseBranchInput: defaultShipWeekReleaseBranch,
+  });
 
   const selectedTitle = selectedPullRequest
     ? `#${selectedPullRequest.number} ${selectedPullRequest.title}`
@@ -164,6 +194,53 @@ function App() {
     // Initial load intentionally captures the default pull state once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (viewMode !== 'dashboard') {
+      return;
+    }
+
+    let timer: number | null = null;
+    const scheduleNextRefresh = () => {
+      timer = window.setTimeout(() => {
+        if (document.visibilityState !== 'visible') {
+          scheduleNextRefresh();
+          return;
+        }
+
+        if (dashboardMode === 'ship') {
+          if (!shipWeekLoading) {
+            const params = shipWeekRefreshParamsRef.current;
+            void loadShipWeek(params.repositoryInput, params.milestoneInput, params.releaseBranchInput, {
+              preserveResults: true,
+            });
+          }
+
+          scheduleNextRefresh();
+          return;
+        }
+
+        if (!pullsLoading) {
+          const params = reviewRefreshParamsRef.current;
+          void loadPullRequests(params.repositoryInput, params.pullState, {
+            preserveResults: true,
+          });
+        }
+
+        scheduleNextRefresh();
+      }, getAutoRefreshDelayMs());
+    };
+
+    scheduleNextRefresh();
+
+    return () => {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+    // The timer only needs the active mode and loading guards; the loaders are stable function declarations.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dashboardMode, pullsLoading, shipWeekLoading, viewMode]);
 
   useEffect(() => {
     function onPopState() {
@@ -258,7 +335,9 @@ function App() {
       await loadAuthStatus();
       setPullRequests([]);
       setReviewRegressionIssues([]);
+      setReviewLastUpdatedAt(null);
       setShipWeek(null);
+      setShipWeekLastUpdatedAt(null);
       setShipWeekError(null);
       currentSelectionRef.current = null;
       setSelectedPullRequest(null);
@@ -274,23 +353,32 @@ function App() {
   async function loadPullRequests(repositoryInput: string, pullState: PullState, options: LoadOptions = {}) {
     const load = beginAbortableLoad(pullRequestsLoadVersionRef, pullRequestsAbortControllerRef);
     const { abortController, isCurrentLoad } = load;
+    const previousPullRequests = pullRequests;
+    const previousRegressionIssues = reviewRegressionIssues;
+    const previousLastUpdatedAt = reviewLastUpdatedAt;
 
     setPullsLoading(true);
     setError(null);
     beginVisibleChecksRequestScope();
     forceVisibleChecksRefreshRef.current = options.forceRefresh ?? false;
-    currentSelectionRef.current = null;
-    setSelectedPullRequest(null);
-    setTimelineItems([]);
-    setTimelineStats(null);
-    setMergeableState(null);
-    setViewMode('dashboard');
+    if (!options.preserveResults) {
+      currentSelectionRef.current = null;
+      setSelectedPullRequest(null);
+      setTimelineItems([]);
+      setTimelineStats(null);
+      setMergeableState(null);
+      setViewMode('dashboard');
+    }
 
     try {
       const repositories = parseRepositories(repositoryInput);
+      reviewRefreshParamsRef.current = { repositoryInput, pullState };
       setActiveRepo(repositories.length === 1 ? repositories[0] : `${repositories.length} repos`);
-      setPullRequests([]);
-      setReviewRegressionIssues([]);
+      if (!options.preserveResults) {
+        setPullRequests([]);
+        setReviewRegressionIssues([]);
+        setReviewLastUpdatedAt(null);
+      }
 
       const pullRequestTasks = repositories.map(async (repository) => {
         const query = new URLSearchParams({ repo: repository, state: pullState });
@@ -298,7 +386,7 @@ function App() {
           query.set('refresh', 'true');
         }
 
-        await streamPullRequests(`/api/github/pulls/stream?${query}`, {
+        return streamPullRequests(`/api/github/pulls/stream?${query}`, {
           signal: abortController.signal,
           onPullRequest: (pullRequest) => {
             if (!isCurrentLoad()) {
@@ -310,7 +398,7 @@ function App() {
         });
       });
 
-      await Promise.all([
+      const [pullRequestGroups, regressionIssueGroups] = await Promise.all([
         Promise.all(pullRequestTasks),
         Promise.all(
           repositories.map(async (repository) => {
@@ -322,21 +410,35 @@ function App() {
             const response = await fetch(`/api/github/regression-issues?${query}`, { signal: abortController.signal });
             const data = await readJson<IssueListResponse>(response);
             if (!isCurrentLoad()) {
-              return;
+              return [];
             }
 
             setReviewRegressionIssues((currentIssues) => upsertManyByUpdatedAt(currentIssues, data.issues));
+            return data.issues;
           }),
         ),
       ]);
+      if (isCurrentLoad()) {
+        const nextPullRequests = upsertManyByUpdatedAt([], pullRequestGroups.flat());
+        const nextRegressionIssues = upsertManyByUpdatedAt([], regressionIssueGroups.flat());
+        setPullRequests(nextPullRequests);
+        setReviewRegressionIssues(nextRegressionIssues);
+        setReviewLastUpdatedAt(getReviewLastUpdatedAt(nextPullRequests, nextRegressionIssues));
+      }
     } catch (err) {
       if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
         return;
       }
 
       setError(err instanceof Error ? err.message : 'Unable to load pull requests.');
-      setPullRequests([]);
-      setReviewRegressionIssues([]);
+      if (!options.preserveResults) {
+        setPullRequests([]);
+        setReviewRegressionIssues([]);
+      } else {
+        setPullRequests(previousPullRequests);
+        setReviewRegressionIssues(previousRegressionIssues);
+        setReviewLastUpdatedAt(previousLastUpdatedAt);
+      }
     } finally {
       if (isCurrentLoad()) {
         setPullsLoading(false);
@@ -364,10 +466,14 @@ function App() {
       const repositories = parseRepositories(repositoryInput, defaultShipWeekRepos);
       const milestone = milestoneInput.trim() || currentRelease;
       const releaseBranch = releaseBranchInput.trim();
+      shipWeekRefreshParamsRef.current = { repositoryInput, milestoneInput, releaseBranchInput };
       const releaseScopeRepositories = repositories.filter((repository) => !isDocsFromCodeRepository(repository));
       const docsRepositories = repositories.filter(isDocsFromCodeRepository);
       setActiveRepo(repositories.length === 1 ? repositories[0] : `${repositories.length} repos`);
-      setShipWeek(null);
+      if (!options.preserveResults) {
+        setShipWeek(null);
+        setShipWeekLastUpdatedAt(null);
+      }
       setShipWeekSectionLoading({
         milestone: releaseScopeRepositories.length > 0,
         baseBranch: releaseScopeRepositories.length > 0,
@@ -379,6 +485,10 @@ function App() {
       let docsPullRequests: PullRequestSummary[] = [];
       const publishShipWeek = () => {
         if (!isCurrentLoad()) {
+          return;
+        }
+
+        if (options.preserveResults) {
           return;
         }
 
@@ -420,15 +530,30 @@ function App() {
         }
       });
 
-      publishShipWeek();
+      if (!options.preserveResults) {
+        publishShipWeek();
+      }
       await Promise.all([releaseDoneTask, docsDoneTask]);
+      if (isCurrentLoad()) {
+        const nextShipWeek = combineShipWeekResponses(
+          repositories,
+          milestone,
+          releaseBranch,
+          releaseResponses,
+          docsPullRequests,
+        );
+        setShipWeek(nextShipWeek);
+        setShipWeekLastUpdatedAt(getShipWeekLastUpdatedAt(nextShipWeek));
+      }
     } catch (err) {
       if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
         return;
       }
 
       setShipWeekError(err instanceof Error ? err.message : 'Unable to load ship-week data.');
-      setShipWeek(null);
+      if (!options.preserveResults) {
+        setShipWeek(null);
+      }
     } finally {
       if (isCurrentLoad()) {
         setShipWeekLoading(false);
@@ -665,9 +790,15 @@ function App() {
 
   function onRefresh() {
     if (dashboardMode === 'ship') {
-      void loadShipWeek(shipWeekRepo, shipWeekMilestone, shipWeekReleaseBranch, { forceRefresh: true });
+      void loadShipWeek(shipWeekRepo, shipWeekMilestone, shipWeekReleaseBranch, {
+        forceRefresh: true,
+        preserveResults: true,
+      });
     } else {
-      void loadPullRequests(repo.trim(), state, { forceRefresh: true });
+      void loadPullRequests(repo.trim(), state, {
+        forceRefresh: true,
+        preserveResults: true,
+      });
     }
   }
 
@@ -768,6 +899,8 @@ function App() {
             shipWeekMilestone={shipWeekMilestone}
             shipWeekReleaseBranch={shipWeekReleaseBranch}
             selectedBucketId={selectedBucketId}
+            lastUpdatedAt={dashboardMode === 'ship' ? shipWeekLastUpdatedAt : reviewLastUpdatedAt}
+            autoRefreshIntervalMs={autoRefreshIntervalMs}
             login={authStatus?.login}
             onRepoChange={setRepo}
             onStateChange={setState}
@@ -908,6 +1041,42 @@ function normalizeShipWeekResponse(response: ShipWeekResponse): ShipWeekResponse
       },
     })),
   };
+}
+
+function getReviewLastUpdatedAt(
+  pullRequests: PullRequestSummary[],
+  issues: ShipWeekIssueSummary[],
+) {
+  return getLatestFetchedAt([
+    ...pullRequests.map((pullRequest) => pullRequest.fetchedAt),
+    ...issues.map((issue) => issue.fetchedAt),
+  ]);
+}
+
+function getShipWeekLastUpdatedAt(shipWeek: ShipWeekResponse) {
+  return getLatestFetchedAt([
+    ...shipWeek.pullRequests.map((item) => item.pullRequest.fetchedAt),
+    ...shipWeek.issues.map((issue) => issue.fetchedAt),
+  ]);
+}
+
+function getLatestFetchedAt(timestamps: Array<string | null | undefined>) {
+  let latestTime = Number.NEGATIVE_INFINITY;
+  let latestTimestamp: string | null = null;
+
+  for (const timestamp of timestamps) {
+    if (!timestamp) {
+      continue;
+    }
+
+    const time = Date.parse(timestamp);
+    if (Number.isFinite(time) && time > latestTime) {
+      latestTime = time;
+      latestTimestamp = new Date(time).toISOString();
+    }
+  }
+
+  return latestTimestamp;
 }
 
 function isDocsFromCodeRepository(repository: string) {

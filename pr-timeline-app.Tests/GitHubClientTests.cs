@@ -493,6 +493,293 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListUsesLastGoodDataWhenForcedRefreshHitsTransientFailure()
+    {
+        var listRequests = 0;
+        var client = CreateClient(path =>
+        {
+            if (TryGetPullRequestNumber(path, "/reviews?per_page=100", out _))
+            {
+                return Json("[]");
+            }
+
+            if (TryGetPullRequestNumber(path, "", out var detailsNumber))
+            {
+                return Json(PullRequestDetailsJson(detailsNumber));
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when ++listRequests == 1 => Json(
+                    PullRequestsJson([PullRequestJson(1, title: "Last known good")])),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    """{ "message": "API rate limit exceeded" }""",
+                    HttpStatusCode.TooManyRequests),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var originalPullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var fallbackPullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            true,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(fallbackPullRequests);
+        Assert.Equal("Last known good", pullRequest.Title);
+        Assert.Equal(originalPullRequests[0].FetchedAt, pullRequest.FetchedAt);
+    }
+
+    [Fact]
+    public async Task PullListUsesLastGoodDataWhenForcedRefreshHitsTransportFailure()
+    {
+        var listRequests = 0;
+        var client = CreateClient(path =>
+        {
+            if (TryGetPullRequestNumber(path, "/reviews?per_page=100", out _))
+            {
+                return Json("[]");
+            }
+
+            if (TryGetPullRequestNumber(path, "", out var detailsNumber))
+            {
+                return Json(PullRequestDetailsJson(detailsNumber));
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when ++listRequests == 1 => Json(
+                    PullRequestsJson([PullRequestJson(1, title: "Last known good")])),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => throw new HttpRequestException("No sockets available."),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var originalPullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var fallbackPullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            true,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(fallbackPullRequests);
+        Assert.Equal("Last known good", pullRequest.Title);
+        Assert.Equal(originalPullRequests[0].FetchedAt, pullRequest.FetchedAt);
+    }
+
+    [Fact]
+    public async Task PullListConvertsTransportFailureToGitHubApiFailure()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => throw new HttpRequestException("No sockets available."),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var exception = await Assert.ThrowsAsync<GitHubApiException>(() => client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task StreamPullRequestsReplaysLastGoodDataWhenTransientFailureHappensBeforeFirstItem()
+    {
+        var listRequests = 0;
+        var client = CreateClient(path =>
+        {
+            if (TryGetPullRequestNumber(path, "/reviews?per_page=100", out _))
+            {
+                return Json("[]");
+            }
+
+            if (TryGetPullRequestNumber(path, "", out var detailsNumber))
+            {
+                return Json(PullRequestDetailsJson(detailsNumber));
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when ++listRequests == 1 => Json(
+                    PullRequestsJson([PullRequestJson(1, title: "Streamed good")])),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    """{ "message": "GitHub unavailable" }""",
+                    HttpStatusCode.ServiceUnavailable),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var originalPullRequests = await EnumerateAsync(client.StreamPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken));
+
+        var fallbackPullRequests = await EnumerateAsync(client.StreamPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            true,
+            TestContext.Current.CancellationToken));
+
+        var pullRequest = Assert.Single(fallbackPullRequests);
+        Assert.Equal("Streamed good", pullRequest.Title);
+        Assert.Equal(originalPullRequests[0].FetchedAt, pullRequest.FetchedAt);
+    }
+
+    [Fact]
+    public async Task StreamPullRequestsDoesNotAppendLastGoodDataAfterFreshItemsWereEmitted()
+    {
+        var listRequests = 0;
+        var client = CreateClient(path =>
+        {
+            if (TryGetPullRequestNumber(path, "/reviews?per_page=100", out _))
+            {
+                return Json("[]");
+            }
+
+            if (TryGetPullRequestNumber(path, "", out var detailsNumber))
+            {
+                return Json(PullRequestDetailsJson(detailsNumber));
+            }
+
+            if (path == "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2")
+            {
+                return Json(
+                    """{ "message": "GitHub unavailable" }""",
+                    HttpStatusCode.ServiceUnavailable);
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when ++listRequests == 1 => Json(
+                    PullRequestsJson(Enumerable.Range(1, 21).Select(number => PullRequestJson(number, title: $"Good {number}")))),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    PullRequestsJson(Enumerable.Range(1, 20).Select(number => PullRequestJson(number, title: $"Fresh {number}"))),
+                    linkHeader: "<https://api.github.com/repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2>; rel=\"next\""),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        await EnumerateAsync(client.StreamPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken));
+
+        await using var enumerator = client.StreamPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            true,
+            TestContext.Current.CancellationToken).GetAsyncEnumerator(TestContext.Current.CancellationToken);
+        var streamedNumbers = new List<int>();
+
+        await Assert.ThrowsAsync<GitHubApiException>(async () =>
+        {
+            while (await enumerator.MoveNextAsync())
+            {
+                streamedNumbers.Add(enumerator.Current.Number);
+            }
+        });
+
+        Assert.Equal(Enumerable.Range(1, 20), streamedNumbers);
+    }
+
+    [Fact]
+    public async Task PullListDoesNotUseLastGoodDataForNonTransientFailures()
+    {
+        var listRequests = 0;
+        var client = CreateClient(path =>
+        {
+            if (TryGetPullRequestNumber(path, "/reviews?per_page=100", out _))
+            {
+                return Json("[]");
+            }
+
+            if (TryGetPullRequestNumber(path, "", out var detailsNumber))
+            {
+                return Json(PullRequestDetailsJson(detailsNumber));
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when ++listRequests == 1 => Json(
+                    PullRequestsJson([PullRequestJson(1, title: "Last known good")])),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    """{ "message": "Not Found" }""",
+                    HttpStatusCode.NotFound),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<GitHubApiException>(() => client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            true,
+            TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task PullListDoesNotUseLastGoodDataForCallerCancellation()
+    {
+        var listRequests = 0;
+        var client = CreateClient((path, cancellationToken) =>
+        {
+            if (TryGetPullRequestNumber(path, "/reviews?per_page=100", out _))
+            {
+                return Task.FromResult(Json("[]"));
+            }
+
+            if (TryGetPullRequestNumber(path, "", out var detailsNumber))
+            {
+                return Task.FromResult(Json(PullRequestDetailsJson(detailsNumber)));
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when ++listRequests == 1 => Task.FromResult(
+                    Json(PullRequestsJson([PullRequestJson(1, title: "Last known good")]))),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Task.FromCanceled<HttpResponseMessage>(cancellationToken),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            true,
+            cancellation.Token));
+    }
+
+    [Fact]
     public async Task StreamPullRequestsByLabelReadsPagedIssuesAndFiltersPullRequests()
     {
         var requestedPaths = new List<string>();
@@ -948,6 +1235,52 @@ public sealed class GitHubClientTests
 
         Assert.Equal(pullRequestCount, pullRequests.Count);
         Assert.True(maxActiveHeads <= 4, $"Expected at most 4 concurrent checks fetches but saw {maxActiveHeads}.");
+    }
+
+    [Fact]
+    public async Task GitHubRequestsLimitConcurrentHttpRequests()
+    {
+        const int requestCount = 16;
+        var activeRequests = 0;
+        var maxActiveRequests = 0;
+        var activeGate = new object();
+
+        var client = CreateClient(async (path, cancellationToken) =>
+        {
+            if (!TryGetPullRequestNumber(path, "", out var number))
+            {
+                throw new InvalidOperationException($"Unexpected GitHub request: {path}");
+            }
+
+            lock (activeGate)
+            {
+                activeRequests++;
+                maxActiveRequests = Math.Max(maxActiveRequests, activeRequests);
+            }
+
+            try
+            {
+                await Task.Delay(50, cancellationToken);
+                return Json(PullRequestDetailsJson(number));
+            }
+            finally
+            {
+                lock (activeGate)
+                {
+                    activeRequests--;
+                }
+            }
+        });
+
+        await Task.WhenAll(Enumerable.Range(1, requestCount).Select(number => client.GetPullRequestDetailsAsync(
+            new RepositoryName("example", "repo"),
+            number,
+            false,
+            TestContext.Current.CancellationToken)));
+
+        Assert.True(
+            maxActiveRequests <= GitHubClient.MaxConcurrentGitHubRequests,
+            $"Expected at most {GitHubClient.MaxConcurrentGitHubRequests} concurrent GitHub requests but saw {maxActiveRequests}.");
     }
 
     [Fact]

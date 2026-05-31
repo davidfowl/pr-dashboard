@@ -10,6 +10,7 @@ import type {
   ShipWeekLoadingState,
   ShipWeekResponse,
 } from '../../types';
+import { formatDuration, formatRelative, formatTime } from '../../utils/format';
 import DashboardFilters from './DashboardFilters';
 import QueueOverview from './QueueOverview';
 import ShipWeekSection from './ShipWeekSection';
@@ -33,6 +34,8 @@ type DashboardViewProps = {
   shipWeekMilestone: string;
   shipWeekReleaseBranch: string;
   selectedBucketId: string;
+  lastUpdatedAt: string | null;
+  autoRefreshIntervalMs: number;
   login?: string;
   onRepoChange: (value: string) => void;
   onStateChange: (value: PullState) => void;
@@ -66,6 +69,8 @@ function DashboardView({
   shipWeekMilestone,
   shipWeekReleaseBranch,
   selectedBucketId,
+  lastUpdatedAt,
+  autoRefreshIntervalMs,
   login,
   onRepoChange,
   onStateChange,
@@ -80,9 +85,28 @@ function DashboardView({
   onVisiblePullRequest,
 }: DashboardViewProps) {
   const shipModeActive = dashboardMode === 'ship';
+  const refreshing = shipModeActive ? shipWeekLoading : pullsLoading;
+  const autoRefreshCadence = formatDuration(autoRefreshIntervalMs);
 
   return (
     <>
+      <section className="panel dashboard-refresh-panel" aria-label="Dashboard refresh status">
+        <div className="dashboard-refresh-copy">
+          <p className="eyebrow">Refresh</p>
+          <h2>{shipModeActive ? 'Ship mode data' : 'Review queue data'}</h2>
+          <p>
+            {lastUpdatedAt
+              ? `List updated ${formatRelative(lastUpdatedAt)} at ${formatTime(lastUpdatedAt)}.`
+              : 'List has not loaded yet.'}
+            {' '}
+            Auto-refreshes about every {autoRefreshCadence} using cached data.
+          </p>
+        </div>
+        <button type="button" onClick={onRefresh} disabled={refreshing}>
+          {refreshing ? 'Refreshing...' : 'Refresh now'}
+        </button>
+      </section>
+
       {(shipModeActive || pullsLoading || pullRequests.length > 0 || attentionBuckets.length > 0 || regressionIssueBuckets.length > 0) && (
         <section className="panel queue-panel" aria-label="Review queue">
           {shipModeActive ? (
@@ -125,7 +149,6 @@ function DashboardView({
         onRepoChange={onRepoChange}
         onStateChange={onStateChange}
         onSubmit={onSubmit}
-        onRefresh={onRefresh}
         onShipWeekRepoChange={onShipWeekRepoChange}
         onShipWeekMilestoneChange={onShipWeekMilestoneChange}
         onShipWeekReleaseBranchChange={onShipWeekReleaseBranchChange}

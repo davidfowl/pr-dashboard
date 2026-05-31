@@ -9,21 +9,119 @@ using Microsoft.Extensions.Caching.Memory;
 sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tokenProvider, IMemoryCache cache, IHostEnvironment environment)
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
+    private static readonly TimeSpan LastGoodCacheDuration = TimeSpan.FromHours(24);
+    private static readonly TimeSpan ForceRefreshCooldown = TimeSpan.FromMinutes(2);
     private const int PullRequestPageSize = 100;
     private const int PullRequestStreamBatchSize = 20;
     private const int MaxLinkedIssuesPerPullRequest = 10;
     private const int MaxGitHubRedirects = 3;
+    internal const int MaxConcurrentGitHubRequests = 8;
     private const int MaxConcurrentChecksFetches = 4;
     private const string RegressionLabelMarker = "regression";
+    private static readonly SemaphoreSlim s_githubRequestThrottle = new(MaxConcurrentGitHubRequests, MaxConcurrentGitHubRequests);
     private static readonly SemaphoreSlim s_checksFetchThrottle = new(MaxConcurrentChecksFetches, MaxConcurrentChecksFetches);
 
-    private void RemoveCacheEntry(string cacheKey, bool forceRefresh)
+    private bool RemoveCacheEntry(string cacheKey, bool forceRefresh)
     {
-        if (forceRefresh)
+        if (!forceRefresh)
         {
-            cache.Remove(cacheKey);
+            return false;
+        }
+
+        var forceRefreshKey = $"force-refresh:{cacheKey}";
+        if (cache.TryGetValue(forceRefreshKey, out _))
+        {
+            return false;
+        }
+
+        cache.Set(forceRefreshKey, true, ForceRefreshCooldown);
+        cache.Remove(cacheKey);
+        return true;
+    }
+
+    private static string GetLastGoodCacheKey(string cacheKey) => $"last-good:{cacheKey}";
+
+    private void SetLastGood<T>(string cacheKey, T value)
+        where T : class =>
+        cache.Set(GetLastGoodCacheKey(cacheKey), value, LastGoodCacheDuration);
+
+    private bool TryGetLastGood<T>(string cacheKey, out T? value)
+        where T : class =>
+        cache.TryGetValue(GetLastGoodCacheKey(cacheKey), out value) && value is not null;
+
+    private bool TryUseLastGoodFallback<T>(
+        string cacheKey,
+        Exception exception,
+        CancellationToken cancellationToken,
+        out T? value)
+        where T : class
+    {
+        value = null;
+        return IsTransientGitHubFailure(exception, cancellationToken)
+            && TryGetLastGood(cacheKey, out value);
+    }
+
+    private async Task<T> GetOrCreateWithLastGoodFallbackAsync<T>(
+        string cacheKey,
+        TimeSpan cacheDuration,
+        Func<Task<T>> factory,
+        CancellationToken cancellationToken,
+        Func<T, bool>? storeLastGood = null)
+        where T : class
+    {
+        if (cache.TryGetValue(cacheKey, out T? cachedValue) && cachedValue is not null)
+        {
+            return cachedValue;
+        }
+
+        try
+        {
+            var value = await factory();
+            if (storeLastGood?.Invoke(value) ?? true)
+            {
+                SetLastGood(cacheKey, value);
+            }
+
+            cache.Set(cacheKey, value, cacheDuration);
+            return value;
+        }
+        catch (Exception ex) when (TryUseLastGoodFallback(cacheKey, ex, cancellationToken, out T? lastGood))
+        {
+            return lastGood!;
         }
     }
+
+    private static bool IsTransientGitHubFailure(Exception exception, CancellationToken cancellationToken) =>
+        !cancellationToken.IsCancellationRequested
+        && exception switch
+        {
+            GitHubApiException ex => IsTransientGitHubStatusCode(ex.StatusCode)
+                || ex.StatusCode == HttpStatusCode.Forbidden && IsRateLimitMessage(ex.Message),
+            _ when IsTransientGitHubTransportFailure(exception) => true,
+            _ => false
+        };
+
+    private static bool IsTransientGitHubTransportFailure(Exception exception) =>
+        exception is HttpRequestException
+           or TimeoutException
+           or OperationCanceledException
+        || IsBrokenCircuitException(exception);
+
+    private static bool IsBrokenCircuitException(Exception exception) =>
+        exception.GetType().FullName?.StartsWith("Polly.CircuitBreaker.BrokenCircuitException", StringComparison.Ordinal) is true;
+
+    private static bool IsTransientGitHubStatusCode(HttpStatusCode statusCode) =>
+        statusCode is HttpStatusCode.RequestTimeout
+            or HttpStatusCode.TooManyRequests
+            or HttpStatusCode.InternalServerError
+            or HttpStatusCode.BadGateway
+            or HttpStatusCode.ServiceUnavailable
+            or HttpStatusCode.GatewayTimeout;
+
+    private static bool IsRateLimitMessage(string message) =>
+        message.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("secondary rate", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("abuse detection", StringComparison.OrdinalIgnoreCase);
 
     public async Task<string?> GetCurrentUserLoginAsync(CancellationToken cancellationToken)
     {
@@ -47,10 +145,12 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     {
         var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
         var cacheKey = $"pulls:{authCacheKey}:{repositoryName}:{state}";
-        RemoveCacheEntry(cacheKey, forceRefresh);
-        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        var bypassedCache = RemoveCacheEntry(cacheKey, forceRefresh);
+        return await GetOrCreateWithLastGoodFallbackAsync(
+            cacheKey,
+            CacheDuration,
+            async () =>
         {
-            entry.AbsoluteExpirationRelativeToNow = CacheDuration;
             var sort = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "created" : "updated";
             var direction = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "asc" : "desc";
             var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls?state={Uri.EscapeDataString(state)}&sort={sort}&direction={direction}&per_page={PullRequestPageSize}";
@@ -62,8 +162,9 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 .Where(pullRequest => !pullRequest.Draft)
                 .ToArray();
 
-            return await CreatePullRequestSummariesAsync(repositoryName, activePullRequestDtos, forceRefresh, cancellationToken);
-        }) ?? [];
+            return await CreatePullRequestSummariesAsync(repositoryName, activePullRequestDtos, bypassedCache, cancellationToken);
+        },
+            cancellationToken);
     }
 
     public async IAsyncEnumerable<PullRequestSummary> StreamPullRequestsAsync(
@@ -74,9 +175,9 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     {
         var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
         var cacheKey = $"pulls:{authCacheKey}:{repositoryName}:{state}";
-        RemoveCacheEntry(cacheKey, forceRefresh);
+        var bypassedCache = RemoveCacheEntry(cacheKey, forceRefresh);
 
-        if (!forceRefresh && cache.TryGetValue(cacheKey, out IReadOnlyList<PullRequestSummary>? cachedPullRequests) && cachedPullRequests is not null)
+        if (!bypassedCache && cache.TryGetValue(cacheKey, out IReadOnlyList<PullRequestSummary>? cachedPullRequests) && cachedPullRequests is not null)
         {
             foreach (var pullRequest in cachedPullRequests)
             {
@@ -87,18 +188,58 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             yield break;
         }
 
+        IReadOnlyList<PullRequestSummary>? stalePullRequests = null;
         var streamedPullRequests = new List<PullRequestSummary>();
-        await foreach (var pullRequest in CreatePullRequestSummariesInBatchesAsync(
+        await using var enumerator = CreatePullRequestSummariesInBatchesAsync(
             repositoryName,
             StreamPullRequestDtosAsync(repositoryName, state, cancellationToken),
-            forceRefresh,
-            cancellationToken))
+            bypassedCache,
+            cancellationToken).GetAsyncEnumerator(cancellationToken);
+
+        while (true)
         {
-            streamedPullRequests.Add(pullRequest);
-            yield return pullRequest;
+            PullRequestSummary? pullRequest = null;
+            bool hasPullRequest;
+            try
+            {
+                hasPullRequest = await enumerator.MoveNextAsync();
+                if (hasPullRequest)
+                {
+                    pullRequest = enumerator.Current;
+                }
+            }
+            catch (Exception ex) when (streamedPullRequests.Count == 0
+                && TryUseLastGoodFallback(cacheKey, ex, cancellationToken, out stalePullRequests))
+            {
+                hasPullRequest = false;
+            }
+
+            if (stalePullRequests is not null)
+            {
+                foreach (var stalePullRequest in stalePullRequests)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    yield return stalePullRequest;
+                }
+
+                yield break;
+            }
+
+            if (!hasPullRequest)
+            {
+                break;
+            }
+
+            if (pullRequest is not null)
+            {
+                streamedPullRequests.Add(pullRequest);
+                yield return pullRequest;
+            }
         }
 
-        cache.Set(cacheKey, streamedPullRequests.ToArray(), CacheDuration);
+        var completedPullRequests = streamedPullRequests.ToArray();
+        SetLastGood(cacheKey, completedPullRequests);
+        cache.Set(cacheKey, completedPullRequests, CacheDuration);
     }
 
     public async Task<IReadOnlyList<PullRequestSummary>> GetPullRequestsByLabelAsync(
@@ -116,10 +257,12 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
 
         var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
         var cacheKey = $"pulls:{authCacheKey}:{repositoryName}:{state}:label:{normalizedLabel}";
-        RemoveCacheEntry(cacheKey, forceRefresh);
-        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        var bypassedCache = RemoveCacheEntry(cacheKey, forceRefresh);
+        return await GetOrCreateWithLastGoodFallbackAsync(
+            cacheKey,
+            CacheDuration,
+            async () =>
         {
-            entry.AbsoluteExpirationRelativeToNow = CacheDuration;
             var sort = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "created" : "updated";
             var direction = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "asc" : "desc";
             var issues = await GetIssuesAsync(
@@ -152,9 +295,10 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 pullRequestDtos
                     .OrderBy(pullRequest => pullRequest.CreatedAt)
                     .ToArray(),
-                forceRefresh,
+                bypassedCache,
                 cancellationToken);
-        }) ?? [];
+        },
+            cancellationToken);
     }
 
     public async IAsyncEnumerable<PullRequestSummary> StreamPullRequestsByLabelAsync(
@@ -177,9 +321,9 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
 
         var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
         var cacheKey = $"pulls:{authCacheKey}:{repositoryName}:{state}:label:{normalizedLabel}";
-        RemoveCacheEntry(cacheKey, forceRefresh);
+        var bypassedCache = RemoveCacheEntry(cacheKey, forceRefresh);
 
-        if (!forceRefresh && cache.TryGetValue(cacheKey, out IReadOnlyList<PullRequestSummary>? cachedPullRequests) && cachedPullRequests is not null)
+        if (!bypassedCache && cache.TryGetValue(cacheKey, out IReadOnlyList<PullRequestSummary>? cachedPullRequests) && cachedPullRequests is not null)
         {
             foreach (var pullRequest in cachedPullRequests)
             {
@@ -190,18 +334,58 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             yield break;
         }
 
+        IReadOnlyList<PullRequestSummary>? stalePullRequests = null;
         var streamedPullRequests = new List<PullRequestSummary>();
-        await foreach (var pullRequest in CreatePullRequestSummariesInBatchesAsync(
+        await using var enumerator = CreatePullRequestSummariesInBatchesAsync(
             repositoryName,
             StreamPullRequestDtosByLabelAsync(repositoryName, state, normalizedLabel, cancellationToken),
-            forceRefresh,
-            cancellationToken))
+            bypassedCache,
+            cancellationToken).GetAsyncEnumerator(cancellationToken);
+
+        while (true)
         {
-            streamedPullRequests.Add(pullRequest);
-            yield return pullRequest;
+            PullRequestSummary? pullRequest = null;
+            bool hasPullRequest;
+            try
+            {
+                hasPullRequest = await enumerator.MoveNextAsync();
+                if (hasPullRequest)
+                {
+                    pullRequest = enumerator.Current;
+                }
+            }
+            catch (Exception ex) when (streamedPullRequests.Count == 0
+                && TryUseLastGoodFallback(cacheKey, ex, cancellationToken, out stalePullRequests))
+            {
+                hasPullRequest = false;
+            }
+
+            if (stalePullRequests is not null)
+            {
+                foreach (var stalePullRequest in stalePullRequests)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    yield return stalePullRequest;
+                }
+
+                yield break;
+            }
+
+            if (!hasPullRequest)
+            {
+                break;
+            }
+
+            if (pullRequest is not null)
+            {
+                streamedPullRequests.Add(pullRequest);
+                yield return pullRequest;
+            }
         }
 
-        cache.Set(cacheKey, streamedPullRequests.ToArray(), CacheDuration);
+        var completedPullRequests = streamedPullRequests.ToArray();
+        SetLastGood(cacheKey, completedPullRequests);
+        cache.Set(cacheKey, completedPullRequests, CacheDuration);
     }
 
     public async Task<IReadOnlyList<ShipWeekIssueSummary>> GetRegressionIssuesAsync(
@@ -212,21 +396,28 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     {
         var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
         var cacheKey = $"regression-issues:{authCacheKey}:{repositoryName}:{state}";
-        RemoveCacheEntry(cacheKey, forceRefresh);
-        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        var bypassedCache = RemoveCacheEntry(cacheKey, forceRefresh);
+        return await GetOrCreateWithLastGoodFallbackAsync(
+            cacheKey,
+            CacheDuration,
+            async () =>
         {
-            entry.AbsoluteExpirationRelativeToNow = CacheDuration;
             var regressionIssues = await GetIssuesMatchingLabelMarkerAsync(
                 repositoryName,
                 state,
                 RegressionLabelMarker,
-                forceRefresh,
+                bypassedCache,
                 cancellationToken);
 
+            var fetchedAt = DateTimeOffset.UtcNow;
             return regressionIssues
-                .Select(issue => ShipWeekIssueSummary.FromDto(repositoryName, issue, []))
+                .Select(issue => ShipWeekIssueSummary.FromDto(repositoryName, issue, []) with
+                {
+                    FetchedAt = fetchedAt
+                })
                 .ToArray();
-        }) ?? [];
+        },
+            cancellationToken);
     }
 
     public async Task<ShipWeekLoadResult> GetShipWeekAsync(
@@ -240,11 +431,12 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         var requestedReleaseBranch = releaseBranch?.Trim();
         var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
         var cacheKey = $"ship-week:{authCacheKey}:{repositoryName}:{normalizedMilestoneTitle}:{requestedReleaseBranch ?? "latest-release"}";
-        RemoveCacheEntry(cacheKey, forceRefresh);
-        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        var bypassedCache = RemoveCacheEntry(cacheKey, forceRefresh);
+        return await GetOrCreateWithLastGoodFallbackAsync(
+            cacheKey,
+            CacheDuration,
+            async () =>
         {
-            entry.AbsoluteExpirationRelativeToNow = CacheDuration;
-
             var milestone = await GetMilestoneByTitleAsync(repositoryName, normalizedMilestoneTitle, cancellationToken);
             if (milestone is null)
             {
@@ -308,7 +500,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 pullRequestDtosByNumber.Values
                     .OrderBy(pullRequest => pullRequest.CreatedAt)
                     .ToArray(),
-                forceRefresh,
+                bypassedCache,
                 cancellationToken);
 
             var nonPullRequestIssues = milestoneIssues
@@ -323,13 +515,17 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 normalizedMilestoneTitle,
                 pullRequestSummaries,
                 milestoneIssueNumbers);
+            var fetchedAt = DateTimeOffset.UtcNow;
             var shipWeekIssues = nonPullRequestIssues
                 .Select(issue =>
                 {
                     var linkedOpenPullRequests = linkedOpenPullRequestsByIssue.TryGetValue(issue.Number, out var linked)
                         ? linked
                         : [];
-                    return ShipWeekIssueSummary.FromDto(repositoryName, issue, linkedOpenPullRequests);
+                    return ShipWeekIssueSummary.FromDto(repositoryName, issue, linkedOpenPullRequests) with
+                    {
+                        FetchedAt = fetchedAt
+                    };
                 })
                 .ToArray();
 
@@ -368,7 +564,9 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 normalizedReleaseBranch,
                 shipWeekPullRequests,
                 shipWeekIssues));
-        }) ?? ShipWeekLoadResult.ValidationProblem("shipWeek", "Unable to load ship-week data.");
+        },
+            cancellationToken,
+            result => result.Response is not null);
     }
 
     private async IAsyncEnumerable<PullRequestSummary> CreatePullRequestSummariesInBatchesAsync(
@@ -574,6 +772,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             linkedIssuesByPullRequest[number] = await task;
         }
 
+        var fetchedAt = DateTimeOffset.UtcNow;
         return pullRequests
             .Select(pullRequest =>
             {
@@ -581,6 +780,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 lastCommitByPullRequest.TryGetValue(pullRequest.Number, out var lastCommitAt);
                 return pullRequest with
                 {
+                    FetchedAt = fetchedAt,
                     LinkedIssues = linkedIssuesByPullRequest[pullRequest.Number],
                     CommitCount = details?.CommitCount ?? pullRequest.CommitCount,
                     Additions = details?.Additions ?? pullRequest.Additions,
@@ -1121,18 +1321,18 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         {
             while (url is not null)
             {
-                using var response = await SendAuthorizedRequestAsync(url, cancellationToken);
-                var page = await ReadGitHubJsonAsync(
-                    response,
+                var pageResponse = await SendGitHubPageAsync(
+                    url,
                     GitHubJsonSerializerContext.Default.GitHubCheckRunsResponseDto,
                     cancellationToken);
+                var page = pageResponse.Value;
 
                 if (page.CheckRuns is { Length: > 0 } pageRuns)
                 {
                     runs.AddRange(pageRuns);
                 }
 
-                url = GetNextPageUrl(response);
+                url = pageResponse.NextUrl;
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1163,18 +1363,18 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         {
             while (url is not null)
             {
-                using var response = await SendAuthorizedRequestAsync(url, cancellationToken);
-                var page = await ReadGitHubJsonAsync(
-                    response,
+                var pageResponse = await SendGitHubPageAsync(
+                    url,
                     GitHubJsonSerializerContext.Default.GitHubCombinedStatusDto,
                     cancellationToken);
+                var page = pageResponse.Value;
 
                 if (page.Statuses is { Length: > 0 } pageStatuses)
                 {
                     statuses.AddRange(pageStatuses);
                 }
 
-                url = GetNextPageUrl(response);
+                url = pageResponse.NextUrl;
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1267,14 +1467,13 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
 
             for (var page = 0; page < 3 && url is not null; page++)
             {
-                using var response = await SendAuthorizedRequestAsync(url, cancellationToken);
-                var pageItems = await ReadGitHubJsonAsync(
-                    response,
+                var pageResponse = await SendGitHubPageAsync(
+                    url,
                     GitHubJsonSerializerContext.Default.GitHubTimelineItemDtoArray,
                     cancellationToken);
 
-                items.AddRange(pageItems);
-                url = GetNextPageUrl(response);
+                items.AddRange(pageResponse.Value);
+                url = pageResponse.NextUrl;
             }
 
             return items
@@ -1340,23 +1539,22 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             for (var page = 0; page < 3 && url is not null; page++)
             {
                 GitHubPullRequestCommitDto[] pageCommits;
-                using var response = await SendAuthorizedRequestAsync(url, cancellationToken);
 
                 try
                 {
-                    pageCommits = await ReadGitHubJsonAsync(
-                        response,
+                    var pageResponse = await SendGitHubPageAsync(
+                        url,
                         GitHubJsonSerializerContext.Default.GitHubPullRequestCommitDtoArray,
                         cancellationToken);
+                    pageCommits = pageResponse.Value;
+                    url = pageResponse.NextUrl;
                 }
                 catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
                 {
                     // Commit recency is enrichment-only. Keep the PR in the list without it.
                     return null;
                 }
-
                 commits.AddRange(pageCommits);
-                url = GetNextPageUrl(response);
             }
 
             return commits
@@ -1436,8 +1634,8 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         JsonTypeInfo<T> jsonTypeInfo,
         CancellationToken cancellationToken)
     {
-        using var response = await SendAuthorizedRequestAsync(url, cancellationToken);
-        return await ReadGitHubJsonAsync(response, jsonTypeInfo, cancellationToken);
+        var page = await SendGitHubPageAsync(url, jsonTypeInfo, cancellationToken);
+        return page.Value;
     }
 
     private async Task<IReadOnlyList<T>> SendPagedGitHubRequestAsync<T>(
@@ -1447,14 +1645,12 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     {
         var items = new List<T>();
         string? nextUrl = url;
-
         while (nextUrl is not null)
         {
-            using var response = await SendAuthorizedRequestAsync(nextUrl, cancellationToken);
-            var pageItems = await ReadGitHubJsonAsync(response, jsonTypeInfo, cancellationToken);
+            var page = await SendGitHubPageAsync(nextUrl, jsonTypeInfo, cancellationToken);
 
-            items.AddRange(pageItems);
-            nextUrl = GetNextPageUrl(response);
+            items.AddRange(page.Value);
+            nextUrl = page.NextUrl;
         }
 
         return items;
@@ -1469,16 +1665,39 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
 
         while (nextUrl is not null)
         {
-            using var response = await SendAuthorizedRequestAsync(nextUrl, cancellationToken);
-            var pageItems = await ReadGitHubJsonAsync(response, jsonTypeInfo, cancellationToken);
+            var page = await SendGitHubPageAsync(nextUrl, jsonTypeInfo, cancellationToken);
 
-            foreach (var item in pageItems)
+            foreach (var item in page.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return item;
             }
 
-            nextUrl = GetNextPageUrl(response);
+            nextUrl = page.NextUrl;
+        }
+    }
+
+    private async Task<GitHubPage<T>> SendGitHubPageAsync<T>(
+        string url,
+        JsonTypeInfo<T> jsonTypeInfo,
+        CancellationToken cancellationToken)
+    {
+        await s_githubRequestThrottle.WaitAsync(cancellationToken);
+        try
+        {
+            using var response = await SendAuthorizedRequestAsync(url, cancellationToken);
+            var value = await ReadGitHubJsonAsync(response, jsonTypeInfo, cancellationToken);
+            return new GitHubPage<T>(value, GetNextPageUrl(response));
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsTransientGitHubTransportFailure(ex))
+        {
+            throw new GitHubApiException(
+                HttpStatusCode.ServiceUnavailable,
+                "GitHub API is temporarily unavailable from the local backend. Try again shortly.");
+        }
+        finally
+        {
+            s_githubRequestThrottle.Release();
         }
     }
 
@@ -1512,6 +1731,8 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
 
         throw new GitHubApiException(HttpStatusCode.BadGateway, "GitHub API returned too many redirects.");
     }
+
+    private readonly record struct GitHubPage<T>(T Value, string? NextUrl);
 
     private static async Task<T> ReadGitHubJsonAsync<T>(
         HttpResponseMessage response,
