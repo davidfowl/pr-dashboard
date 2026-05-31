@@ -18,7 +18,6 @@ import type {
   MergeableState,
   PickItem,
   PullRequestSummary,
-  ShipWeekIssueBucket,
   ShipWeekIssueSummary,
   ShipWeekResponse,
   ShipWeekScopeGroup,
@@ -44,7 +43,9 @@ const needsReviewFreshMs = 2 * dayMs;
 const quickWinLineThreshold = 80;
 const quickWinFileThreshold = 3;
 const approvedButAgingBucketLabel = 'Approved but aging';
+const releaseBlockingSignalLabel = 'Blocking release';
 const regressionBucketLabel = 'Regression';
+const releaseBlockingLabelMarker = 'blocking-release';
 
 export function createDeveloperPullRequestCounts(pullRequests: PullRequestSummary[]): DeveloperPullRequestCount[] {
   const coreTeamKeys = new Set(coreTeamMembers.map(actorIdentityKey));
@@ -351,69 +352,18 @@ export function createShipWeekScopeGroups(shipWeek: ShipWeekResponse): ShipWeekS
   ];
 }
 
-const shipWeekIssueBucketDefinitions: Omit<ShipWeekIssueBucket, 'issues'>[] = [
-  {
-    label: regressionBucketLabel,
-    summary: 'Issues tagged as regressions, including Aspire last-release regressions.',
-    tone: 'danger',
-  },
-  {
-    label: 'Needs PR',
-    summary: 'Open milestone issues with no inferred open PR.',
-    tone: 'danger',
-  },
-  {
-    label: 'Needs validation',
-    summary: 'Issues with a PR in flight or explicit validation signals.',
-    tone: 'warning',
-  },
-  {
-    label: 'Installer/acquisition',
-    summary: 'Installer, workload, setup, or acquisition work.',
-    tone: 'accent',
-  },
-  {
-    label: 'TypeScript/polyglot',
-    summary: 'TypeScript, JavaScript, Node, or polyglot work.',
-    tone: 'accent',
-  },
-  {
-    label: 'CLI channel/versioning',
-    summary: 'CLI, channel, feed, template, or versioning work.',
-    tone: 'accent',
-  },
-  {
-    label: 'Docs/release readiness',
-    summary: 'Docs, release notes, announcements, or readiness tasks.',
-    tone: 'success',
-  },
-  {
-    label: 'Unowned',
-    summary: 'No assignee and no domain bucket match.',
-    tone: 'warning',
-  },
-];
-const shipWeekIssueBucketToneByLabel = new Map(
-  shipWeekIssueBucketDefinitions.map((bucket) => [bucket.label, bucket.tone]),
-);
+const shipWeekIssueSignalToneByLabel = new Map<string, AttentionSignal['tone']>([
+  [regressionBucketLabel, 'danger'],
+  ['Needs PR', 'danger'],
+  ['Needs validation', 'warning'],
+  ['Installer/acquisition', 'accent'],
+  ['TypeScript/polyglot', 'accent'],
+  ['CLI channel/versioning', 'accent'],
+  ['Docs/release readiness', 'success'],
+  ['Unowned', 'warning'],
+]);
 const staleIssueMs = 7 * dayMs;
 const coldIssueMs = 14 * dayMs;
-
-export function createShipWeekIssueBuckets(issues: ShipWeekIssueSummary[]): ShipWeekIssueBucket[] {
-  const buckets = shipWeekIssueBucketDefinitions.map((bucket) => ({
-    ...bucket,
-    issues: [] as ShipWeekIssueSummary[],
-  }));
-  const bucketsByLabel = new Map(buckets.map((bucket) => [bucket.label, bucket]));
-
-  for (const issue of issues) {
-    for (const bucketLabel of shipWeekIssueBucketLabels(issue)) {
-      bucketsByLabel.get(bucketLabel)?.issues.push(issue);
-    }
-  }
-
-  return buckets.filter((bucket) => bucket.issues.length > 0);
-}
 
 export function createIssueSignals(issue: ShipWeekIssueSummary): AttentionSignal[] {
   const action = issueActionSignal(issue);
@@ -427,11 +377,11 @@ export function createIssueSignals(issue: ShipWeekIssueSummary): AttentionSignal
     signals.push({ label: formatCount(issue.linkedOpenPullRequests.length, 'open PR'), tone: 'warning' });
   }
 
-  for (const bucketLabel of shipWeekIssueBucketLabels(issue)) {
-    if (bucketLabel !== action.label) {
+  for (const signalLabel of shipWeekIssueSignalLabels(issue)) {
+    if (signalLabel !== action.label) {
       signals.push({
-        label: bucketLabel,
-        tone: shipWeekIssueBucketToneByLabel.get(bucketLabel) ?? 'muted',
+        label: signalLabel,
+        tone: shipWeekIssueSignalToneByLabel.get(signalLabel) ?? 'muted',
       });
     }
   }
@@ -459,6 +409,10 @@ export function createIssueSignals(issue: ShipWeekIssueSummary): AttentionSignal
 }
 
 function issueActionSignal(issue: ShipWeekIssueSummary): AttentionSignal {
+  if (hasReleaseBlockingLabel(issue.labels)) {
+    return { label: releaseBlockingSignalLabel, tone: 'danger' };
+  }
+
   if (hasRegressionLabel(issue.labels)) {
     return { label: regressionBucketLabel, tone: 'danger' };
   }
@@ -474,7 +428,7 @@ function issueActionSignal(issue: ShipWeekIssueSummary): AttentionSignal {
   return { label: 'Needs validation', tone: 'warning' };
 }
 
-function shipWeekIssueBucketLabels(issue: ShipWeekIssueSummary) {
+function shipWeekIssueSignalLabels(issue: ShipWeekIssueSummary) {
   const labels: string[] = [];
   let domainMatch = false;
 
@@ -675,6 +629,10 @@ function hasRegressionSignal(pullRequest: PullRequestSummary) {
 
 function hasRegressionLabel(labels: readonly string[]) {
   return labels.some((label) => label.toLowerCase().includes('regression'));
+}
+
+function hasReleaseBlockingLabel(labels: readonly string[]) {
+  return labels.some((label) => label.toLowerCase().includes(releaseBlockingLabelMarker));
 }
 
 function regressionSignal(pullRequest: PullRequestSummary) {

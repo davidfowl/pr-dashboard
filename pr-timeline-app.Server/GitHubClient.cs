@@ -17,6 +17,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     private const int MaxGitHubRedirects = 3;
     internal const int MaxConcurrentGitHubRequests = 8;
     private const int MaxConcurrentChecksFetches = 4;
+    private const string RegressionLabelMarker = "regression";
     private static readonly SemaphoreSlim s_githubRequestThrottle = new(MaxConcurrentGitHubRequests, MaxConcurrentGitHubRequests);
     private static readonly SemaphoreSlim s_checksFetchThrottle = new(MaxConcurrentChecksFetches, MaxConcurrentChecksFetches);
 
@@ -264,10 +265,14 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         {
             var sort = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "created" : "updated";
             var direction = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "asc" : "desc";
-            var issues = await SendPagedGitHubRequestAsync(
-                $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues?state={Uri.EscapeDataString(state)}&labels={Uri.EscapeDataString(normalizedLabel)}&sort={sort}&direction={direction}&per_page={PullRequestPageSize}",
-                GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
-                cancellationToken);
+            var issues = await GetIssuesAsync(
+                repositoryName,
+                state,
+                label: normalizedLabel,
+                milestoneNumber: null,
+                sort: sort,
+                direction: direction,
+                cancellationToken: cancellationToken);
             var pullRequestTasks = issues
                 .Where(issue => issue.PullRequest is not null)
                 .ToDictionary(
@@ -397,26 +402,15 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             CacheDuration,
             async () =>
         {
-            var regressionLabels = await GetRegressionLabelNamesAsync(repositoryName, bypassedCache, cancellationToken);
-            if (regressionLabels.Count == 0)
-            {
-                return [];
-            }
-
-            var issueTasks = regressionLabels
-                .ToDictionary(
-                    label => label,
-                    label => GetIssuesByLabelAsync(repositoryName, state, label, cancellationToken));
-
-            await Task.WhenAll(issueTasks.Values);
+            var regressionIssues = await GetIssuesMatchingLabelMarkerAsync(
+                repositoryName,
+                state,
+                RegressionLabelMarker,
+                bypassedCache,
+                cancellationToken);
 
             var fetchedAt = DateTimeOffset.UtcNow;
-            return issueTasks.Values
-                .SelectMany(task => task.Result)
-                .Where(issue => issue.PullRequest is null && HasRegressionLabel(issue.Labels))
-                .GroupBy(issue => issue.Number)
-                .Select(group => group.First())
-                .OrderByDescending(issue => issue.UpdatedAt)
+            return regressionIssues
                 .Select(issue => ShipWeekIssueSummary.FromDto(repositoryName, issue, []) with
                 {
                     FetchedAt = fetchedAt
@@ -645,13 +639,15 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     {
         var sort = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "created" : "updated";
         var direction = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "asc" : "desc";
-        var issueUrl = $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues?state={Uri.EscapeDataString(state)}&labels={Uri.EscapeDataString(label)}&sort={sort}&direction={direction}&per_page={PullRequestPageSize}";
         var issueBatch = new List<int>(PullRequestStreamBatchSize);
 
-        await foreach (var issue in SendPagedGitHubRequestStreamAsync(
-            issueUrl,
-            GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
-            cancellationToken))
+        await foreach (var issue in StreamIssuesAsync(
+            repositoryName,
+            state,
+            label: label,
+            sort: sort,
+            direction: direction,
+            cancellationToken: cancellationToken))
         {
             if (issue.PullRequest is null)
             {
@@ -873,18 +869,52 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         RepositoryName repositoryName,
         int milestoneNumber,
         CancellationToken cancellationToken) =>
-        await SendPagedGitHubRequestAsync(
-            $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues?state=open&milestone={milestoneNumber}&per_page=100",
-            GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
-            cancellationToken);
+        await GetIssuesAsync(
+            repositoryName,
+            "open",
+            label: null,
+            milestoneNumber: milestoneNumber,
+            sort: null,
+            direction: null,
+            cancellationToken: cancellationToken);
 
-    private async Task<IReadOnlyList<string>> GetRegressionLabelNamesAsync(
+    private async Task<IReadOnlyList<GitHubIssueDto>> GetIssuesMatchingLabelMarkerAsync(
         RepositoryName repositoryName,
+        string state,
+        string labelMarker,
+        bool forceRefresh,
+        CancellationToken cancellationToken)
+    {
+        var matchingLabels = await GetLabelNamesContainingAsync(repositoryName, labelMarker, forceRefresh, cancellationToken);
+        if (matchingLabels.Count == 0)
+        {
+            return [];
+        }
+
+        var issueTasks = matchingLabels
+            .ToDictionary(
+                label => label,
+                label => GetIssuesByLabelAsync(repositoryName, state, label, cancellationToken));
+
+        await Task.WhenAll(issueTasks.Values);
+
+        return issueTasks.Values
+            .SelectMany(task => task.Result)
+            .Where(issue => issue.PullRequest is null && HasLabelContaining(issue.Labels, labelMarker))
+            .GroupBy(issue => issue.Number)
+            .Select(group => group.First())
+            .OrderByDescending(issue => issue.UpdatedAt)
+            .ToArray();
+    }
+
+    private async Task<IReadOnlyList<string>> GetLabelNamesContainingAsync(
+        RepositoryName repositoryName,
+        string labelMarker,
         bool forceRefresh,
         CancellationToken cancellationToken)
     {
         var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
-        var cacheKey = $"regression-labels:{authCacheKey}:{repositoryName}";
+        var cacheKey = $"matching-labels:{authCacheKey}:{repositoryName}:{labelMarker}";
         RemoveCacheEntry(cacheKey, forceRefresh);
         return await cache.GetOrCreateAsync(cacheKey, async entry =>
         {
@@ -897,7 +927,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 .Select(label => label.Name)
                 .Where(label => !string.IsNullOrWhiteSpace(label))
                 .Select(label => label!)
-                .Where(label => label.Contains("regression", StringComparison.OrdinalIgnoreCase))
+                .Where(label => label.Contains(labelMarker, StringComparison.OrdinalIgnoreCase))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToArray();
         }) ?? [];
@@ -908,10 +938,88 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         string state,
         string label,
         CancellationToken cancellationToken) =>
+        await GetIssuesAsync(
+            repositoryName,
+            state,
+            label: label,
+            milestoneNumber: null,
+            sort: "updated",
+            direction: "desc",
+            cancellationToken: cancellationToken);
+
+    private async Task<IReadOnlyList<GitHubIssueDto>> GetIssuesAsync(
+        RepositoryName repositoryName,
+        string state,
+        string? label,
+        int? milestoneNumber,
+        string? sort,
+        string? direction,
+        CancellationToken cancellationToken) =>
         await SendPagedGitHubRequestAsync(
-            $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues?state={Uri.EscapeDataString(state)}&labels={Uri.EscapeDataString(label)}&sort=updated&direction=desc&per_page=100",
+            CreateIssuesUrl(repositoryName, state, label, milestoneNumber, sort, direction),
             GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
             cancellationToken);
+
+    private async IAsyncEnumerable<GitHubIssueDto> StreamIssuesAsync(
+        RepositoryName repositoryName,
+        string state,
+        string? label,
+        string? sort,
+        string? direction,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var issue in SendPagedGitHubRequestStreamAsync(
+            CreateIssuesUrl(
+                repositoryName,
+                state,
+                label,
+                milestoneNumber: null,
+                sort,
+                direction),
+            GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
+            cancellationToken))
+        {
+            yield return issue;
+        }
+    }
+
+    private static string CreateIssuesUrl(
+        RepositoryName repositoryName,
+        string state,
+        string? label,
+        int? milestoneNumber,
+        string? sort,
+        string? direction)
+    {
+        var queryParts = new List<string>
+        {
+            $"state={Uri.EscapeDataString(state)}"
+        };
+
+        if (!string.IsNullOrWhiteSpace(label))
+        {
+            queryParts.Add($"labels={Uri.EscapeDataString(label)}");
+        }
+
+        if (milestoneNumber is { } milestone)
+        {
+            queryParts.Add($"milestone={milestone}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(sort))
+        {
+            queryParts.Add($"sort={Uri.EscapeDataString(sort)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(direction))
+        {
+            queryParts.Add($"direction={Uri.EscapeDataString(direction)}");
+        }
+
+        queryParts.Add($"per_page={PullRequestPageSize}");
+
+        return $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues?{string.Join("&", queryParts)}";
+    }
 
     private async Task<IReadOnlyList<GitHubPullRequestDto>> GetOpenPullRequestsByBaseAsync(
         RepositoryName repositoryName,
@@ -980,8 +1088,8 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     private static bool RepositoryMatches(string repository, RepositoryName repositoryName) =>
         repository.Equals(repositoryName.ToString(), StringComparison.OrdinalIgnoreCase);
 
-    private static bool HasRegressionLabel(IEnumerable<GitHubLabelDto> labels) =>
-        labels.Any(label => label.Name?.Contains("regression", StringComparison.OrdinalIgnoreCase) is true);
+    private static bool HasLabelContaining(IEnumerable<GitHubLabelDto> labels, string marker) =>
+        labels.Any(label => label.Name?.Contains(marker, StringComparison.OrdinalIgnoreCase) is true);
 
     private static bool MilestoneTitleMatches(string? milestoneTitle, string expectedMilestoneTitle) =>
         string.Equals(milestoneTitle?.Trim(), expectedMilestoneTitle, StringComparison.OrdinalIgnoreCase);
