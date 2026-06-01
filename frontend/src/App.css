@@ -390,9 +390,14 @@ select:focus-visible {
   grid-template-columns: 1fr;
 }
 
+.workspace > * {
+  min-width: 0;
+}
+
 .panel {
   border-radius: 1.4rem;
   padding: 1.25rem;
+  min-width: 0;
 }
 
 .controls-panel {
@@ -2560,7 +2565,7 @@ select:focus-visible {
 
 @media (max-width: 980px) {
   .app-shell {
-    padding: 1rem;
+    padding: clamp(0.75rem, 3vw, 1rem);
   }
 
   .hero,
@@ -2568,13 +2573,144 @@ select:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .hero {
+    gap: 1rem;
+    align-items: stretch;
+  }
+
+  .auth-card {
+    justify-self: start;
+    max-width: 100%;
+  }
+
   .controls-panel {
     position: static;
     max-height: none;
+    overflow: visible;
+  }
+
+  .workspace.dashboard .pull-list {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
   }
 
   .ship-week-critical-grid {
     grid-template-columns: 1fr;
+  }
+
+  .focus-strip,
+  .triage-panel {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .hero {
+    border-radius: var(--radius-lg);
+    padding: 1rem;
+  }
+
+  .hero-brand {
+    gap: 0.55rem;
+    margin-bottom: 0.55rem;
+  }
+
+  .hero-brand-logo {
+    max-width: 9.5rem;
+    height: auto;
+  }
+
+  .hero h1 {
+    font-size: clamp(1.55rem, 9vw, 2rem);
+  }
+
+  .hero-copy {
+    font-size: 0.88rem;
+  }
+
+  .hero-mode-row {
+    align-items: stretch;
+  }
+
+  .mode-toggle {
+    width: 100%;
+  }
+
+  .mode-status {
+    display: inline-flex;
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .auth-card {
+    width: 100%;
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .auth-summary {
+    flex: 1 1 100%;
+  }
+
+  .auth-card strong {
+    max-width: none;
+  }
+
+  .auth-actions {
+    width: 100%;
+  }
+
+  .auth-actions button {
+    flex: 1 1 0;
+    min-height: 2.35rem;
+  }
+
+  .panel {
+    padding: 1rem;
+  }
+
+  .dashboard-refresh-panel {
+    align-items: stretch;
+  }
+
+  .dashboard-refresh-panel button {
+    width: 100%;
+  }
+
+  .attention-card-header,
+  .drilldown-header,
+  .checks-card-header,
+  .milestone-card div {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .bucket-card-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .drilldown-tiles {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  }
+
+  .ship-week-summary-grid,
+  .queue-stat-grid,
+  .stats-grid,
+  .developer-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ship-week-issue-row {
+    grid-template-columns: 1fr;
+  }
+
+  .ship-week-issue-row a {
+    white-space: normal;
+  }
+
+  .ship-week-issue-row em {
+    justify-self: start;
   }
 }
 
@@ -2595,11 +2731,20 @@ select:focus-visible {
     grid-template-columns: repeat(2, 1fr);
   }
 
+  .attention-list {
+    gap: 0.55rem;
+  }
+
   .attention-pr-row,
   .attention-issue-row {
-    grid-template-columns: auto auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 0.45rem;
     align-items: start;
+    border: 1px solid var(--hairline);
+    border-left: 3px solid var(--attention-color, var(--border-strong));
+    border-radius: var(--radius-lg);
+    padding: 0.75rem;
+    background: rgba(24, 21, 45, 0.5);
   }
 
   .drilldown-tiles,
@@ -2607,6 +2752,10 @@ select:focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .attention-pr-number,
+  .attention-issue-number,
+  .attention-pr-repo,
+  .attention-issue-repo,
   .attention-pr-title,
   .attention-issue-title,
   .attention-pr-meta,
@@ -2617,34 +2766,152 @@ select:focus-visible {
   .attention-issue-signals,
   .attention-pr-linked-issues,
   .attention-issue-linked-pulls {
-    grid-column: 3;
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .attention-pr-number,
+  .attention-issue-number {
+    font-size: 0.76rem;
+  }
+
+  .attention-pr-repo,
+  .attention-issue-repo {
+    max-width: 100%;
+    font-size: 0.72rem;
+  }
+
+  .attention-pr-title,
+  .attention-issue-title {
+    overflow: visible;
+    font-size: 0.88rem;
+    line-height: 1.35;
+    white-space: normal;
   }
 
   .attention-pr-meta,
   .attention-issue-meta {
-    grid-row: 2;
     text-align: left;
+    white-space: normal;
   }
 
   .attention-pr-actions,
   .attention-issue-actions {
-    grid-row: 3;
+    display: grid;
+    width: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     justify-content: flex-start;
   }
 
-  .attention-pr-signals,
-  .attention-issue-signals {
-    grid-row: 4;
+  .attention-issue-actions {
+    grid-template-columns: 1fr;
   }
 
-  .attention-pr-linked-issues,
-  .attention-issue-linked-pulls {
-    grid-row: 5;
+  .attention-pr-actions a,
+  .attention-pr-actions button,
+  .attention-issue-actions a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.52rem 0.7rem;
+    text-align: center;
+  }
+
+  .pick-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .pick-action,
+  .pick-card strong,
+  .pick-meta,
+  .pick-signals {
+    grid-column: 2;
+  }
+
+  .pick-card strong,
+  .pick-meta {
+    white-space: normal;
+    text-align: left;
+  }
+
+  .timeline-panel {
+    min-height: auto;
+  }
+
+  .details-actions {
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .details-actions button,
+  .details-actions a {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    text-align: center;
+  }
+
+  .details-actions a {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 0.5rem 0.75rem;
+    color: var(--text);
+    background: var(--surface-sunken);
+  }
+
+  .activity-panel {
+    overflow-x: auto;
+  }
+
+  .activity-strip,
+  .activity-range {
+    min-width: 32rem;
+  }
+
+  .timeline-item {
+    grid-template-columns: 0.75rem minmax(0, 1fr);
+    gap: 0.6rem;
+  }
+
+  .timeline-content {
+    padding: 0.75rem;
   }
 
   .timeline-header,
   .timeline-row {
     flex-direction: column;
     align-items: flex-start;
+  }
+}
+
+@media (max-width: 420px) {
+  .app-shell {
+    padding: 0.5rem;
+  }
+
+  .hero,
+  .panel {
+    padding: 0.85rem;
+  }
+
+  .mode-toggle {
+    grid-template-columns: 1fr;
+  }
+
+  .pace-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .attention-pr-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .attention-card-header,
+  .drilldown-header,
+  .checks-card-header,
+  .milestone-card div {
+    flex-direction: column;
   }
 }
