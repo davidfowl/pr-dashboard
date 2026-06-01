@@ -1335,10 +1335,6 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.attention-data-freshness {
-  color: var(--muted);
-}
-
 .attention-pr-actions,
 .attention-issue-actions {
   grid-column: 5;

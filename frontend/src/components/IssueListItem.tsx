@@ -29,14 +29,7 @@ function IssueListItem({ issue, signalProps }: IssueListItemProps) {
       <span className="attention-issue-meta">
         {issue.assignees.length > 0 ? issue.assignees.join(', ') : 'unowned'} ·
         {' '}
-        GitHub updated {formatRelative(issue.updatedAt)} ·
-        {' '}
-        <span
-          className="attention-data-freshness"
-          title={`Data fetched ${new Date(issue.fetchedAt).toLocaleString()}`}
-        >
-          data fetched {formatRelative(issue.fetchedAt)}
-        </span>
+        updated {formatRelative(issue.updatedAt)}
       </span>
       <div className="attention-issue-actions">
         <a
