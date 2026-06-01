@@ -107,8 +107,7 @@ function ShipWeekSection({
                 </div>
                 <p
                   className={`ship-week-snapshot-status${snapshotError ? ' error-text' : ''}`}
-                  role={snapshotError ? 'alert' : undefined}
-                  aria-live="polite"
+                  role={snapshotError ? 'alert' : snapshotMessage ? 'status' : undefined}
                   aria-hidden={snapshotMessage ? undefined : true}
                 >
                   {snapshotMessage}

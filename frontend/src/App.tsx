@@ -251,10 +251,16 @@ function App() {
   }, [dashboardMode, pullsLoading, shipWeekLoading, viewMode]);
 
   useEffect(() => {
-    function onPopState() {
+    function syncHashState() {
       const hash = window.location.hash;
-      const nextMode = parseDashboardMode(window.location.search);
       setLocationHash(hash);
+      if (!hash.startsWith('#pr/')) {
+        setViewMode('dashboard');
+      }
+    }
+
+    function onPopState() {
+      const nextMode = parseDashboardMode(window.location.search);
       setDashboardMode(nextMode);
       if (nextMode === 'ship') {
         const shipWeekParams = parseShipWeekRouteParams(window.location.search);
@@ -269,18 +275,16 @@ function App() {
           );
         }
       }
-      if (!hash.startsWith('#pr/')) {
-        setViewMode('dashboard');
-      }
+      syncHashState();
     }
 
     window.addEventListener('popstate', onPopState);
-    window.addEventListener('hashchange', onPopState);
+    window.addEventListener('hashchange', syncHashState);
     return () => {
       window.removeEventListener('popstate', onPopState);
-      window.removeEventListener('hashchange', onPopState);
+      window.removeEventListener('hashchange', syncHashState);
     };
-    // This listener must be registered once; ship-mode reload decisions use refs and current URL state.
+    // These listeners must be registered once; ship-mode reload decisions use refs and current URL state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -856,6 +860,11 @@ function App() {
     setShipWeekSnapshotStatus(null);
     setShipWeekSnapshotError(null);
     setShowShipWeekSnapshotDownload(false);
+
+    if (!navigator.clipboard?.writeText) {
+      setShipWeekSnapshotError('Clipboard unavailable. Copy the address bar URL instead.');
+      return;
+    }
 
     try {
       await navigator.clipboard.writeText(shipWeekShareUrl);
