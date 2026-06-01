@@ -609,6 +609,83 @@ select:focus-visible {
   margin-bottom: 1.25rem;
 }
 
+.ship-week-snapshot-heading-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.65rem 1rem;
+}
+
+.ship-week-snapshot-toolbar {
+  display: grid;
+  gap: 0.35rem;
+  justify-items: end;
+  min-height: 2.6rem;
+}
+
+.ship-week-snapshot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.ship-week-snapshot-actions button {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  min-width: 5.7rem;
+  padding: 0.3rem 0.52rem;
+  color: var(--text);
+  background: var(--panel-strong);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.ship-week-snapshot-actions button:hover:not(:disabled) {
+  border-color: var(--accent-strong);
+  background: var(--accent-wash);
+}
+
+.ship-week-snapshot-status {
+  min-height: 1rem;
+  margin: 0;
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  font-weight: 800;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ship-week-snapshot-status.error-text {
+  color: var(--danger-soft);
+}
+
+.ship-week-snapshot-card {
+  display: grid;
+  gap: 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  padding: 1rem;
+  background: #120f24;
+}
+
+.ship-week-snapshot-heading h4 {
+  margin: 0.15rem 0 0;
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.ship-week-snapshot-heading p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
 .ship-week-summary-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
