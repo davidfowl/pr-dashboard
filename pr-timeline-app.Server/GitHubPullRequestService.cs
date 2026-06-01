@@ -30,12 +30,12 @@ sealed class GitHubPullRequestService(GitHubClient gitHub)
         CancellationToken cancellationToken) =>
         gitHub.StreamPullRequestsByLabelAsync(repositoryName, state, label, forceRefresh, cancellationToken);
 
-    public Task<IReadOnlyList<ShipWeekIssueSummary>> GetRegressionIssuesAsync(
+    public Task<IReadOnlyList<ShipWeekIssueSummary>> GetFocusIssuesAsync(
         RepositoryName repositoryName,
         string state,
         bool forceRefresh,
         CancellationToken cancellationToken) =>
-        gitHub.GetRegressionIssuesAsync(repositoryName, state, forceRefresh, cancellationToken);
+        gitHub.GetFocusIssuesAsync(repositoryName, state, forceRefresh, cancellationToken);
 
     public Task<IReadOnlyList<PullRequestChecksSummary>> GetPullRequestChecksAsync(
         RepositoryName repositoryName,

@@ -78,37 +78,8 @@ public static class GitHubPullRequestRoutes
                 cancellationToken);
         });
 
-        api.MapGet("regression-issues", async (
-            [FromQuery] string? repo,
-            [FromQuery] string? state,
-            [FromQuery] bool? refresh,
-            GitHubPullRequestService pullRequests,
-            CancellationToken cancellationToken) =>
-        {
-            if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
-            {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
-                });
-            }
-
-            var normalizedState = string.IsNullOrWhiteSpace(state) ? "open" : state.Trim().ToLowerInvariant();
-            if (normalizedState is not ("open" or "closed" or "all"))
-            {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["state"] = ["State must be open, closed, or all."]
-                });
-            }
-
-            var issues = await pullRequests.GetRegressionIssuesAsync(
-                repositoryName,
-                normalizedState,
-                refresh == true,
-                cancellationToken);
-            return Results.Ok(new IssueListResponse(repositoryName.ToString(), issues));
-        });
+        api.MapGet("issues/focus", GetFocusIssuesAsync);
+        api.MapGet("regression-issues", GetFocusIssuesAsync);
 
         api.MapGet("ship-week", async (
             [FromQuery] string? repo,
@@ -220,6 +191,38 @@ public static class GitHubPullRequestRoutes
                 await stream.FlushAsync(cancellationToken);
             }
         }, "application/x-ndjson");
+
+    private static async Task<IResult> GetFocusIssuesAsync(
+        [FromQuery] string? repo,
+        [FromQuery] string? state,
+        [FromQuery] bool? refresh,
+        GitHubPullRequestService pullRequests,
+        CancellationToken cancellationToken)
+    {
+        if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
+            });
+        }
+
+        var normalizedState = string.IsNullOrWhiteSpace(state) ? "open" : state.Trim().ToLowerInvariant();
+        if (normalizedState is not ("open" or "closed" or "all"))
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["state"] = ["State must be open, closed, or all."]
+            });
+        }
+
+        var issues = await pullRequests.GetFocusIssuesAsync(
+            repositoryName,
+            normalizedState,
+            refresh == true,
+            cancellationToken);
+        return Results.Ok(new IssueListResponse(repositoryName.ToString(), issues));
+    }
 
     private static async IAsyncEnumerable<PullRequestStreamItem> CreatePullRequestStreamItems(
         string repository,

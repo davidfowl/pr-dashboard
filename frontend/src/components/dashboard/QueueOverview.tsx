@@ -3,7 +3,6 @@ import type { CSSProperties } from 'react';
 import { dayMs } from '../../constants';
 import type {
   AttentionBucket,
-  AttentionIssueBucket,
   AttentionItem,
   DeveloperPullRequestCount,
   PickItem,
@@ -17,7 +16,6 @@ import AttentionBoard from './AttentionBoard';
 type QueueOverviewProps = {
   counts: DeveloperPullRequestCount[];
   attentionBuckets: AttentionBucket[];
-  regressionIssueBuckets: AttentionIssueBucket[];
   forMeItems: PickItem[];
   loading: boolean;
   selectedBucketId: string;
@@ -51,7 +49,6 @@ const focusBucketRanks = new Map([
 function QueueOverview({
   counts,
   attentionBuckets,
-  regressionIssueBuckets,
   forMeItems,
   loading,
   selectedBucketId,
@@ -186,10 +183,9 @@ function QueueOverview({
         {renderCoreOwnerDetails()}
       </section>
 
-      {(loading || reviewBuckets.length > 0 || regressionIssueBuckets.length > 0) && (
+      {(loading || reviewBuckets.length > 0) && (
         <AttentionBoard
           buckets={reviewBuckets}
-          regressionIssueBuckets={regressionIssueBuckets}
           loading={loading}
           selectedBucketId={selectedBucketId}
           onSelectBucket={onSelectBucket}

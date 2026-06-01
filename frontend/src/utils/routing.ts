@@ -75,7 +75,11 @@ export function parseDetailHash(hash: string) {
 
 export function parseDashboardMode(search: string): DashboardMode {
   const mode = new URLSearchParams(search).get('mode')?.toLowerCase();
-  return mode === 'review' ? 'review' : 'ship';
+  if (mode === 'ship' || mode === 'issues') {
+    return mode;
+  }
+
+  return 'review';
 }
 
 export function parseShipWeekRouteParams(search: string): ShipWeekRouteParams {
