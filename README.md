@@ -6,7 +6,7 @@ It helps the team prioritize GitHub pull request work, focus on urgent reviews, 
 
 ## Prerequisites
 
-- .NET 10 SDK preview
+- .NET 10 SDK
 - Aspire CLI from the dev channel
 - Node.js `20.19+`, `22.12+`, or newer
 - Optional: GitHub CLI (`gh`) for local development auth
@@ -15,7 +15,6 @@ It helps the team prioritize GitHub pull request work, focus on urgent reviews, 
 ## Run locally
 
 ```bash
-npm --prefix frontend ci
 aspire start
 ```
 
