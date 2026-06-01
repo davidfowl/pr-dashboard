@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import type { RefObject } from 'react';
 import type {
   AttentionSignal,
   PullRequestSummary,
@@ -17,6 +18,15 @@ type ShipWeekSectionProps = {
   loading: boolean;
   sectionLoading: ShipWeekLoadingState;
   error: string | null;
+  snapshotStatus: string | null;
+  snapshotError: string | null;
+  snapshotExporting: boolean;
+  snapshotCopying: boolean;
+  showDownloadSnapshot: boolean;
+  snapshotRef: RefObject<HTMLElement | null>;
+  onCopyShareLink: () => void;
+  onCopySnapshotImage: () => void;
+  onDownloadSnapshot: () => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
 };
@@ -32,10 +42,21 @@ function ShipWeekSection({
   loading,
   sectionLoading,
   error,
+  snapshotStatus,
+  snapshotError,
+  snapshotExporting,
+  snapshotCopying,
+  showDownloadSnapshot,
+  snapshotRef,
+  onCopyShareLink,
+  onCopySnapshotImage,
+  onDownloadSnapshot,
   onSelectPullRequest,
   onVisiblePullRequest,
 }: ShipWeekSectionProps) {
   const model = useMemo(() => shipWeek ? createShipModeModel(shipWeek) : null, [shipWeek]);
+  const snapshotProgress = snapshotCopying ? 'Copying PNG...' : snapshotExporting ? 'Exporting PNG...' : '';
+  const snapshotMessage = snapshotError ?? snapshotStatus ?? snapshotProgress;
 
   if (!shipWeek && !loading && !error) {
     return null;
@@ -60,43 +81,77 @@ function ShipWeekSection({
 
       {shipWeek && model && (
         <>
-          <div className="ship-week-summary-grid" aria-label="Ship mode summary">
-            <SummaryCard
-              label="TBD issues"
-              value={shipWeek.issues.length}
-              detail={shipWeek.issues.length === 0 ? 'complete' : 'need PR/backport'}
-              tone={shipWeek.issues.length > 0 ? 'danger' : 'success'}
-              loading={sectionLoading.issues}
-            />
-            <SummaryCard
-              label="Needs work"
-              value={model.needsWorkCount}
-              detail="CI or author response"
-              tone={model.needsWorkCount > 0 ? 'danger' : 'success'}
-              loading={sectionLoading.milestone || sectionLoading.baseBranch || sectionLoading.docs}
-            />
-            <SummaryCard
-              label="Pending review"
-              value={model.pendingReviewCount}
-              detail="needs review or re-review"
-              tone={model.pendingReviewCount > 0 ? 'warning' : 'success'}
-              loading={sectionLoading.milestone || sectionLoading.baseBranch || sectionLoading.docs}
-            />
-            <SummaryCard
-              label="Ready"
-              value={model.readyCount}
-              detail="approved and unblocked"
-              tone="success"
-              loading={sectionLoading.milestone || sectionLoading.baseBranch || sectionLoading.docs}
-            />
-            <SummaryCard
-              label="Docs"
-              value={model.docsFromCodePullRequests.length}
-              detail="generated PRs"
-              tone={model.docsFromCodePullRequests.length > 0 ? 'accent' : 'success'}
-              loading={sectionLoading.docs}
-            />
-          </div>
+          <article ref={snapshotRef} className="ship-week-snapshot-card" aria-label="Shareable ship mode snapshot">
+            <div className="ship-week-snapshot-heading-row">
+              <div className="ship-week-snapshot-heading">
+                <p className="eyebrow">Ship snapshot</p>
+                <h4>{shipWeek.milestone} release scope</h4>
+                <p>
+                  {shipWeek.repository}
+                  {shipWeek.releaseBranch ? ` · ${shipWeek.releaseBranch}` : ''}
+                </p>
+              </div>
+              <div className="ship-week-snapshot-toolbar" data-snapshot-export="exclude">
+                <div className="ship-week-snapshot-actions">
+                  <button type="button" onClick={onCopyShareLink}>
+                    Copy link
+                  </button>
+                  <button type="button" onClick={onCopySnapshotImage} disabled={loading || snapshotCopying || snapshotExporting}>
+                    Copy PNG
+                  </button>
+                  {showDownloadSnapshot && (
+                    <button type="button" onClick={onDownloadSnapshot} disabled={loading || snapshotCopying || snapshotExporting}>
+                      Download PNG
+                    </button>
+                  )}
+                </div>
+                <p
+                  className={`ship-week-snapshot-status${snapshotError ? ' error-text' : ''}`}
+                  role={snapshotError ? 'alert' : snapshotMessage ? 'status' : undefined}
+                  aria-hidden={snapshotMessage ? undefined : true}
+                >
+                  {snapshotMessage}
+                </p>
+              </div>
+            </div>
+            <div className="ship-week-summary-grid" aria-label="Ship mode summary">
+              <SummaryCard
+                label="TBD issues"
+                value={shipWeek.issues.length}
+                detail={shipWeek.issues.length === 0 ? 'complete' : 'need PR/backport'}
+                tone={shipWeek.issues.length > 0 ? 'danger' : 'success'}
+                loading={sectionLoading.issues}
+              />
+              <SummaryCard
+                label="Needs work"
+                value={model.needsWorkCount}
+                detail="CI or author response"
+                tone={model.needsWorkCount > 0 ? 'danger' : 'success'}
+                loading={sectionLoading.milestone || sectionLoading.baseBranch || sectionLoading.docs}
+              />
+              <SummaryCard
+                label="Pending review"
+                value={model.pendingReviewCount}
+                detail="needs review or re-review"
+                tone={model.pendingReviewCount > 0 ? 'warning' : 'success'}
+                loading={sectionLoading.milestone || sectionLoading.baseBranch || sectionLoading.docs}
+              />
+              <SummaryCard
+                label="Ready"
+                value={model.readyCount}
+                detail="approved and unblocked"
+                tone="success"
+                loading={sectionLoading.milestone || sectionLoading.baseBranch || sectionLoading.docs}
+              />
+              <SummaryCard
+                label="Docs"
+                value={model.docsFromCodePullRequests.length}
+                detail="generated PRs"
+                tone={model.docsFromCodePullRequests.length > 0 ? 'accent' : 'success'}
+                loading={sectionLoading.docs}
+              />
+            </div>
+          </article>
 
           <div className="ship-week-critical-grid">
             <section className="ship-week-critical-panel accent" aria-label={`Pull requests in ${shipWeek.milestone}`}>

@@ -1,4 +1,4 @@
-import type { FormEventHandler } from 'react';
+import type { FormEventHandler, RefObject } from 'react';
 import type {
   AttentionBucket,
   AttentionIssueBucket,
@@ -33,6 +33,12 @@ type DashboardViewProps = {
   shipWeekRepo: string;
   shipWeekMilestone: string;
   shipWeekReleaseBranch: string;
+  shipWeekSnapshotStatus: string | null;
+  shipWeekSnapshotError: string | null;
+  shipWeekSnapshotExporting: boolean;
+  shipWeekSnapshotCopying: boolean;
+  showShipWeekSnapshotDownload: boolean;
+  shipWeekSnapshotRef: RefObject<HTMLElement | null>;
   selectedBucketId: string;
   lastUpdatedAt: string | null;
   autoRefreshIntervalMs: number;
@@ -45,6 +51,9 @@ type DashboardViewProps = {
   onShipWeekMilestoneChange: (value: string) => void;
   onShipWeekReleaseBranchChange: (value: string) => void;
   onShipWeekSubmit: FormEventHandler<HTMLFormElement>;
+  onCopyShipWeekShareLink: () => void;
+  onCopyShipWeekSnapshotImage: () => void;
+  onDownloadShipWeekSnapshot: () => void;
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
@@ -68,6 +77,12 @@ function DashboardView({
   shipWeekRepo,
   shipWeekMilestone,
   shipWeekReleaseBranch,
+  shipWeekSnapshotStatus,
+  shipWeekSnapshotError,
+  shipWeekSnapshotExporting,
+  shipWeekSnapshotCopying,
+  showShipWeekSnapshotDownload,
+  shipWeekSnapshotRef,
   selectedBucketId,
   lastUpdatedAt,
   autoRefreshIntervalMs,
@@ -80,6 +95,9 @@ function DashboardView({
   onShipWeekMilestoneChange,
   onShipWeekReleaseBranchChange,
   onShipWeekSubmit,
+  onCopyShipWeekShareLink,
+  onCopyShipWeekSnapshotImage,
+  onDownloadShipWeekSnapshot,
   onSelectBucket,
   onSelectPullRequest,
   onVisiblePullRequest,
@@ -115,6 +133,15 @@ function DashboardView({
               loading={shipWeekLoading}
               sectionLoading={shipWeekSectionLoading}
               error={shipWeekError}
+              snapshotStatus={shipWeekSnapshotStatus}
+              snapshotError={shipWeekSnapshotError}
+              snapshotExporting={shipWeekSnapshotExporting}
+              snapshotCopying={shipWeekSnapshotCopying}
+              showDownloadSnapshot={showShipWeekSnapshotDownload}
+              snapshotRef={shipWeekSnapshotRef}
+              onCopyShareLink={onCopyShipWeekShareLink}
+              onCopySnapshotImage={onCopyShipWeekSnapshotImage}
+              onDownloadSnapshot={onDownloadShipWeekSnapshot}
               onSelectPullRequest={onSelectPullRequest}
               onVisiblePullRequest={onVisiblePullRequest}
             />

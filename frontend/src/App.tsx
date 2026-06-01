@@ -6,12 +6,9 @@ import AuthCard from './components/AuthCard';
 import DashboardView from './components/dashboard/DashboardView';
 import DetailView from './components/detail/DetailView';
 import {
-  currentRelease,
   defaultRepoInput,
   defaultRepos,
-  defaultShipWeekRepoInput,
   defaultShipWeekRepos,
-  defaultShipWeekReleaseBranch,
   docsFromCodeLabel,
   docsFromCodeRepository,
 } from './constants';
@@ -47,14 +44,18 @@ import {
   isGeneratedDocsPullRequest,
 } from './utils/models';
 import {
+  createShipWeekUrl,
+  normalizeShipWeekRouteParams,
   parseBucketHash,
   parseDashboardMode,
   parseDetailHash,
   parseRepositories,
+  parseShipWeekRouteParams,
   pushDashboardModeHistory,
   pushDetailHistory,
   replaceBucketHistory,
 } from './utils/routing';
+import type { ShipWeekRouteParams } from './utils/routing';
 
 type VisibleChecksRequestItem = {
   repository: string;
@@ -72,14 +73,11 @@ type ReviewRefreshParams = {
   pullState: PullState;
 };
 
-type ShipWeekRefreshParams = {
-  repositoryInput: string;
-  milestoneInput: string;
-  releaseBranchInput: string;
-};
+type ShipWeekRefreshParams = ShipWeekRouteParams;
 
 const autoRefreshIntervalMs = 5 * 60_000;
 const autoRefreshJitterMs = 60_000;
+const clipboardWriteTimeoutMs = 10_000;
 
 function getAutoRefreshDelayMs() {
   return autoRefreshIntervalMs + Math.floor(Math.random() * autoRefreshJitterMs);
@@ -93,6 +91,7 @@ const emptyShipWeekLoadingState: ShipWeekLoadingState = {
 };
 
 function App() {
+  const initialShipWeekRouteParams = parseShipWeekRouteParams(window.location.search);
   const [repo, setRepo] = useState(defaultRepoInput);
   const [activeRepo, setActiveRepo] = useState(defaultRepos[0]);
   const [state, setState] = useState<PullState>('open');
@@ -101,9 +100,10 @@ function App() {
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
   const [reviewRegressionIssues, setReviewRegressionIssues] = useState<ShipWeekIssueSummary[]>([]);
   const [reviewLastUpdatedAt, setReviewLastUpdatedAt] = useState<string | null>(null);
-  const [shipWeekRepo, setShipWeekRepo] = useState(defaultShipWeekRepoInput);
-  const [shipWeekMilestone, setShipWeekMilestone] = useState(currentRelease);
-  const [shipWeekReleaseBranch, setShipWeekReleaseBranch] = useState(defaultShipWeekReleaseBranch);
+  const [shipWeekRepo, setShipWeekRepo] = useState(initialShipWeekRouteParams.repositoryInput);
+  const [shipWeekMilestone, setShipWeekMilestone] = useState(initialShipWeekRouteParams.milestoneInput);
+  const [shipWeekReleaseBranch, setShipWeekReleaseBranch] = useState(initialShipWeekRouteParams.releaseBranchInput);
+  const [shipWeekShareParams, setShipWeekShareParams] = useState<ShipWeekRouteParams>(initialShipWeekRouteParams);
   const [shipWeek, setShipWeek] = useState<ShipWeekResponse | null>(null);
   const [shipWeekLastUpdatedAt, setShipWeekLastUpdatedAt] = useState<string | null>(null);
   const [selectedPullRequest, setSelectedPullRequest] = useState<PullRequestSummary | null>(null);
@@ -117,6 +117,11 @@ function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shipWeekError, setShipWeekError] = useState<string | null>(null);
+  const [shipWeekSnapshotStatus, setShipWeekSnapshotStatus] = useState<string | null>(null);
+  const [shipWeekSnapshotError, setShipWeekSnapshotError] = useState<string | null>(null);
+  const [isShipWeekSnapshotExporting, setIsShipWeekSnapshotExporting] = useState(false);
+  const [isShipWeekSnapshotCopying, setIsShipWeekSnapshotCopying] = useState(false);
+  const [showShipWeekSnapshotDownload, setShowShipWeekSnapshotDownload] = useState(false);
   const [viewMode, setViewMode] = useState<'dashboard' | 'details'>('dashboard');
   const [locationHash, setLocationHash] = useState(window.location.hash);
   const [selectedBucketId, setSelectedBucketId] = useState(parseBucketHash(window.location.hash)?.bucketId ?? '');
@@ -135,20 +140,22 @@ function App() {
   const pullRequestsAbortControllerRef = useRef<AbortController | null>(null);
   const shipWeekLoadVersionRef = useRef(0);
   const shipWeekAbortControllerRef = useRef<AbortController | null>(null);
+  const shipWeekSnapshotRef = useRef<HTMLElement | null>(null);
   const reviewRefreshParamsRef = useRef<ReviewRefreshParams>({
     repositoryInput: defaultRepoInput,
     pullState: 'open',
   });
   const shipWeekRefreshParamsRef = useRef<ShipWeekRefreshParams>({
-    repositoryInput: defaultShipWeekRepoInput,
-    milestoneInput: currentRelease,
-    releaseBranchInput: defaultShipWeekReleaseBranch,
+    repositoryInput: initialShipWeekRouteParams.repositoryInput,
+    milestoneInput: initialShipWeekRouteParams.milestoneInput,
+    releaseBranchInput: initialShipWeekRouteParams.releaseBranchInput,
   });
 
   const selectedTitle = selectedPullRequest
     ? `#${selectedPullRequest.number} ${selectedPullRequest.title}`
     : 'Select a pull request';
   const currentMilestoneLabel = shipWeek?.milestone ?? shipWeekMilestone;
+  const shipWeekShareUrl = createShipWeekUrl(shipWeekShareParams);
 
   const groupedTimeline = useMemo(() => {
     return createTimelineStory(timelineItems).reduce<Record<string, TimelineStoryEntry[]>>((groups, entry) => {
@@ -187,7 +194,8 @@ function App() {
   useEffect(() => {
     void loadAuthStatus();
     if (dashboardMode === 'ship') {
-      void loadShipWeek(defaultShipWeekRepoInput, currentRelease, defaultShipWeekReleaseBranch);
+      const params = shipWeekRefreshParamsRef.current;
+      void loadShipWeek(params.repositoryInput, params.milestoneInput, params.releaseBranchInput);
     } else {
       void loadPullRequests(defaultRepoInput, state);
     }
@@ -243,21 +251,41 @@ function App() {
   }, [dashboardMode, pullsLoading, shipWeekLoading, viewMode]);
 
   useEffect(() => {
-    function onPopState() {
+    function syncHashState() {
       const hash = window.location.hash;
       setLocationHash(hash);
-      setDashboardMode(parseDashboardMode(window.location.search));
       if (!hash.startsWith('#pr/')) {
         setViewMode('dashboard');
       }
     }
 
+    function onPopState() {
+      const nextMode = parseDashboardMode(window.location.search);
+      setDashboardMode(nextMode);
+      if (nextMode === 'ship') {
+        const shipWeekParams = parseShipWeekRouteParams(window.location.search);
+        setShipWeekRepo(shipWeekParams.repositoryInput);
+        setShipWeekMilestone(shipWeekParams.milestoneInput);
+        setShipWeekReleaseBranch(shipWeekParams.releaseBranchInput);
+        if (!areShipWeekParamsEqual(shipWeekParams, shipWeekRefreshParamsRef.current)) {
+          void loadShipWeek(
+            shipWeekParams.repositoryInput,
+            shipWeekParams.milestoneInput,
+            shipWeekParams.releaseBranchInput,
+          );
+        }
+      }
+      syncHashState();
+    }
+
     window.addEventListener('popstate', onPopState);
-    window.addEventListener('hashchange', onPopState);
+    window.addEventListener('hashchange', syncHashState);
     return () => {
       window.removeEventListener('popstate', onPopState);
-      window.removeEventListener('hashchange', onPopState);
+      window.removeEventListener('hashchange', syncHashState);
     };
+    // These listeners must be registered once; ship-mode reload decisions use refs and current URL state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -459,14 +487,19 @@ function App() {
     setShipWeekLoading(true);
     setShipWeekSectionLoading(emptyShipWeekLoadingState);
     setShipWeekError(null);
+    setShipWeekSnapshotStatus(null);
+    setShipWeekSnapshotError(null);
+    setShowShipWeekSnapshotDownload(false);
     beginVisibleChecksRequestScope();
     forceVisibleChecksRefreshRef.current = options.forceRefresh ?? false;
 
     try {
-      const repositories = parseRepositories(repositoryInput, defaultShipWeekRepos);
-      const milestone = milestoneInput.trim() || currentRelease;
-      const releaseBranch = releaseBranchInput.trim();
-      shipWeekRefreshParamsRef.current = { repositoryInput, milestoneInput, releaseBranchInput };
+      const shipWeekParams = normalizeShipWeekRouteParams({ repositoryInput, milestoneInput, releaseBranchInput });
+      const repositories = parseRepositories(shipWeekParams.repositoryInput, defaultShipWeekRepos);
+      const milestone = shipWeekParams.milestoneInput;
+      const releaseBranch = shipWeekParams.releaseBranchInput;
+      shipWeekRefreshParamsRef.current = shipWeekParams;
+      setShipWeekShareParams(shipWeekParams);
       const releaseScopeRepositories = repositories.filter((repository) => !isDocsFromCodeRepository(repository));
       const docsRepositories = repositories.filter(isDocsFromCodeRepository);
       setActiveRepo(repositories.length === 1 ? repositories[0] : `${repositories.length} repos`);
@@ -784,13 +817,23 @@ function App() {
 
   function onShipWeekSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    switchDashboardMode('ship');
-    void loadShipWeek(shipWeekRepo, shipWeekMilestone, shipWeekReleaseBranch);
+    const shipWeekParams = normalizeShipWeekRouteParams({
+      repositoryInput: shipWeekRepo,
+      milestoneInput: shipWeekMilestone,
+      releaseBranchInput: shipWeekReleaseBranch,
+    });
+    setShipWeekRepo(shipWeekParams.repositoryInput);
+    setShipWeekMilestone(shipWeekParams.milestoneInput);
+    setShipWeekReleaseBranch(shipWeekParams.releaseBranchInput);
+    pushDashboardModeHistory('ship', shipWeekParams);
+    setDashboardMode('ship');
+    void loadShipWeek(shipWeekParams.repositoryInput, shipWeekParams.milestoneInput, shipWeekParams.releaseBranchInput);
   }
 
   function onRefresh() {
     if (dashboardMode === 'ship') {
-      void loadShipWeek(shipWeekRepo, shipWeekMilestone, shipWeekReleaseBranch, {
+      const params = shipWeekRefreshParamsRef.current;
+      void loadShipWeek(params.repositoryInput, params.milestoneInput, params.releaseBranchInput, {
         forceRefresh: true,
         preserveResults: true,
       });
@@ -803,12 +846,100 @@ function App() {
   }
 
   function switchDashboardMode(mode: DashboardMode) {
-    pushDashboardModeHistory(mode);
+    pushDashboardModeHistory(mode, shipWeekShareParams);
     setDashboardMode(mode);
     if (mode === 'ship' && !shipWeek && !shipWeekLoading) {
-      void loadShipWeek(shipWeekRepo, shipWeekMilestone, shipWeekReleaseBranch);
+      const params = shipWeekRefreshParamsRef.current;
+      void loadShipWeek(params.repositoryInput, params.milestoneInput, params.releaseBranchInput);
     } else if (mode === 'review' && pullRequests.length === 0 && !pullsLoading) {
       void loadPullRequests(repo.trim(), state);
+    }
+  }
+
+  async function copyShipWeekShareLink() {
+    setShipWeekSnapshotStatus(null);
+    setShipWeekSnapshotError(null);
+    setShowShipWeekSnapshotDownload(false);
+
+    if (!navigator.clipboard?.writeText) {
+      setShipWeekSnapshotError('Clipboard unavailable. Copy the address bar URL instead.');
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(shipWeekShareUrl);
+      setShipWeekSnapshotStatus('Share link copied.');
+    } catch (err) {
+      setShipWeekSnapshotError(err instanceof Error ? err.message : 'Unable to copy the share link.');
+    }
+  }
+
+  async function downloadShipWeekSnapshot() {
+    const element = shipWeekSnapshotRef.current;
+    if (!element || !shipWeek) {
+      setShipWeekSnapshotError('Load ship mode before exporting a snapshot.');
+      return;
+    }
+
+    setIsShipWeekSnapshotExporting(true);
+    setShipWeekSnapshotStatus(null);
+    setShipWeekSnapshotError(null);
+    setShowShipWeekSnapshotDownload(false);
+
+    try {
+      const blob = await createShipWeekSnapshotBlob(element);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = createShipWeekSnapshotFilename(shipWeekShareParams);
+      document.body.append(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setShipWeekSnapshotStatus('Snapshot downloaded.');
+    } catch (err) {
+      setShipWeekSnapshotError(err instanceof Error ? err.message : 'Unable to export the ship mode snapshot.');
+      setShowShipWeekSnapshotDownload(true);
+    } finally {
+      setIsShipWeekSnapshotExporting(false);
+    }
+  }
+
+  async function copyShipWeekSnapshotImage() {
+    const element = shipWeekSnapshotRef.current;
+    if (!element || !shipWeek) {
+      setShipWeekSnapshotError('Load ship mode before copying a snapshot.');
+      setShowShipWeekSnapshotDownload(false);
+      return;
+    }
+
+    if (!navigator.clipboard?.write || !('ClipboardItem' in window)) {
+      setShipWeekSnapshotError('This browser cannot copy PNG images to the clipboard. Download the PNG instead.');
+      setShowShipWeekSnapshotDownload(true);
+      return;
+    }
+
+    try {
+      const writePromise = navigator.clipboard.write([
+        new ClipboardItem({
+          'image/png': createShipWeekSnapshotBlob(element),
+        }),
+      ]);
+      setIsShipWeekSnapshotCopying(true);
+      setShipWeekSnapshotStatus(null);
+      setShipWeekSnapshotError(null);
+      setShowShipWeekSnapshotDownload(false);
+      await withTimeout(
+        writePromise,
+        clipboardWriteTimeoutMs,
+        'Clipboard blocked. Download PNG instead.',
+      );
+      setShipWeekSnapshotStatus('PNG copied to clipboard.');
+    } catch (err) {
+      setShipWeekSnapshotError(formatClipboardSnapshotError(err));
+      setShowShipWeekSnapshotDownload(true);
+    } finally {
+      setIsShipWeekSnapshotCopying(false);
     }
   }
 
@@ -898,6 +1029,12 @@ function App() {
             shipWeekRepo={shipWeekRepo}
             shipWeekMilestone={shipWeekMilestone}
             shipWeekReleaseBranch={shipWeekReleaseBranch}
+            shipWeekSnapshotStatus={shipWeekSnapshotStatus}
+            shipWeekSnapshotError={shipWeekSnapshotError}
+            shipWeekSnapshotExporting={isShipWeekSnapshotExporting}
+            shipWeekSnapshotCopying={isShipWeekSnapshotCopying}
+            showShipWeekSnapshotDownload={showShipWeekSnapshotDownload}
+            shipWeekSnapshotRef={shipWeekSnapshotRef}
             selectedBucketId={selectedBucketId}
             lastUpdatedAt={dashboardMode === 'ship' ? shipWeekLastUpdatedAt : reviewLastUpdatedAt}
             autoRefreshIntervalMs={autoRefreshIntervalMs}
@@ -910,6 +1047,9 @@ function App() {
             onShipWeekMilestoneChange={setShipWeekMilestone}
             onShipWeekReleaseBranchChange={setShipWeekReleaseBranch}
             onShipWeekSubmit={onShipWeekSubmit}
+            onCopyShipWeekShareLink={() => void copyShipWeekShareLink()}
+            onCopyShipWeekSnapshotImage={() => void copyShipWeekSnapshotImage()}
+            onDownloadShipWeekSnapshot={() => void downloadShipWeekSnapshot()}
             onSelectBucket={selectBucket}
             onSelectPullRequest={(repository, pullRequest) => void loadTimeline(repository, pullRequest)}
             onVisiblePullRequest={requestVisibleChecks}
@@ -1081,6 +1221,63 @@ function getLatestFetchedAt(timestamps: Array<string | null | undefined>) {
 
 function isDocsFromCodeRepository(repository: string) {
   return repository.toLowerCase() === docsFromCodeRepository;
+}
+
+function areShipWeekParamsEqual(first: ShipWeekRouteParams, second: ShipWeekRouteParams) {
+  return first.repositoryInput === second.repositoryInput
+    && first.milestoneInput === second.milestoneInput
+    && first.releaseBranchInput === second.releaseBranchInput;
+}
+
+function createShipWeekSnapshotFilename(params: ShipWeekRouteParams) {
+  return `ship-mode-${slugifyFilenamePart(params.milestoneInput)}-${slugifyFilenamePart(params.repositoryInput)}.png`;
+}
+
+function slugifyFilenamePart(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || 'snapshot';
+}
+
+async function createShipWeekSnapshotBlob(element: HTMLElement) {
+  const { toBlob } = await import('html-to-image');
+  const blob = await toBlob(element, {
+    backgroundColor: '#120f24',
+    cacheBust: true,
+    pixelRatio: 2,
+    filter: (node) =>
+      !(node instanceof HTMLElement && node.dataset.snapshotExport === 'exclude'),
+  });
+
+  if (!blob) {
+    throw new Error('Unable to render the ship mode snapshot.');
+  }
+
+  return blob;
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  let timeoutId: number | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId !== null) {
+      window.clearTimeout(timeoutId);
+    }
+  });
+}
+
+function formatClipboardSnapshotError(err: unknown) {
+  if (err instanceof Error && err.message === 'Clipboard blocked. Download PNG instead.') {
+    return err.message;
+  }
+
+  return 'Clipboard blocked. Download PNG instead.';
 }
 
 function isAbortError(err: unknown) {
