@@ -990,6 +990,7 @@ public sealed class GitHubClientTests
                   }
                 ]
                 """),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
             "repos/example/repo/pulls/1/commits?per_page=100" => Json(
                 """
                 [
@@ -1014,6 +1015,110 @@ public sealed class GitHubClientTests
         Assert.Equal("reviewed", pullRequest.Review.State);
         Assert.Equal(DateTimeOffset.Parse("2026-01-03T00:00:00Z"), pullRequest.LastCommitAt);
         Assert.Equal("none", pullRequest.Checks.State);
+    }
+
+    [Fact]
+    public async Task PullListIncludesMergeableStateFromDetailsForOpenPullRequests()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                """
+                [
+                  {
+                    "number": 1,
+                    "title": "Update feature",
+                    "state": "open",
+                    "body": null,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-03T00:00:00Z",
+                    "draft": false,
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/1",
+                    "labels": [],
+                    "requested_reviewers": [],
+                    "requested_teams": []
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                """
+                [
+                  {
+                    "user": { "login": "reviewer" },
+                    "state": "APPROVED",
+                    "submitted_at": "2026-01-02T00:00:00Z"
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1" => Json(PullRequestJson(1, mergeableState: "dirty")),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("approved", pullRequest.Review.State);
+        Assert.Equal("dirty", pullRequest.MergeableState);
+    }
+
+    [Fact]
+    public async Task PullListByLabelReusesAlreadyFetchedPullRequestDetails()
+    {
+        var requestedPaths = new List<string>();
+        var client = CreateClient(path =>
+        {
+            requestedPaths.Add(path);
+            return path switch
+            {
+                "repos/example/repo/issues?state=open&labels=docs-from-code&sort=created&direction=asc&per_page=100" => Json(
+                    """
+                    [
+                      {
+                        "number": 5,
+                        "title": "Generated docs",
+                        "state": "open",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-02T00:00:00Z",
+                        "user": { "login": "octocat" },
+                        "html_url": "https://github.com/example/repo/pull/5",
+                        "labels": [{ "name": "docs-from-code" }],
+                        "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/5" }
+                      }
+                    ]
+                    """),
+                "repos/example/repo/pulls/5" => Json(PullRequestJson(
+                    5,
+                    title: "Generated docs",
+                    mergeableState: "dirty")),
+                "repos/example/repo/pulls/5/reviews?per_page=100" => Json(
+                    """
+                    [
+                      {
+                        "user": { "login": "reviewer" },
+                        "state": "APPROVED",
+                        "submitted_at": "2026-01-02T00:00:00Z"
+                      }
+                    ]
+                    """),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var pullRequests = await client.GetPullRequestsByLabelAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            "docs-from-code",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("dirty", pullRequest.MergeableState);
+        Assert.Equal(1, requestedPaths.Count(path => path == "repos/example/repo/pulls/5"));
     }
 
     [Fact]
@@ -1725,7 +1830,8 @@ public sealed class GitHubClientTests
         bool draft = false,
         string? milestone = null,
         string? headSha = null,
-        string? baseRef = null)
+        string? baseRef = null,
+        string? mergeableState = null)
     {
         var milestoneJson = milestone is null
             ? "null"
@@ -1758,7 +1864,8 @@ public sealed class GitHubClientTests
           "deletions": 2,
           "changed_files": 1,
           "head": {{headJson}},
-          "base": {{baseJson}}
+          "base": {{baseJson}},
+          "mergeable_state": {{JsonSerializer.Serialize(mergeableState)}}
         }
         """;
     }

@@ -662,6 +662,10 @@ function isChecksPending(pullRequest: PullRequestSummary) {
   return pullRequest.checks?.state === 'pending' || pullRequest.checks?.state === 'unknown';
 }
 
+function hasMergeConflicts(pullRequest: PullRequestSummary) {
+  return pullRequest.mergeableState === 'dirty';
+}
+
 function hasRegressionSignal(pullRequest: PullRequestSummary) {
   return hasRegressionLabel(pullRequest.labels)
     || pullRequest.linkedIssues.some((issue) => hasRegressionLabel(issue.labels));
@@ -769,7 +773,8 @@ function isCoreTeamAuthor(author: string) {
 
 export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
   const pullRequest = item.pullRequest;
-  const signals: AttentionSignal[] = [actionSignal(pullRequest)];
+  const action = actionSignal(pullRequest);
+  const signals: AttentionSignal[] = [action];
 
   if (targetsCurrentRelease(pullRequest)) {
     signals.push({ label: `release ${currentRelease}`, tone: 'danger' });
@@ -786,6 +791,10 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
   const checksSignal = checksAttentionSignal(pullRequest);
   if (checksSignal) {
     signals.push(checksSignal);
+  }
+
+  if (hasMergeConflicts(pullRequest) && action.label !== 'merge conflicts') {
+    signals.push({ label: 'merge conflicts', tone: 'danger' });
   }
 
   const approvedAt = approvalAgeAt(pullRequest);
@@ -937,6 +946,10 @@ function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {
 
   if (isChecksFailing(pullRequest)) {
     return { label: 'fix CI', tone: 'danger' };
+  }
+
+  if (hasMergeConflicts(pullRequest)) {
+    return { label: 'merge conflicts', tone: 'danger' };
   }
 
   if (isApprovedButAging(pullRequest)) {

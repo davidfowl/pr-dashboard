@@ -39,6 +39,7 @@ export type PullRequestSummary = {
   lastCommitAt?: string | null;
   headSha?: string | null;
   baseRef?: string | null;
+  mergeableState?: MergeableState | null;
   review: ReviewStatus;
   checks: ChecksStatus;
 };
