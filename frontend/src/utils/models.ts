@@ -45,7 +45,36 @@ const quickWinFileThreshold = 3;
 const approvedButAgingBucketLabel = 'Approved but aging';
 const releaseBlockingSignalLabel = 'Blocking release';
 const regressionBucketLabel = 'Regression';
+const ctiTeamIssueBucketLabel = 'CTI team';
+const ctiTeamTitleMarker = '[aspiree2e]';
 const releaseBlockingLabelMarker = 'blocking-release';
+
+type FocusIssueBucketDefinition = Omit<AttentionIssueBucket, 'issues'> & {
+  matches: (issue: ShipWeekIssueSummary) => boolean;
+  countsAsDomain?: boolean;
+  needsValidation?: boolean;
+  suppressNeedsPr?: boolean;
+};
+
+const focusIssueBucketDefinitions: FocusIssueBucketDefinition[] = [
+  {
+    label: regressionBucketLabel,
+    summary: 'Open issues tagged as regressions, including Aspire last-release regressions.',
+    tone: 'danger',
+    metric: 'regression watch',
+    matches: (issue) => hasRegressionLabel(issue.labels),
+  },
+  {
+    label: ctiTeamIssueBucketLabel,
+    summary: 'Open Aspire E2E issues that track CTI manual validation scenarios.',
+    tone: 'warning',
+    metric: 'manual E2E',
+    matches: isCtiTeamIssue,
+    countsAsDomain: true,
+    needsValidation: true,
+    suppressNeedsPr: true,
+  },
+];
 
 export function createDeveloperPullRequestCounts(pullRequests: PullRequestSummary[]): DeveloperPullRequestCount[] {
   const coreTeamKeys = new Set(coreTeamMembers.map(actorIdentityKey));
@@ -308,22 +337,25 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
   return buckets.filter((bucket) => bucket.items.length > 0);
 }
 
-export function createRegressionIssueBuckets(issues: ShipWeekIssueSummary[]): AttentionIssueBucket[] {
-  const regressionIssues = issues
-    .filter((issue) => hasRegressionLabel(issue.labels))
+export function createFocusIssueBuckets(issues: ShipWeekIssueSummary[]): AttentionIssueBucket[] {
+  return focusIssueBucketDefinitions
+    .map(({ matches, ...definition }) => createFocusIssueBucket({
+      ...definition,
+      issues: issues.filter(matches),
+    }))
+    .filter((bucket): bucket is AttentionIssueBucket => bucket !== null);
+}
+
+function createFocusIssueBucket(bucket: AttentionIssueBucket): AttentionIssueBucket | null {
+  const bucketIssues = [...bucket.issues]
     .sort((first, second) => new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime());
 
-  return regressionIssues.length === 0
-    ? []
-    : [
-      {
-        label: regressionBucketLabel,
-        summary: 'Open issues tagged as regressions, including Aspire last-release regressions.',
-        tone: 'danger',
-        metric: 'regression watch',
-        issues: regressionIssues,
-      },
-    ];
+  return bucketIssues.length === 0
+    ? null
+    : {
+      ...bucket,
+      issues: bucketIssues,
+    };
 }
 
 export function createShipWeekScopeGroups(shipWeek: ShipWeekResponse): ShipWeekScopeGroup[] {
@@ -353,7 +385,8 @@ export function createShipWeekScopeGroups(shipWeek: ShipWeekResponse): ShipWeekS
 }
 
 const shipWeekIssueSignalToneByLabel = new Map<string, AttentionSignal['tone']>([
-  [regressionBucketLabel, 'danger'],
+  ...focusIssueBucketDefinitions.map((definition) =>
+    [definition.label, definition.tone] as const),
   ['Needs PR', 'danger'],
   ['Needs validation', 'warning'],
   ['Installer/acquisition', 'accent'],
@@ -413,8 +446,9 @@ function issueActionSignal(issue: ShipWeekIssueSummary): AttentionSignal {
     return { label: releaseBlockingSignalLabel, tone: 'danger' };
   }
 
-  if (hasRegressionLabel(issue.labels)) {
-    return { label: regressionBucketLabel, tone: 'danger' };
+  const focusDefinition = firstFocusIssueBucketDefinition(issue);
+  if (focusDefinition) {
+    return { label: focusDefinition.label, tone: focusDefinition.tone };
   }
 
   if (issue.linkedOpenPullRequests.length === 0) {
@@ -431,16 +465,22 @@ function issueActionSignal(issue: ShipWeekIssueSummary): AttentionSignal {
 function shipWeekIssueSignalLabels(issue: ShipWeekIssueSummary) {
   const labels: string[] = [];
   let domainMatch = false;
+  const focusDefinitions = matchingFocusIssueBucketDefinitions(issue);
 
-  if (hasRegressionLabel(issue.labels)) {
-    labels.push(regressionBucketLabel);
+  for (const definition of focusDefinitions) {
+    labels.push(definition.label);
+    domainMatch = domainMatch || definition.countsAsDomain === true;
   }
 
-  if (issue.linkedOpenPullRequests.length === 0) {
+  if (issue.linkedOpenPullRequests.length === 0 && !focusDefinitions.some((definition) => definition.suppressNeedsPr)) {
     labels.push('Needs PR');
   }
 
-  if (issue.linkedOpenPullRequests.length > 0 || issueMatchesTerms(issue, validationTerms)) {
+  if (
+    focusDefinitions.some((definition) => definition.needsValidation)
+    || issue.linkedOpenPullRequests.length > 0
+    || issueMatchesTerms(issue, validationTerms)
+  ) {
     labels.push('Needs validation');
   }
 
@@ -629,6 +669,18 @@ function hasRegressionSignal(pullRequest: PullRequestSummary) {
 
 function hasRegressionLabel(labels: readonly string[]) {
   return labels.some((label) => label.toLowerCase().includes('regression'));
+}
+
+function isCtiTeamIssue(issue: ShipWeekIssueSummary) {
+  return issue.title.toLowerCase().includes(ctiTeamTitleMarker);
+}
+
+function matchingFocusIssueBucketDefinitions(issue: ShipWeekIssueSummary) {
+  return focusIssueBucketDefinitions.filter((definition) => definition.matches(issue));
+}
+
+function firstFocusIssueBucketDefinition(issue: ShipWeekIssueSummary) {
+  return matchingFocusIssueBucketDefinitions(issue)[0];
 }
 
 function hasReleaseBlockingLabel(labels: readonly string[]) {

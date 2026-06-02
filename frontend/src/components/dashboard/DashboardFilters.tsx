@@ -1,5 +1,5 @@
 import type { FormEventHandler } from 'react';
-import type { DashboardMode, PullRequestSummary, PullState } from '../../types';
+import type { DashboardMode, PullRequestSummary, PullState, ShipWeekIssueSummary } from '../../types';
 import { currentRelease, defaultRepoInput, defaultShipWeekRepoInput, shipWeekReleaseBranchPlaceholder } from '../../constants';
 
 type DashboardFiltersProps = {
@@ -9,6 +9,9 @@ type DashboardFiltersProps = {
   pullsLoading: boolean;
   pullRequests: PullRequestSummary[];
   error: string | null;
+  issuesLoading: boolean;
+  issues: ShipWeekIssueSummary[];
+  issuesError: string | null;
   shipWeekRepo: string;
   shipWeekMilestone: string;
   shipWeekReleaseBranch: string;
@@ -29,6 +32,9 @@ function DashboardFilters({
   pullsLoading,
   pullRequests,
   error,
+  issuesLoading,
+  issues,
+  issuesError,
   shipWeekRepo,
   shipWeekMilestone,
   shipWeekReleaseBranch,
@@ -41,6 +47,12 @@ function DashboardFilters({
   onShipWeekReleaseBranchChange,
   onShipWeekSubmit,
 }: DashboardFiltersProps) {
+  const repoModeActive = dashboardMode !== 'ship';
+  const issuesModeActive = dashboardMode === 'issues';
+  const repoLoading = issuesModeActive ? issuesLoading : pullsLoading;
+  const repoError = issuesModeActive ? issuesError : error;
+  const loadedCount = issuesModeActive ? issues.length : pullRequests.length;
+
   return (
     <section className="panel controls-panel" aria-labelledby="repo-heading">
       <div>
@@ -48,11 +60,11 @@ function DashboardFilters({
         <h2 id="repo-heading">Dashboard filters</h2>
       </div>
 
-      {dashboardMode === 'review' ? (
+      {repoModeActive ? (
         <>
           <form className="repo-form" onSubmit={onSubmit}>
             <label>
-              <span>Repositories</span>
+              <span>{issuesModeActive ? 'Issue repositories' : 'Repositories'}</span>
               <input
                 value={repo}
                 onChange={(event) => onRepoChange(event.target.value)}
@@ -72,23 +84,23 @@ function DashboardFilters({
             </label>
 
             <div className="repo-form-actions">
-              <button type="submit" disabled={pullsLoading}>
-                {pullsLoading ? 'Loading...' : 'Load PRs'}
+              <button type="submit" disabled={repoLoading}>
+                {repoLoading ? 'Loading...' : issuesModeActive ? 'Load issues' : 'Load PRs'}
               </button>
             </div>
           </form>
 
-          {error && (
+          {repoError && (
             <div className="error" role="alert">
-              {error}
+              {repoError}
             </div>
           )}
 
-          {pullsLoading && pullRequests.length === 0 && (
-            <p className="empty-state">Loading pull requests...</p>
+          {repoLoading && loadedCount === 0 && (
+            <p className="empty-state">{issuesModeActive ? 'Loading issues...' : 'Loading pull requests...'}</p>
           )}
-          {!pullsLoading && pullRequests.length === 0 && (
-            <p className="empty-state">No pull requests loaded yet.</p>
+          {!repoLoading && loadedCount === 0 && (
+            <p className="empty-state">{issuesModeActive ? 'No issues loaded yet.' : 'No pull requests loaded yet.'}</p>
           )}
         </>
       ) : (

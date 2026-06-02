@@ -512,6 +512,7 @@ record TimelineItem(
 [JsonSerializable(typeof(GitHubGitReferenceDto[]))]
 [JsonSerializable(typeof(GitHubIssueDto))]
 [JsonSerializable(typeof(GitHubIssueDto[]))]
+[JsonSerializable(typeof(GitHubIssueSearchResponseDto))]
 [JsonSerializable(typeof(GitHubIssuePullRequestDto))]
 [JsonSerializable(typeof(GitHubLabelDto[]))]
 [JsonSerializable(typeof(GitHubMilestoneDto))]
@@ -580,6 +581,13 @@ sealed class GitHubIssueDto
     public GitHubActorDto[] Assignees { get; init; } = [];
     public GitHubMilestoneDto? Milestone { get; init; }
     public GitHubIssuePullRequestDto? PullRequest { get; init; }
+}
+
+sealed class GitHubIssueSearchResponseDto
+{
+    public int TotalCount { get; init; }
+    public bool IncompleteResults { get; init; }
+    public GitHubIssueDto[] Items { get; init; } = [];
 }
 
 sealed class GitHubPullRequestDto

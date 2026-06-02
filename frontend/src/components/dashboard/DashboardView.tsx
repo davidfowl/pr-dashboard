@@ -7,11 +7,13 @@ import type {
   PickItem,
   PullRequestSummary,
   PullState,
+  ShipWeekIssueSummary,
   ShipWeekLoadingState,
   ShipWeekResponse,
 } from '../../types';
 import { formatDuration, formatRelative, formatTime } from '../../utils/format';
 import DashboardFilters from './DashboardFilters';
+import IssuesOverview from './IssuesOverview';
 import QueueOverview from './QueueOverview';
 import ShipWeekSection from './ShipWeekSection';
 
@@ -24,8 +26,11 @@ type DashboardViewProps = {
   error: string | null;
   developerPullRequestCounts: DeveloperPullRequestCount[];
   attentionBuckets: AttentionBucket[];
-  regressionIssueBuckets: AttentionIssueBucket[];
   forMeItems: PickItem[];
+  issues: ShipWeekIssueSummary[];
+  issueBuckets: AttentionIssueBucket[];
+  issuesLoading: boolean;
+  issuesError: string | null;
   shipWeek: ShipWeekResponse | null;
   shipWeekLoading: boolean;
   shipWeekSectionLoading: ShipWeekLoadingState;
@@ -68,8 +73,11 @@ function DashboardView({
   error,
   developerPullRequestCounts,
   attentionBuckets,
-  regressionIssueBuckets,
   forMeItems,
+  issues,
+  issueBuckets,
+  issuesLoading,
+  issuesError,
   shipWeek,
   shipWeekLoading,
   shipWeekSectionLoading,
@@ -103,15 +111,26 @@ function DashboardView({
   onVisiblePullRequest,
 }: DashboardViewProps) {
   const shipModeActive = dashboardMode === 'ship';
-  const refreshing = shipModeActive ? shipWeekLoading : pullsLoading;
+  const issuesModeActive = dashboardMode === 'issues';
+  const refreshing = shipModeActive ? shipWeekLoading : issuesModeActive ? issuesLoading : pullsLoading;
   const autoRefreshCadence = formatDuration(autoRefreshIntervalMs);
+  const dataTitle = shipModeActive
+    ? 'Ship mode data'
+    : issuesModeActive
+      ? 'Issue focus data'
+      : 'Review queue data';
+  const showQueuePanel = shipModeActive
+    || (issuesModeActive
+      ? issuesLoading || issues.length > 0 || issueBuckets.length > 0
+      : pullsLoading || pullRequests.length > 0 || attentionBuckets.length > 0);
+  const queuePanelLabel = issuesModeActive ? 'Issue focus' : 'Review queue';
 
   return (
     <>
       <section className="panel dashboard-refresh-panel" aria-label="Dashboard refresh status">
         <div className="dashboard-refresh-copy">
           <p className="eyebrow">Refresh</p>
-          <h2>{shipModeActive ? 'Ship mode data' : 'Review queue data'}</h2>
+          <h2>{dataTitle}</h2>
           <p>
             {lastUpdatedAt
               ? `List updated ${formatRelative(lastUpdatedAt)} at ${formatTime(lastUpdatedAt)}.`
@@ -125,8 +144,8 @@ function DashboardView({
         </button>
       </section>
 
-      {(shipModeActive || pullsLoading || pullRequests.length > 0 || attentionBuckets.length > 0 || regressionIssueBuckets.length > 0) && (
-        <section className="panel queue-panel" aria-label="Review queue">
+      {showQueuePanel && (
+        <section className="panel queue-panel" aria-label={queuePanelLabel}>
           {shipModeActive ? (
             <ShipWeekSection
               shipWeek={shipWeek}
@@ -145,11 +164,17 @@ function DashboardView({
               onSelectPullRequest={onSelectPullRequest}
               onVisiblePullRequest={onVisiblePullRequest}
             />
-          ) : (pullRequests.length > 0 || regressionIssueBuckets.length > 0) && (
+          ) : issuesModeActive ? (
+            <IssuesOverview
+              issueBuckets={issueBuckets}
+              loading={issuesLoading}
+              selectedBucketId={selectedBucketId}
+              onSelectBucket={onSelectBucket}
+            />
+          ) : pullRequests.length > 0 && (
             <QueueOverview
               counts={developerPullRequestCounts}
               attentionBuckets={attentionBuckets}
-              regressionIssueBuckets={regressionIssueBuckets}
               forMeItems={forMeItems}
               loading={pullsLoading}
               selectedBucketId={selectedBucketId}
@@ -169,6 +194,9 @@ function DashboardView({
         pullsLoading={pullsLoading}
         pullRequests={pullRequests}
         error={error}
+        issuesLoading={issuesLoading}
+        issues={issues}
+        issuesError={issuesError}
         shipWeekRepo={shipWeekRepo}
         shipWeekMilestone={shipWeekMilestone}
         shipWeekReleaseBranch={shipWeekReleaseBranch}

@@ -286,7 +286,7 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
-    public async Task RegressionIssuesDiscoverLabelsAndExcludePullRequests()
+    public async Task FocusIssuesDiscoverRegressionLabelsAndExcludePullRequests()
     {
         var requestedPaths = new List<string>();
         var client = CreateClient(path =>
@@ -343,11 +343,12 @@ public sealed class GitHubClientTests
                       }
                     ]
                     """),
+                _ when path == CtiTeamIssueSearchPath("open") => Json("""{ "total_count": 0, "incomplete_results": false, "items": [] }"""),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
             };
         });
 
-        var issues = await client.GetRegressionIssuesAsync(
+        var issues = await client.GetFocusIssuesAsync(
             new RepositoryName("example", "repo"),
             "open",
             false,
@@ -360,9 +361,84 @@ public sealed class GitHubClientTests
         Assert.Equal(["owner"], issue.Assignees);
         Assert.Contains("repos/example/repo/labels?per_page=100", requestedPaths);
         Assert.Contains("repos/example/repo/issues?state=open&labels=regression-from-last-release&sort=updated&direction=desc&per_page=100", requestedPaths);
+        Assert.Contains(CtiTeamIssueSearchPath("open"), requestedPaths);
         Assert.DoesNotContain(
             "repos/example/repo/issues?state=open&sort=updated&direction=desc&per_page=100",
             requestedPaths);
+    }
+
+    [Fact]
+    public async Task FocusIssuesIncludeCtiTeamTitleIssues()
+    {
+        var requestedPaths = new List<string>();
+        var client = CreateClient(path =>
+        {
+            requestedPaths.Add(path);
+            return path switch
+            {
+                "repos/example/repo/labels?per_page=100" => Json("[]"),
+                _ when path == CtiTeamIssueSearchPath("open") => Json(
+                    """
+                    {
+                      "total_count": 3,
+                      "incomplete_results": false,
+                      "items": [
+                        {
+                          "number": 20,
+                          "title": "[AspireE2E] Validate dashboard flows",
+                          "state": "open",
+                          "user": { "login": "jinzhao1127" },
+                          "html_url": "https://github.com/example/repo/issues/20",
+                          "repository_url": "https://api.github.com/repos/example/repo",
+                          "created_at": "2026-01-01T00:00:00Z",
+                          "updated_at": "2026-01-08T00:00:00Z",
+                          "labels": [],
+                          "assignees": [{ "login": "cti-owner" }]
+                        },
+                        {
+                          "number": 21,
+                          "title": "[AspireE2E] Pull request mirror",
+                          "state": "open",
+                          "user": { "login": "EmilyFeng97" },
+                          "html_url": "https://github.com/example/repo/pull/21",
+                          "repository_url": "https://api.github.com/repos/example/repo",
+                          "created_at": "2026-01-02T00:00:00Z",
+                          "updated_at": "2026-01-09T00:00:00Z",
+                          "labels": [],
+                          "assignees": [],
+                          "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/21" }
+                        },
+                        {
+                          "number": 22,
+                          "title": "AspireE2E without the title marker",
+                          "state": "open",
+                          "user": { "login": "Susie-1989" },
+                          "html_url": "https://github.com/example/repo/issues/22",
+                          "repository_url": "https://api.github.com/repos/example/repo",
+                          "created_at": "2026-01-03T00:00:00Z",
+                          "updated_at": "2026-01-10T00:00:00Z",
+                          "labels": [],
+                          "assignees": []
+                        }
+                      ]
+                    }
+                    """),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var issues = await client.GetFocusIssuesAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var issue = Assert.Single(issues);
+        Assert.Equal(20, issue.Number);
+        Assert.Equal("[AspireE2E] Validate dashboard flows", issue.Title);
+        Assert.Equal("jinzhao1127", issue.Author);
+        Assert.Equal(["cti-owner"], issue.Assignees);
+        Assert.Contains(CtiTeamIssueSearchPath("open"), requestedPaths);
     }
 
     [Fact]
@@ -1632,6 +1708,9 @@ public sealed class GitHubClientTests
 
         return response;
     }
+
+    private static string CtiTeamIssueSearchPath(string state) =>
+        $"search/issues?q=repo%3Aexample%2Frepo%20is%3Aissue%20state%3A{state}%20in%3Atitle%20AspireE2E&sort=updated&order=desc&per_page=100";
 
     private static string PullRequestDetailsJson(int number) =>
         PullRequestJson(number);

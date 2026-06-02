@@ -18,6 +18,8 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     internal const int MaxConcurrentGitHubRequests = 8;
     private const int MaxConcurrentChecksFetches = 4;
     private const string RegressionLabelMarker = "regression";
+    private const string CtiTeamTitleMarker = "[AspireE2E]";
+    private const string CtiTeamSearchTerm = "AspireE2E";
     private static readonly SemaphoreSlim s_githubRequestThrottle = new(MaxConcurrentGitHubRequests, MaxConcurrentGitHubRequests);
     private static readonly SemaphoreSlim s_checksFetchThrottle = new(MaxConcurrentChecksFetches, MaxConcurrentChecksFetches);
 
@@ -388,29 +390,42 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         cache.Set(cacheKey, completedPullRequests, CacheDuration);
     }
 
-    public async Task<IReadOnlyList<ShipWeekIssueSummary>> GetRegressionIssuesAsync(
+    public async Task<IReadOnlyList<ShipWeekIssueSummary>> GetFocusIssuesAsync(
         RepositoryName repositoryName,
         string state,
         bool forceRefresh,
         CancellationToken cancellationToken)
     {
         var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
-        var cacheKey = $"regression-issues:{authCacheKey}:{repositoryName}:{state}";
+        var cacheKey = $"focus-issues:{authCacheKey}:{repositoryName}:{state}";
         var bypassedCache = RemoveCacheEntry(cacheKey, forceRefresh);
         return await GetOrCreateWithLastGoodFallbackAsync(
             cacheKey,
             CacheDuration,
             async () =>
         {
-            var regressionIssues = await GetIssuesMatchingLabelMarkerAsync(
+            var regressionIssuesTask = GetIssuesMatchingLabelMarkerAsync(
                 repositoryName,
                 state,
                 RegressionLabelMarker,
                 bypassedCache,
                 cancellationToken);
+            var ctiTeamIssuesTask = SearchIssuesByTitleMarkerAsync(
+                repositoryName,
+                state,
+                CtiTeamTitleMarker,
+                CtiTeamSearchTerm,
+                cancellationToken);
+
+            await Task.WhenAll(regressionIssuesTask, ctiTeamIssuesTask);
 
             var fetchedAt = DateTimeOffset.UtcNow;
-            return regressionIssues
+            return regressionIssuesTask.Result
+                .Concat(ctiTeamIssuesTask.Result)
+                .Where(issue => issue.PullRequest is null)
+                .GroupBy(issue => issue.Number)
+                .Select(group => group.First())
+                .OrderByDescending(issue => issue.UpdatedAt)
                 .Select(issue => ShipWeekIssueSummary.FromDto(repositoryName, issue, []) with
                 {
                     FetchedAt = fetchedAt
@@ -907,6 +922,23 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             .ToArray();
     }
 
+    private async Task<IReadOnlyList<GitHubIssueDto>> SearchIssuesByTitleMarkerAsync(
+        RepositoryName repositoryName,
+        string state,
+        string titleMarker,
+        string searchTerm,
+        CancellationToken cancellationToken)
+    {
+        var issues = await SendPagedGitHubIssueSearchRequestAsync(
+            CreateIssueSearchUrl(repositoryName, state, searchTerm),
+            cancellationToken);
+
+        return issues
+            .Where(issue => issue.PullRequest is null
+                && issue.Title?.Contains(titleMarker, StringComparison.OrdinalIgnoreCase) is true)
+            .ToArray();
+    }
+
     private async Task<IReadOnlyList<string>> GetLabelNamesContainingAsync(
         RepositoryName repositoryName,
         string labelMarker,
@@ -959,6 +991,28 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             CreateIssuesUrl(repositoryName, state, label, milestoneNumber, sort, direction),
             GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
             cancellationToken);
+
+    private static string CreateIssueSearchUrl(
+        RepositoryName repositoryName,
+        string state,
+        string searchTerm)
+    {
+        var queryTerms = new List<string>
+        {
+            $"repo:{repositoryName.Owner}/{repositoryName.Name}",
+            "is:issue"
+        };
+
+        if (!state.Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            queryTerms.Add($"state:{state}");
+        }
+
+        queryTerms.Add("in:title");
+        queryTerms.Add(searchTerm);
+
+        return $"search/issues?q={Uri.EscapeDataString(string.Join(" ", queryTerms))}&sort=updated&order=desc&per_page={PullRequestPageSize}";
+    }
 
     private async IAsyncEnumerable<GitHubIssueDto> StreamIssuesAsync(
         RepositoryName repositoryName,
@@ -1650,6 +1704,26 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             var page = await SendGitHubPageAsync(nextUrl, jsonTypeInfo, cancellationToken);
 
             items.AddRange(page.Value);
+            nextUrl = page.NextUrl;
+        }
+
+        return items;
+    }
+
+    private async Task<IReadOnlyList<GitHubIssueDto>> SendPagedGitHubIssueSearchRequestAsync(
+        string url,
+        CancellationToken cancellationToken)
+    {
+        var items = new List<GitHubIssueDto>();
+        string? nextUrl = url;
+        while (nextUrl is not null)
+        {
+            var page = await SendGitHubPageAsync(
+                nextUrl,
+                GitHubJsonSerializerContext.Default.GitHubIssueSearchResponseDto,
+                cancellationToken);
+
+            items.AddRange(page.Value.Items);
             nextUrl = page.NextUrl;
         }
 
