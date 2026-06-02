@@ -397,6 +397,7 @@ function App() {
       await loadAuthStatus();
       setPullRequests([]);
       setIssues([]);
+      setIssuesError(null);
       setReviewLastUpdatedAt(null);
       setIssuesLastUpdatedAt(null);
       setShipWeek(null);
