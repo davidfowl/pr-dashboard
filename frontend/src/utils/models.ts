@@ -662,6 +662,10 @@ function isChecksPending(pullRequest: PullRequestSummary) {
   return pullRequest.checks?.state === 'pending' || pullRequest.checks?.state === 'unknown';
 }
 
+function hasMergeConflicts(pullRequest: PullRequestSummary) {
+  return pullRequest.mergeableState === 'dirty';
+}
+
 function hasRegressionSignal(pullRequest: PullRequestSummary) {
   return hasRegressionLabel(pullRequest.labels)
     || pullRequest.linkedIssues.some((issue) => hasRegressionLabel(issue.labels));
@@ -786,6 +790,10 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
   const checksSignal = checksAttentionSignal(pullRequest);
   if (checksSignal) {
     signals.push(checksSignal);
+  }
+
+  if (hasMergeConflicts(pullRequest)) {
+    signals.push({ label: 'merge conflicts', tone: 'danger' });
   }
 
   const approvedAt = approvalAgeAt(pullRequest);
@@ -937,6 +945,10 @@ function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {
 
   if (isChecksFailing(pullRequest)) {
     return { label: 'fix CI', tone: 'danger' };
+  }
+
+  if (hasMergeConflicts(pullRequest)) {
+    return { label: 'merge conflicts', tone: 'danger' };
   }
 
   if (isApprovedButAging(pullRequest)) {

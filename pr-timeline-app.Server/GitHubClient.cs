@@ -754,7 +754,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             pair => pair.Key,
             pair => pair.Value.Result);
         var detailTasks = pullRequests
-            .Where(pullRequest => reviewsByPullRequest[pullRequest.Number].State == "waiting")
+            .Where(pullRequest => NeedsPullRequestDetails(pullRequest, reviewsByPullRequest[pullRequest.Number]))
             .ToDictionary(
                 pullRequest => pullRequest.Number,
                 pullRequest => GetPullRequestDetailsOrNullAsync(repositoryName, pullRequest.Number, forceRefresh, cancellationToken));
@@ -802,12 +802,17 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                     Deletions = details?.Deletions ?? pullRequest.Deletions,
                     ChangedFiles = details?.ChangedFiles ?? pullRequest.ChangedFiles,
                     LastCommitAt = lastCommitAt,
+                    MergeableState = details?.MergeableState ?? pullRequest.MergeableState,
                     Review = reviewsByPullRequest[pullRequest.Number],
                     Checks = pullRequest.Checks
                 };
             })
             .ToArray();
     }
+
+    private static bool NeedsPullRequestDetails(PullRequestSummary pullRequest, ReviewStatus review) =>
+        pullRequest.State.Equals("open", StringComparison.OrdinalIgnoreCase)
+            || review.State == "waiting";
 
     private async Task<GitHubMilestoneDto?> GetMilestoneByTitleAsync(
         RepositoryName repositoryName,

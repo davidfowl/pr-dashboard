@@ -130,6 +130,7 @@ record PullRequestSummary(
     DateTimeOffset? LastCommitAt,
     string? HeadSha,
     string? BaseRef,
+    string? MergeableState,
     ReviewStatus Review,
     ChecksStatus Checks)
 {
@@ -165,6 +166,7 @@ record PullRequestSummary(
             null,
             pullRequest.Head?.Sha,
             pullRequest.Base?.Ref,
+            pullRequest.MergeableState,
             ReviewStatus.Waiting,
             pullRequest.State?.Equals("open", StringComparison.OrdinalIgnoreCase) is true
                 && !string.IsNullOrEmpty(pullRequest.Head?.Sha)
