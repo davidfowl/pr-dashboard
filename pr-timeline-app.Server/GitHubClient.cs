@@ -163,8 +163,16 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             var activePullRequestDtos = pullRequestDtos
                 .Where(pullRequest => !pullRequest.Draft)
                 .ToArray();
+            var mergeableStateEnrichmentNumbers = activePullRequestDtos
+                .Select(pullRequest => pullRequest.Number)
+                .ToHashSet();
 
-            return await CreatePullRequestSummariesAsync(repositoryName, activePullRequestDtos, bypassedCache, cancellationToken);
+            return await CreatePullRequestSummariesAsync(
+                repositoryName,
+                activePullRequestDtos,
+                mergeableStateEnrichmentNumbers,
+                bypassedCache,
+                cancellationToken);
         },
             cancellationToken);
     }
@@ -195,6 +203,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         await using var enumerator = CreatePullRequestSummariesInBatchesAsync(
             repositoryName,
             StreamPullRequestDtosAsync(repositoryName, state, cancellationToken),
+            true,
             bypassedCache,
             cancellationToken).GetAsyncEnumerator(cancellationToken);
 
@@ -297,6 +306,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 pullRequestDtos
                     .OrderBy(pullRequest => pullRequest.CreatedAt)
                     .ToArray(),
+                null,
                 bypassedCache,
                 cancellationToken);
         },
@@ -341,6 +351,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
         await using var enumerator = CreatePullRequestSummariesInBatchesAsync(
             repositoryName,
             StreamPullRequestDtosByLabelAsync(repositoryName, state, normalizedLabel, cancellationToken),
+            false,
             bypassedCache,
             cancellationToken).GetAsyncEnumerator(cancellationToken);
 
@@ -515,6 +526,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 pullRequestDtosByNumber.Values
                     .OrderBy(pullRequest => pullRequest.CreatedAt)
                     .ToArray(),
+                releaseBranchPullRequestNumbers,
                 bypassedCache,
                 cancellationToken);
 
@@ -587,6 +599,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     private async IAsyncEnumerable<PullRequestSummary> CreatePullRequestSummariesInBatchesAsync(
         RepositoryName repositoryName,
         IAsyncEnumerable<GitHubPullRequestDto> pullRequestDtos,
+        bool enrichMergeableStateFromDetails,
         bool forceRefresh,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -606,7 +619,12 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
                 continue;
             }
 
-            foreach (var pullRequest in await CreatePullRequestSummariesAsync(repositoryName, batch, forceRefresh, cancellationToken))
+            foreach (var pullRequest in await CreatePullRequestSummariesAsync(
+                repositoryName,
+                batch,
+                MergeableStateEnrichmentNumbers(batch, enrichMergeableStateFromDetails),
+                forceRefresh,
+                cancellationToken))
             {
                 yield return pullRequest;
             }
@@ -619,7 +637,12 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             yield break;
         }
 
-        foreach (var pullRequest in await CreatePullRequestSummariesAsync(repositoryName, batch, forceRefresh, cancellationToken))
+        foreach (var pullRequest in await CreatePullRequestSummariesAsync(
+            repositoryName,
+            batch,
+            MergeableStateEnrichmentNumbers(batch, enrichMergeableStateFromDetails),
+            forceRefresh,
+            cancellationToken))
         {
             yield return pullRequest;
         }
@@ -724,6 +747,7 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
     private async Task<IReadOnlyList<PullRequestSummary>> CreatePullRequestSummariesAsync(
         RepositoryName repositoryName,
         IReadOnlyList<GitHubPullRequestDto> pullRequestDtos,
+        IReadOnlySet<int>? mergeableStateEnrichmentNumbers,
         bool forceRefresh,
         CancellationToken cancellationToken)
     {
@@ -754,7 +778,10 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             pair => pair.Key,
             pair => pair.Value.Result);
         var detailTasks = pullRequests
-            .Where(pullRequest => NeedsPullRequestDetails(pullRequest, reviewsByPullRequest[pullRequest.Number]))
+            .Where(pullRequest => NeedsPullRequestDetails(
+                pullRequest,
+                reviewsByPullRequest[pullRequest.Number],
+                mergeableStateEnrichmentNumbers))
             .ToDictionary(
                 pullRequest => pullRequest.Number,
                 pullRequest => GetPullRequestDetailsOrNullAsync(repositoryName, pullRequest.Number, forceRefresh, cancellationToken));
@@ -810,9 +837,20 @@ sealed partial class GitHubClient(HttpClient httpClient, GitHubTokenProvider tok
             .ToArray();
     }
 
-    private static bool NeedsPullRequestDetails(PullRequestSummary pullRequest, ReviewStatus review) =>
-        pullRequest.State.Equals("open", StringComparison.OrdinalIgnoreCase)
-            || review.State == "waiting";
+    private static IReadOnlySet<int>? MergeableStateEnrichmentNumbers(
+        IReadOnlyList<GitHubPullRequestDto> pullRequests,
+        bool enrichMergeableStateFromDetails) =>
+        enrichMergeableStateFromDetails
+            ? pullRequests.Select(pullRequest => pullRequest.Number).ToHashSet()
+            : null;
+
+    private static bool NeedsPullRequestDetails(
+        PullRequestSummary pullRequest,
+        ReviewStatus review,
+        IReadOnlySet<int>? mergeableStateEnrichmentNumbers) =>
+        review.State == "waiting"
+            || (pullRequest.State.Equals("open", StringComparison.OrdinalIgnoreCase)
+                && mergeableStateEnrichmentNumbers?.Contains(pullRequest.Number) == true);
 
     private async Task<GitHubMilestoneDto?> GetMilestoneByTitleAsync(
         RepositoryName repositoryName,

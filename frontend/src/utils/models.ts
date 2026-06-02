@@ -773,7 +773,8 @@ function isCoreTeamAuthor(author: string) {
 
 export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
   const pullRequest = item.pullRequest;
-  const signals: AttentionSignal[] = [actionSignal(pullRequest)];
+  const action = actionSignal(pullRequest);
+  const signals: AttentionSignal[] = [action];
 
   if (targetsCurrentRelease(pullRequest)) {
     signals.push({ label: `release ${currentRelease}`, tone: 'danger' });
@@ -792,7 +793,7 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
     signals.push(checksSignal);
   }
 
-  if (hasMergeConflicts(pullRequest)) {
+  if (hasMergeConflicts(pullRequest) && action.label !== 'merge conflicts') {
     signals.push({ label: 'merge conflicts', tone: 'danger' });
   }
 

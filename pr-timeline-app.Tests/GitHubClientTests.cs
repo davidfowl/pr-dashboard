@@ -1067,6 +1067,61 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListByLabelReusesAlreadyFetchedPullRequestDetails()
+    {
+        var requestedPaths = new List<string>();
+        var client = CreateClient(path =>
+        {
+            requestedPaths.Add(path);
+            return path switch
+            {
+                "repos/example/repo/issues?state=open&labels=docs-from-code&sort=created&direction=asc&per_page=100" => Json(
+                    """
+                    [
+                      {
+                        "number": 5,
+                        "title": "Generated docs",
+                        "state": "open",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-02T00:00:00Z",
+                        "user": { "login": "octocat" },
+                        "html_url": "https://github.com/example/repo/pull/5",
+                        "labels": [{ "name": "docs-from-code" }],
+                        "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/5" }
+                      }
+                    ]
+                    """),
+                "repos/example/repo/pulls/5" => Json(PullRequestJson(
+                    5,
+                    title: "Generated docs",
+                    mergeableState: "dirty")),
+                "repos/example/repo/pulls/5/reviews?per_page=100" => Json(
+                    """
+                    [
+                      {
+                        "user": { "login": "reviewer" },
+                        "state": "APPROVED",
+                        "submitted_at": "2026-01-02T00:00:00Z"
+                      }
+                    ]
+                    """),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var pullRequests = await client.GetPullRequestsByLabelAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            "docs-from-code",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("dirty", pullRequest.MergeableState);
+        Assert.Equal(1, requestedPaths.Count(path => path == "repos/example/repo/pulls/5"));
+    }
+
+    [Fact]
     public async Task PullRequestChecksFetchesFailingChecksForVisiblePullRequests()
     {
         var client = CreateClient(path => path switch
