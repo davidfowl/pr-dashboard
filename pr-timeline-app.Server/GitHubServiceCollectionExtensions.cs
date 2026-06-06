@@ -37,8 +37,7 @@ public static class GitHubServiceCollectionExtensions
                 options.ClientId = GitHubOAuthConfiguration.ClientId ?? "";
                 options.ClientSecret = GitHubOAuthConfiguration.ClientSecret ?? "";
                 options.SaveTokens = true;
-                options.Scope.Add("repo");
-                options.Scope.Add("read:org");
+                options.Scope.Clear();
             });
         }
 
