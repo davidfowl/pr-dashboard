@@ -4,7 +4,7 @@ using Microsoft.Extensions.Caching.Memory;
 
 sealed class GitHubCacheScopeResolver(HttpClient httpClient, GitHubTokenProvider tokenProvider, IMemoryCache cache)
 {
-    private static readonly TimeSpan PublicVisibilityCacheDuration = Timeout.InfiniteTimeSpan;
+    internal static readonly TimeSpan PublicVisibilityCacheDuration = TimeSpan.FromHours(1);
     private static readonly TimeSpan UnknownVisibilityCacheDuration = TimeSpan.FromMinutes(2);
 
     public async Task<GitHubCacheScope> GetRepositoryScopeAsync(

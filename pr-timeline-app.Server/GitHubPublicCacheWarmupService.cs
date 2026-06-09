@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.Extensions.Options;
 
 sealed class GitHubPublicCacheWarmupService(
@@ -7,6 +8,9 @@ sealed class GitHubPublicCacheWarmupService(
     ILogger<GitHubPublicCacheWarmupService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        => await ExecuteWarmupAsync(stoppingToken);
+
+    internal async Task ExecuteWarmupAsync(CancellationToken stoppingToken)
     {
         var warmupOptions = options.Value;
         if (!warmupOptions.Enabled
@@ -45,6 +49,15 @@ sealed class GitHubPublicCacheWarmupService(
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
+                if (IsGitHubRateLimit(ex))
+                {
+                    logger.LogInformation(
+                        ex,
+                        "Stopping GitHub cache warmup after hitting rate limits while warming {Repository}.",
+                        repositoryName);
+                    return;
+                }
+
                 logger.LogWarning(ex, "GitHub cache warmup failed for {Repository}.", repositoryName);
             }
         }
@@ -54,4 +67,12 @@ sealed class GitHubPublicCacheWarmupService(
         string.IsNullOrWhiteSpace(state) || state.Trim().ToLowerInvariant() is not ("open" or "closed" or "all")
             ? "open"
             : state.Trim().ToLowerInvariant();
+
+    private static bool IsGitHubRateLimit(Exception exception) =>
+        exception is GitHubApiException ex
+        && (ex.StatusCode == HttpStatusCode.TooManyRequests
+            || ex.StatusCode == HttpStatusCode.Forbidden
+            && (ex.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+                || ex.Message.Contains("secondary rate", StringComparison.OrdinalIgnoreCase)
+                || ex.Message.Contains("abuse detection", StringComparison.OrdinalIgnoreCase)));
 }

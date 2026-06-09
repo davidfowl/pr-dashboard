@@ -517,6 +517,7 @@ public sealed class GitHubClientTests
         };
         var firstClient = CreateClientFromRequests(route, cache, "token-a");
 
+        Assert.Equal(TimeSpan.FromHours(1), GitHubCacheScopeResolver.PublicVisibilityCacheDuration);
         var firstPullRequests = await firstClient.GetPullRequestsAsync(
             new RepositoryName("example", "repo"),
             "open",
@@ -534,6 +535,46 @@ public sealed class GitHubClientTests
         Assert.Equal("Public list 1", Assert.Single(secondPullRequests).Title);
         Assert.Equal(1, visibilityProbeRequests);
         Assert.Equal(1, publicListRequests);
+    }
+
+    [Fact]
+    public async Task PublicCacheWarmupStopsAfterRateLimit()
+    {
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var requests = new ConcurrentQueue<(string Path, string? Token)>();
+        var route = (HttpRequestMessage request, CancellationToken _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            var token = request.Headers.Authorization?.Parameter;
+            requests.Enqueue((path, token));
+
+            return Task.FromResult(path switch
+            {
+                "repos/example/rate-limited" when token is null => Json("""{ "visibility": "public" }"""),
+                "repos/example/rate-limited/pulls?state=open&sort=created&direction=asc&per_page=100" when token is null => Json(
+                    """{ "message": "API rate limit exceeded" }""",
+                    HttpStatusCode.TooManyRequests),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
+            });
+        };
+        var client = CreateClientFromRequests(route, cache, "token-a");
+        var services = new ServiceCollection()
+            .AddSingleton(client)
+            .BuildServiceProvider();
+        var service = new GitHubPublicCacheWarmupService(
+            services.GetRequiredService<IServiceScopeFactory>(),
+            Options.Create(new GitHubCacheWarmupOptions
+            {
+                Repositories = ["example/rate-limited", "example/should-not-run"]
+            }),
+            new TestHostEnvironment(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<GitHubPublicCacheWarmupService>.Instance);
+
+        await service.ExecuteWarmupAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains(requests, request => request.Path == "repos/example/rate-limited");
+        Assert.DoesNotContain(requests, request => request.Path == "repos/example/should-not-run");
+        Assert.All(requests, request => Assert.Null(request.Token));
     }
 
     [Fact]
