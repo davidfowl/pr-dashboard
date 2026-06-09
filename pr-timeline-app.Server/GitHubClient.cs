@@ -15,6 +15,7 @@ sealed partial class GitHubClient(
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
     internal static readonly TimeSpan PublicCacheDuration = TimeSpan.FromHours(1);
+    private static readonly TimeSpan ForceRefreshCooldown = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan LastGoodCacheDuration = TimeSpan.FromHours(24);
     private const int PullRequestPageSize = 100;
     private const int PullRequestStreamBatchSize = 20;
@@ -97,7 +98,22 @@ sealed partial class GitHubClient(
             ? CreateRepositoryCacheKey(scope, repositoryName, resourceName, parts)
             : null;
 
-    private static bool TryBeginCacheRefresh(string _, bool forceRefresh) => forceRefresh;
+    private bool TryBeginCacheRefresh(string cacheKey, bool forceRefresh)
+    {
+        if (!forceRefresh)
+        {
+            return false;
+        }
+
+        var refreshCacheKey = $"force-refresh:{cacheKey}";
+        if (cache.TryGetValue(refreshCacheKey, out _))
+        {
+            return false;
+        }
+
+        cache.Set(refreshCacheKey, true, ForceRefreshCooldown);
+        return true;
+    }
 
     private static TimeSpan CacheDurationForScope(GitHubCacheScope scope) =>
         scope.IsShared ? PublicCacheDuration : CacheDuration;
@@ -128,6 +144,14 @@ sealed partial class GitHubClient(
     private bool TryGetLastGood<T>(string cacheKey, out T? value) =>
         cache.TryGetValue(GetLastGoodCacheKey(cacheKey), out value) && value is not null;
 
+    private bool TryGetCachedFallback<T>(string? cacheKey, out T? value)
+    {
+        value = default;
+        return cacheKey is not null
+            && cache.TryGetValue(cacheKey, out value)
+            && value is not null;
+    }
+
     private bool TryUseLastGoodFallback<T>(
         string cacheKey,
         Exception exception,
@@ -146,10 +170,8 @@ sealed partial class GitHubClient(
         out T? value)
     {
         value = default;
-        return cacheKey is not null
-            && IsTransientGitHubFailure(exception, cancellationToken)
-            && cache.TryGetValue(cacheKey, out value)
-            && value is not null;
+        return IsTransientGitHubFailure(exception, cancellationToken)
+            && TryGetCachedFallback(cacheKey, out value);
     }
 
     private async Task<T> GetOrCreateWithLastGoodFallbackAsync<T>(
@@ -167,6 +189,11 @@ sealed partial class GitHubClient(
         if (!refresh && hasCachedValue)
         {
             return cachedValue!;
+        }
+
+        if (!refresh && TryGetCachedFallback(transientFallbackCacheKey, out T? cachedFallback))
+        {
+            return cachedFallback!;
         }
 
         try
@@ -217,6 +244,11 @@ sealed partial class GitHubClient(
         if (!refresh && hasCachedValue)
         {
             return cachedValue;
+        }
+
+        if (!refresh && TryGetCachedFallback(transientFallbackCacheKey, out T? cachedFallback))
+        {
+            return cachedFallback;
         }
 
         try

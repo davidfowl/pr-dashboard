@@ -159,6 +159,55 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PublicRepositoryForceRefreshUsesCooldownForRepeatedTokenOverlay()
+    {
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var publicListRequests = 0;
+        var tokenListRequests = 0;
+        var route = (HttpRequestMessage request, CancellationToken _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            var token = request.Headers.Authorization?.Parameter;
+
+            return Task.FromResult(path switch
+            {
+                "repos/example/repo" when token is null => Json("""{ "visibility": "public" }"""),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token is null => Json(
+                    PullRequestsJson([PullRequestJson(1, title: $"Public list {++publicListRequests}")])),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token is "token-a" => Json(
+                    PullRequestsJson([PullRequestJson(1, title: $"Token list {++tokenListRequests}")])),
+                "repos/example/repo/pulls/1/reviews?per_page=100" when token is null => Json("[]"),
+                "repos/example/repo/pulls/1/reviews?per_page=100" when token is "token-a" => Json("[]"),
+                "repos/example/repo/pulls/1" when token is null => Json(PullRequestDetailsJson(1)),
+                "repos/example/repo/pulls/1" when token is "token-a" => Json(PullRequestDetailsJson(1)),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
+            });
+        };
+        var client = CreateClientFromRequests(route, cache, "token-a");
+
+        await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+        var firstRefresh = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            true,
+            TestContext.Current.CancellationToken);
+        var secondRefresh = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("Token list 1", Assert.Single(firstRefresh).Title);
+        Assert.Equal("Token list 1", Assert.Single(secondRefresh).Title);
+        Assert.Equal(1, publicListRequests);
+        Assert.Equal(1, tokenListRequests);
+    }
+
+    [Fact]
     public async Task PublicRepositoryAnonymousForceRefreshDoesNotReplaceSharedCache()
     {
         var cache = new MemoryCache(new MemoryCacheOptions());
@@ -565,6 +614,7 @@ public sealed class GitHubClientTests
             services.GetRequiredService<IServiceScopeFactory>(),
             Options.Create(new GitHubCacheWarmupOptions
             {
+                Enabled = true,
                 Repositories = ["example/rate-limited", "example/should-not-run"]
             }),
             new TestHostEnvironment(),
@@ -575,6 +625,15 @@ public sealed class GitHubClientTests
         Assert.Contains(requests, request => request.Path == "repos/example/rate-limited");
         Assert.DoesNotContain(requests, request => request.Path == "repos/example/should-not-run");
         Assert.All(requests, request => Assert.Null(request.Token));
+    }
+
+    [Fact]
+    public void GitHubCacheWarmupOptionsDefaultsAreOptIn()
+    {
+        var options = new GitHubCacheWarmupOptions();
+
+        Assert.False(options.Enabled);
+        Assert.Empty(options.Repositories);
     }
 
     [Fact]
@@ -2316,7 +2375,7 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
-    public async Task PullRequestChecksForceRefreshBypassesCachedStatus()
+    public async Task PullRequestChecksForceRefreshUsesCooldownAfterBypassingCachedStatus()
     {
         var requestCount = 0;
         var client = CreateClient(path =>
@@ -2360,7 +2419,7 @@ public sealed class GitHubClientTests
             true,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(6, requestCount);
+        Assert.Equal(4, requestCount);
     }
 
     [Fact]
