@@ -523,6 +523,7 @@ record TimelineItem(
 [JsonSerializable(typeof(GitHubPullRequestDto))]
 [JsonSerializable(typeof(GitHubPullRequestDto[]))]
 [JsonSerializable(typeof(GitHubReviewDto[]))]
+[JsonSerializable(typeof(GitHubRepositoryDto))]
 [JsonSerializable(typeof(GitHubTimelineItemDto[]))]
 partial class GitHubJsonSerializerContext : JsonSerializerContext;
 
@@ -536,6 +537,11 @@ sealed class GitHubActorDto
 sealed class GitHubErrorDto
 {
     public string? Message { get; init; }
+}
+
+sealed class GitHubRepositoryDto
+{
+    public string? Visibility { get; init; }
 }
 
 sealed class GitHubLabelDto

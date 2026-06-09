@@ -19,6 +19,7 @@ public static class GitHubServiceCollectionExtensions
         services.AddScoped<GitHubAuthService>();
         services.AddScoped<GitHubPullRequestService>();
         services.AddSingleton<GitHubTokenProvider>();
+        services.AddHostedService<GitHubPublicCacheWarmupService>();
 
         var authentication = services
             .AddAuthentication(options =>
@@ -41,24 +42,32 @@ public static class GitHubServiceCollectionExtensions
             });
         }
 
-        services.AddHttpClient<GitHubClient>(httpClient =>
-        {
-            httpClient.BaseAddress = new Uri("https://api.github.com/");
+        services.AddHttpClient<GitHubCacheScopeResolver>(ConfigureGitHubHttpClient)
+        .ConfigurePrimaryHttpMessageHandler(CreateGitHubHttpMessageHandler);
 
-            // GitHub REST API requires a User-Agent and recommends this version header.
-            // https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api
-            httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("pr-timeline-app", "1.0"));
-            httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-            httpClient.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
-        })
-        .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+        services.AddHttpClient<GitHubClient>(ConfigureGitHubHttpClient)
+        .ConfigurePrimaryHttpMessageHandler(CreateGitHubHttpMessageHandler);
+
+        return services;
+    }
+
+    private static void ConfigureGitHubHttpClient(HttpClient httpClient)
+    {
+        httpClient.BaseAddress = new Uri("https://api.github.com/");
+
+        // GitHub REST API requires a User-Agent and recommends this version header.
+        // https://docs.github.com/en/rest/using-the-rest-api/getting-started-with-the-rest-api
+        httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("pr-timeline-app", "1.0"));
+        httpClient.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+        httpClient.DefaultRequestHeaders.Add("X-GitHub-Api-Version", "2022-11-28");
+    }
+
+    private static SocketsHttpHandler CreateGitHubHttpMessageHandler() =>
+        new()
         {
             // GitHub redirects old repository names to canonical repository IDs. HttpClient drops
             // Authorization when it auto-follows redirects, so GitHub sees the redirected request as anonymous.
             AllowAutoRedirect = false,
             MaxConnectionsPerServer = GitHubClient.MaxConcurrentGitHubRequests
-        });
-
-        return services;
-    }
+        };
 }

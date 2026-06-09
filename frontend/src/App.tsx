@@ -235,6 +235,7 @@ function App() {
             const params = shipWeekRefreshParamsRef.current;
             void loadShipWeek(params.repositoryInput, params.milestoneInput, params.releaseBranchInput, {
               preserveResults: true,
+              forceRefresh: authStatus?.authenticated === true,
             });
           }
 
@@ -247,6 +248,7 @@ function App() {
             const params = issueRefreshParamsRef.current;
             void loadIssues(params.repositoryInput, params.pullState, {
               preserveResults: true,
+              forceRefresh: authStatus?.authenticated === true,
             });
           }
 
@@ -258,6 +260,7 @@ function App() {
           const params = reviewRefreshParamsRef.current;
           void loadPullRequests(params.repositoryInput, params.pullState, {
             preserveResults: true,
+            forceRefresh: authStatus?.authenticated === true,
           });
         }
 
@@ -274,7 +277,7 @@ function App() {
     };
     // The timer only needs the active mode and loading guards; the loaders are stable function declarations.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dashboardMode, issuesLoading, pullsLoading, shipWeekLoading, viewMode]);
+  }, [authStatus?.authenticated, dashboardMode, issuesLoading, pullsLoading, shipWeekLoading, viewMode]);
 
   useEffect(() => {
     function syncHashState() {
@@ -907,20 +910,21 @@ function App() {
   }
 
   function onRefresh() {
+    const forceRefresh = authStatus?.authenticated === true;
     if (dashboardMode === 'ship') {
       const params = shipWeekRefreshParamsRef.current;
       void loadShipWeek(params.repositoryInput, params.milestoneInput, params.releaseBranchInput, {
-        forceRefresh: true,
+        forceRefresh,
         preserveResults: true,
       });
     } else if (dashboardMode === 'issues') {
       void loadIssues(repo.trim(), state, {
-        forceRefresh: true,
+        forceRefresh,
         preserveResults: true,
       });
     } else {
       void loadPullRequests(repo.trim(), state, {
-        forceRefresh: true,
+        forceRefresh,
         preserveResults: true,
       });
     }
