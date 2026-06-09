@@ -14,7 +14,7 @@ sealed partial class GitHubClient(
     IHostEnvironment environment)
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
-    private static readonly TimeSpan PublicCacheDuration = Timeout.InfiniteTimeSpan;
+    internal static readonly TimeSpan PublicCacheDuration = TimeSpan.FromHours(1);
     private static readonly TimeSpan LastGoodCacheDuration = TimeSpan.FromHours(24);
     private const int PullRequestPageSize = 100;
     private const int PullRequestStreamBatchSize = 20;

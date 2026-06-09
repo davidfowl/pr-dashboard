@@ -310,6 +310,66 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PublicRepositorySharedBaselineUsesHourlyTtlAndKeepsLastGoodWhenExpiredEntryRefreshFails()
+    {
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(
+            GitHubCachePolicy.CreatePublicRepositoryScope(),
+            repositoryName,
+            "pulls",
+            "open");
+        var visibilityProbeRequests = 0;
+        var listRequests = 0;
+        var failListRefresh = false;
+        var route = (HttpRequestMessage request, CancellationToken _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            var token = request.Headers.Authorization?.Parameter;
+
+            return Task.FromResult(path switch
+            {
+                "repos/example/repo" when token is null && ++visibilityProbeRequests == 1 => Json("""{ "visibility": "public" }"""),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token is null && !failListRefresh => Json(
+                    PullRequestsJson([PullRequestJson(1, title: $"Public list {++listRequests}")])),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token is null => Json(
+                    """{ "message": "API rate limit exceeded" }""",
+                    HttpStatusCode.TooManyRequests),
+                "repos/example/repo/pulls/1/reviews?per_page=100" when token is null => Json("[]"),
+                "repos/example/repo/pulls/1" when token is null => Json(PullRequestDetailsJson(1)),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
+            });
+        };
+        var client = CreateClientFromRequests(route, cache, "token-a");
+
+        Assert.Equal(TimeSpan.FromHours(1), GitHubClient.PublicCacheDuration);
+        var originalPullRequests = await client.GetPullRequestsAsync(
+            repositoryName,
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+        cache.Remove(cacheKey);
+        failListRefresh = true;
+        var fallbackPullRequests = await client.GetPullRequestsAsync(
+            repositoryName,
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+        failListRefresh = false;
+        var refreshedPullRequests = await client.GetPullRequestsAsync(
+            repositoryName,
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("Public list 1", Assert.Single(originalPullRequests).Title);
+        Assert.Equal("Public list 1", Assert.Single(fallbackPullRequests).Title);
+        Assert.Equal("Public list 2", Assert.Single(refreshedPullRequests).Title);
+        Assert.Equal(1, visibilityProbeRequests);
+        Assert.Equal(2, listRequests);
+    }
+
+    [Fact]
     public async Task PublicRepositoryPrewarmPopulatesSharedBaselineWithoutToken()
     {
         var cache = new MemoryCache(new MemoryCacheOptions());
@@ -2998,4 +3058,5 @@ public sealed class GitHubClientTests
         protected override Task<AuthenticateResult> HandleAuthenticateAsync() =>
             Task.FromResult(AuthenticateResult.NoResult());
     }
+
 }
