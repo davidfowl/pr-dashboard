@@ -50,39 +50,11 @@ sealed partial class GitHubClient(
                 CacheOnly: true);
         }
 
-        var sharedFallbackScope = await GetVerifiedSharedFallbackScopeAsync(repositoryName, cancellationToken);
         return new RepositoryCacheScopeSelection(
             scope,
-            sharedFallbackScope,
+            SharedFallbackScope: null,
             Refresh: forceRefresh,
             CacheOnly: false);
-    }
-
-    private async Task<GitHubCacheScope?> GetVerifiedSharedFallbackScopeAsync(
-        RepositoryName repositoryName,
-        CancellationToken cancellationToken)
-    {
-        if (!cacheScopeResolver.IsPublicCacheAllowlisted(repositoryName)
-            || !publicCacheStore.HasTrackedSnapshot(repositoryName))
-        {
-            return null;
-        }
-
-        var eligibility = await cacheScopeResolver.GetPublicCacheRepositoryEligibilityOrUnverifiedAsync(
-            repositoryName,
-            cancellationToken);
-        if (eligibility == GitHubPublicCacheRepositoryEligibility.Public
-            || eligibility == GitHubPublicCacheRepositoryEligibility.Unverified)
-        {
-            return GitHubCachePolicy.CreatePublicRepositoryScope();
-        }
-
-        if (eligibility == GitHubPublicCacheRepositoryEligibility.NotPublic)
-        {
-            publicCacheStore.RemoveRepository(repositoryName);
-        }
-
-        return null;
     }
 
     private static string CreateRepositoryCacheKey(

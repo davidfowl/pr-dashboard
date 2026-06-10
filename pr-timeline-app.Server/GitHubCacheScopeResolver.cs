@@ -23,6 +23,7 @@ sealed class GitHubCacheScopeResolver(
 {
     internal static readonly TimeSpan PublicVisibilityCacheDuration = TimeSpan.FromHours(1);
     private static readonly TimeSpan UnknownVisibilityCacheDuration = TimeSpan.FromMinutes(2);
+    private HashSet<string>? normalizedPublicCacheAllowlist;
 
     public async Task<GitHubCacheScope> GetRepositoryScopeAsync(
         RepositoryName repositoryName,
@@ -61,7 +62,7 @@ sealed class GitHubCacheScopeResolver(
         {
             return await GetPublicCacheRepositoryEligibilityAsync(
                 repositoryName,
-                forceRefresh: true,
+                forceRefresh: false,
                 cancellationToken);
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsTransientEligibilityFailure(ex))
@@ -71,13 +72,27 @@ sealed class GitHubCacheScopeResolver(
     }
 
     public bool IsPublicCacheAllowlisted(RepositoryName repositoryName) =>
-        options.Value.Repositories
-            .Select(repository => RepositoryName.TryParse(repository, out var parsedRepository)
-                ? GitHubCachePolicy.NormalizeRepositoryName(parsedRepository)
-                : null)
-            .Contains(
-                GitHubCachePolicy.NormalizeRepositoryName(repositoryName),
-                StringComparer.OrdinalIgnoreCase);
+        GetNormalizedPublicCacheAllowlist().Contains(GitHubCachePolicy.NormalizeRepositoryName(repositoryName));
+
+    private HashSet<string> GetNormalizedPublicCacheAllowlist()
+    {
+        if (normalizedPublicCacheAllowlist is { } allowlist)
+        {
+            return allowlist;
+        }
+
+        allowlist = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var repository in options.Value.Repositories)
+        {
+            if (RepositoryName.TryParse(repository, out var parsedRepository))
+            {
+                allowlist.Add(GitHubCachePolicy.NormalizeRepositoryName(parsedRepository));
+            }
+        }
+
+        normalizedPublicCacheAllowlist = allowlist;
+        return allowlist;
+    }
 
     public async Task<GitHubPublicCacheRepositoryEligibility> GetPublicCacheRepositoryEligibilityAsync(
         RepositoryName repositoryName,

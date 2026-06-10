@@ -35,7 +35,7 @@ In development, the server can use an OAuth session, `GITHUB_TOKEN`, `GH_TOKEN`,
 
 ## Production public cache
 
-Logged-out users read only the shared public cache for repositories in `GitHubCacheWarmup:Repositories`. Configure `GITHUB_PUBLIC_CACHE_TOKEN` or `GitHubCacheWarmup:PublicCacheToken` with a server-owned fine-grained PAT or GitHub App token so the backend can verify allowlisted public visibility and refresh that cache without using anonymous quota or user tokens. The current last-good fallback uses the server memory cache; replace it with durable storage before relying on cache continuity across restarts or multiple backend instances.
+Logged-out users read pull request data only from the shared public cache for repositories in `GitHubCacheWarmup:Repositories`. Configure `GITHUB_PUBLIC_CACHE_TOKEN` or `GitHubCacheWarmup:PublicCacheToken` with a server-owned fine-grained PAT or GitHub App token so the backend can verify allowlisted public visibility and refresh that cache without using anonymous quota or user tokens. Visibility verification uses the server token and is cached separately from PR data. The current last-good fallback uses the server memory cache; replace it with durable storage before relying on cache continuity across restarts or multiple backend instances.
 
 ## Build and lint
 
