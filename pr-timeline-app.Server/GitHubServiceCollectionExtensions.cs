@@ -19,6 +19,8 @@ public static class GitHubServiceCollectionExtensions
         services.AddScoped<GitHubAuthService>();
         services.AddScoped<GitHubPullRequestService>();
         services.AddSingleton<GitHubTokenProvider>();
+        services.AddSingleton<GitHubPublicCacheIdentity>();
+        services.AddSingleton<GitHubPublicCacheStore>();
         services.AddHostedService<GitHubPublicCacheWarmupService>();
 
         var authentication = services

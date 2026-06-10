@@ -8,7 +8,15 @@ sealed class GitHubPublicCacheWarmupService(
     ILogger<GitHubPublicCacheWarmupService> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-        => await ExecuteWarmupAsync(stoppingToken);
+    {
+        await ExecuteWarmupAsync(stoppingToken);
+
+        using var timer = new PeriodicTimer(GetRefreshInterval(options.Value));
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+        {
+            await ExecuteWarmupAsync(stoppingToken);
+        }
+    }
 
     internal async Task ExecuteWarmupAsync(CancellationToken stoppingToken)
     {
@@ -67,6 +75,11 @@ sealed class GitHubPublicCacheWarmupService(
         string.IsNullOrWhiteSpace(state) || state.Trim().ToLowerInvariant() is not ("open" or "closed" or "all")
             ? "open"
             : state.Trim().ToLowerInvariant();
+
+    private static TimeSpan GetRefreshInterval(GitHubCacheWarmupOptions warmupOptions) =>
+        warmupOptions.RefreshIntervalMinutes <= 0
+            ? GitHubClient.PublicCacheDuration
+            : TimeSpan.FromMinutes(warmupOptions.RefreshIntervalMinutes);
 
     private static bool IsGitHubRateLimit(Exception exception) =>
         exception is GitHubApiException ex

@@ -33,6 +33,10 @@ You can replace that list in the dashboard with any comma-separated `owner/repo`
 
 In development, the server can use an OAuth session, `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`. Outside development, configure `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`; the callback path is `/signin-github`. The OAuth flow requests no GitHub scopes, so it supports public repository API reads without requesting repository or organization permissions.
 
+## Production public cache
+
+Logged-out users read only the shared public cache for repositories in `GitHubCacheWarmup:Repositories`. Configure `GITHUB_PUBLIC_CACHE_TOKEN` or `GitHubCacheWarmup:PublicCacheToken` with a server-owned fine-grained PAT or GitHub App token so the backend can verify allowlisted public visibility and refresh that cache without using anonymous quota or user tokens. The current last-good fallback uses the server memory cache; replace it with durable storage before relying on cache continuity across restarts or multiple backend instances.
+
 ## Build and lint
 
 ```bash

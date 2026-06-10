@@ -1,8 +1,25 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
 
-sealed class GitHubCacheScopeResolver(HttpClient httpClient, GitHubTokenProvider tokenProvider, IMemoryCache cache)
+enum GitHubPublicCacheRepositoryEligibility
+{
+    Public,
+    NotAllowlisted,
+    MissingPublicCacheIdentity,
+    NotPublic,
+    Unverified
+}
+
+sealed class GitHubCacheScopeResolver(
+    HttpClient httpClient,
+    GitHubTokenProvider tokenProvider,
+    GitHubPublicCacheIdentity publicCacheIdentity,
+    GitHubPublicCacheStore publicCacheStore,
+    IOptions<GitHubCacheWarmupOptions> options,
+    IMemoryCache cache)
 {
     internal static readonly TimeSpan PublicVisibilityCacheDuration = TimeSpan.FromHours(1);
     private static readonly TimeSpan UnknownVisibilityCacheDuration = TimeSpan.FromMinutes(2);
@@ -11,24 +28,92 @@ sealed class GitHubCacheScopeResolver(HttpClient httpClient, GitHubTokenProvider
         RepositoryName repositoryName,
         CancellationToken cancellationToken)
     {
-        var visibility = await GetRepositoryVisibilityAsync(repositoryName, cancellationToken);
-        if (visibility == GitHubRepositoryVisibility.Public)
+        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
+        if (authCacheKey.StartsWith("anonymous:", StringComparison.Ordinal)
+            && IsPublicCacheAllowlisted(repositoryName))
         {
-            return GitHubCachePolicy.CreatePublicRepositoryScope();
+            var eligibility = await GetPublicCacheRepositoryEligibilityOrUnverifiedAsync(repositoryName, cancellationToken);
+            if (eligibility == GitHubPublicCacheRepositoryEligibility.Public)
+            {
+                return GitHubCachePolicy.CreatePublicRepositoryScope();
+            }
+
+            if (eligibility == GitHubPublicCacheRepositoryEligibility.NotPublic)
+            {
+                publicCacheStore.RemoveRepository(repositoryName);
+            }
+
+            if (eligibility == GitHubPublicCacheRepositoryEligibility.Unverified
+                && publicCacheStore.HasTrackedSnapshot(repositoryName))
+            {
+                return GitHubCachePolicy.CreatePublicRepositoryScope();
+            }
         }
 
-        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
         return GitHubCachePolicy.CreateTokenScope(authCacheKey);
     }
 
-    public async Task<GitHubRepositoryVisibility> GetRepositoryVisibilityAsync(
+    public async Task<GitHubPublicCacheRepositoryEligibility> GetPublicCacheRepositoryEligibilityOrUnverifiedAsync(
         RepositoryName repositoryName,
         CancellationToken cancellationToken)
     {
-        var cacheKey = $"repo-visibility:{GitHubCachePolicy.NormalizeRepositoryName(repositoryName)}";
-        if (cache.TryGetValue(cacheKey, out GitHubRepositoryVisibility cachedVisibility))
+        try
         {
-            return cachedVisibility;
+            return await GetPublicCacheRepositoryEligibilityAsync(
+                repositoryName,
+                forceRefresh: true,
+                cancellationToken);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsTransientEligibilityFailure(ex))
+        {
+            return GitHubPublicCacheRepositoryEligibility.Unverified;
+        }
+    }
+
+    public bool IsPublicCacheAllowlisted(RepositoryName repositoryName) =>
+        options.Value.Repositories
+            .Select(repository => RepositoryName.TryParse(repository, out var parsedRepository)
+                ? GitHubCachePolicy.NormalizeRepositoryName(parsedRepository)
+                : null)
+            .Contains(
+                GitHubCachePolicy.NormalizeRepositoryName(repositoryName),
+                StringComparer.OrdinalIgnoreCase);
+
+    public async Task<GitHubPublicCacheRepositoryEligibility> GetPublicCacheRepositoryEligibilityAsync(
+        RepositoryName repositoryName,
+        bool forceRefresh,
+        CancellationToken cancellationToken)
+    {
+        if (!IsPublicCacheAllowlisted(repositoryName))
+        {
+            return GitHubPublicCacheRepositoryEligibility.NotAllowlisted;
+        }
+
+        if (publicCacheIdentity.GetToken() is null)
+        {
+            return GitHubPublicCacheRepositoryEligibility.MissingPublicCacheIdentity;
+        }
+
+        var result = await GetRepositoryVisibilityResultAsync(repositoryName, forceRefresh, cancellationToken);
+        return result.Visibility switch
+        {
+            GitHubRepositoryVisibility.Public => GitHubPublicCacheRepositoryEligibility.Public,
+            GitHubRepositoryVisibility.Private or GitHubRepositoryVisibility.Internal => GitHubPublicCacheRepositoryEligibility.NotPublic,
+            GitHubRepositoryVisibility.Unknown when result.CacheDuration is null => GitHubPublicCacheRepositoryEligibility.Unverified,
+            _ => GitHubPublicCacheRepositoryEligibility.NotPublic
+        };
+    }
+
+    private async Task<RepositoryVisibilityProbeResult> GetRepositoryVisibilityResultAsync(
+        RepositoryName repositoryName,
+        bool forceRefresh,
+        CancellationToken cancellationToken)
+    {
+        var cacheKey = $"repo-visibility:{GitHubCachePolicy.NormalizeRepositoryName(repositoryName)}";
+        if (!forceRefresh
+            && cache.TryGetValue(cacheKey, out GitHubRepositoryVisibility cachedVisibility))
+        {
+            return new RepositoryVisibilityProbeResult(cachedVisibility, UnknownVisibilityCacheDuration);
         }
 
         var result = await ProbeRepositoryVisibilityAsync(repositoryName, cancellationToken);
@@ -37,7 +122,7 @@ sealed class GitHubCacheScopeResolver(HttpClient httpClient, GitHubTokenProvider
             cache.Set(cacheKey, result.Visibility, CreateVisibilityCacheOptions(cacheDuration));
         }
 
-        return result.Visibility;
+        return result;
     }
 
     private async Task<RepositoryVisibilityProbeResult> ProbeRepositoryVisibilityAsync(
@@ -47,9 +132,14 @@ sealed class GitHubCacheScopeResolver(HttpClient httpClient, GitHubTokenProvider
         try
         {
             var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}";
+            var token = publicCacheIdentity.GetToken()
+                ?? throw new GitHubApiException(
+                    HttpStatusCode.ServiceUnavailable,
+                    "GitHub public cache refresh is not configured with a server token.");
             for (var redirectCount = 0; redirectCount <= GitHubHttpRedirects.MaxRedirects; redirectCount++)
             {
                 using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Value);
                 using var response = await httpClient.SendAsync(
                     request,
                     HttpCompletionOption.ResponseHeadersRead,
@@ -63,9 +153,14 @@ sealed class GitHubCacheScopeResolver(HttpClient httpClient, GitHubTokenProvider
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    return response.StatusCode == HttpStatusCode.NotFound
-                        ? UnknownVisibility(cacheable: true)
-                        : UnknownVisibility(cacheable: false);
+                    if (response.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        return UnknownVisibility(cacheable: true);
+                    }
+
+                    throw new GitHubApiException(
+                        response.StatusCode,
+                        $"GitHub API returned {(int)response.StatusCode} while verifying public cache repository visibility.");
                 }
 
                 var repository = await response.Content.ReadFromJsonAsync(
@@ -113,6 +208,16 @@ sealed class GitHubCacheScopeResolver(HttpClient httpClient, GitHubTokenProvider
             or TimeoutException
             or OperationCanceledException
             or System.Text.Json.JsonException;
+
+    private static bool IsTransientEligibilityFailure(Exception exception) =>
+        exception is GitHubApiException ex
+            && ex.StatusCode is (HttpStatusCode.Forbidden
+                or HttpStatusCode.RequestTimeout
+                or HttpStatusCode.TooManyRequests
+                or HttpStatusCode.InternalServerError
+                or HttpStatusCode.BadGateway
+                or HttpStatusCode.ServiceUnavailable
+                or HttpStatusCode.GatewayTimeout);
 
     private readonly record struct RepositoryVisibilityProbeResult(
         GitHubRepositoryVisibility Visibility,
