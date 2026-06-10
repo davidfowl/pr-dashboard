@@ -9,6 +9,8 @@ using Microsoft.Extensions.Caching.Memory;
 sealed partial class GitHubClient(
     HttpClient httpClient,
     GitHubTokenProvider tokenProvider,
+    GitHubPublicCacheIdentity publicCacheIdentity,
+    GitHubPublicCacheStore publicCacheStore,
     GitHubCacheScopeResolver cacheScopeResolver,
     IMemoryCache cache,
     IHostEnvironment environment)
@@ -33,50 +35,27 @@ sealed partial class GitHubClient(
         CancellationToken cancellationToken) =>
         await cacheScopeResolver.GetRepositoryScopeAsync(repositoryName, cancellationToken);
 
-    private async Task<GitHubCacheScope> GetRepositoryCacheScopeAsync(
-        RepositoryName repositoryName,
-        bool useTokenOverlayForSharedRefresh,
-        CancellationToken cancellationToken)
-    {
-        var selection = await GetRepositoryCacheScopeSelectionAsync(
-            repositoryName,
-            useTokenOverlayForSharedRefresh,
-            cancellationToken);
-        return selection.Scope;
-    }
-
     private async Task<RepositoryCacheScopeSelection> GetRepositoryCacheScopeSelectionAsync(
         RepositoryName repositoryName,
-        bool useTokenOverlayForSharedRefresh,
+        bool forceRefresh,
         CancellationToken cancellationToken)
     {
         var scope = await GetRepositoryCacheScopeAsync(repositoryName, cancellationToken);
-        if (!useTokenOverlayForSharedRefresh || !scope.IsShared)
+        if (scope.IsShared)
         {
             return new RepositoryCacheScopeSelection(
                 scope,
                 SharedFallbackScope: null,
-                Refresh: useTokenOverlayForSharedRefresh && !scope.IsShared);
+                Refresh: false,
+                CacheOnly: true);
         }
 
-        var tokenScope = await TryCreateTokenScopeAsync(cancellationToken);
-        return tokenScope is null
-            ? new RepositoryCacheScopeSelection(scope, SharedFallbackScope: null, Refresh: false)
-            : new RepositoryCacheScopeSelection(tokenScope.Value, scope, Refresh: true);
+        return new RepositoryCacheScopeSelection(
+            scope,
+            SharedFallbackScope: null,
+            Refresh: forceRefresh,
+            CacheOnly: false);
     }
-
-    private async Task<GitHubCacheScope?> TryCreateTokenScopeAsync(CancellationToken cancellationToken)
-    {
-        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
-        return authCacheKey.StartsWith("anonymous:", StringComparison.Ordinal)
-            ? null
-            : GitHubCachePolicy.CreateTokenScope(authCacheKey);
-    }
-
-    private async Task<GitHubRepositoryVisibility> GetRepositoryVisibilityAsync(
-        RepositoryName repositoryName,
-        CancellationToken cancellationToken) =>
-        await cacheScopeResolver.GetRepositoryVisibilityAsync(repositoryName, cancellationToken);
 
     private static string CreateRepositoryCacheKey(
         GitHubCacheScope scope,
@@ -178,6 +157,7 @@ sealed partial class GitHubClient(
         string cacheKey,
         TimeSpan cacheDuration,
         bool refresh,
+        bool cacheOnly,
         Func<Task<T>> factory,
         CancellationToken cancellationToken,
         Func<T, bool>? storeLastGood = null,
@@ -191,9 +171,25 @@ sealed partial class GitHubClient(
             return cachedValue!;
         }
 
-        if (!refresh && TryGetCachedFallback(transientFallbackCacheKey, out T? cachedFallback))
+        if (cacheOnly)
         {
-            return cachedFallback!;
+            if (TryGetLastGood(cacheKey, out T? lastGood))
+            {
+                return lastGood!;
+            }
+
+            if (TryGetCachedFallback(transientFallbackCacheKey, out T? cachedFallback))
+            {
+                return cachedFallback!;
+            }
+
+            if (transientFallbackCacheKey is not null
+                && TryGetLastGood(transientFallbackCacheKey, out T? fallbackLastGood))
+            {
+                return fallbackLastGood!;
+            }
+
+            throw CreatePublicCacheUnavailableException();
         }
 
         try
@@ -234,6 +230,7 @@ sealed partial class GitHubClient(
         string cacheKey,
         TimeSpan cacheDuration,
         bool refresh,
+        bool cacheOnly,
         Func<Task<T?>> factory,
         CancellationToken cancellationToken,
         Func<T, TimeSpan>? cacheDurationSelector = null,
@@ -246,9 +243,25 @@ sealed partial class GitHubClient(
             return cachedValue;
         }
 
-        if (!refresh && TryGetCachedFallback(transientFallbackCacheKey, out T? cachedFallback))
+        if (cacheOnly)
         {
-            return cachedFallback;
+            if (TryGetLastGood(cacheKey, out T? lastGood))
+            {
+                return lastGood;
+            }
+
+            if (TryGetCachedFallback(transientFallbackCacheKey, out T? cachedFallback))
+            {
+                return cachedFallback;
+            }
+
+            if (transientFallbackCacheKey is not null
+                && TryGetLastGood(transientFallbackCacheKey, out T? fallbackLastGood))
+            {
+                return fallbackLastGood;
+            }
+
+            throw CreatePublicCacheUnavailableException();
         }
 
         try
@@ -300,7 +313,13 @@ sealed partial class GitHubClient(
     private readonly record struct RepositoryCacheScopeSelection(
         GitHubCacheScope Scope,
         GitHubCacheScope? SharedFallbackScope,
-        bool Refresh);
+        bool Refresh,
+        bool CacheOnly);
+
+    private static GitHubApiException CreatePublicCacheUnavailableException() =>
+        new(
+            HttpStatusCode.ServiceUnavailable,
+            "The shared public GitHub cache is warming or temporarily unavailable. Sign in with GitHub to load live data.");
 
     private static bool IsTransientGitHubFailure(Exception exception, CancellationToken cancellationToken) =>
         !cancellationToken.IsCancellationRequested
@@ -364,6 +383,7 @@ sealed partial class GitHubClient(
             state,
             scopeSelection.Refresh,
             scopeSelection.Scope,
+            scopeSelection.CacheOnly,
             CreateSharedFallbackCacheKey(scopeSelection.SharedFallbackScope, repositoryName, "pulls", state),
             cancellationToken);
     }
@@ -373,19 +393,36 @@ sealed partial class GitHubClient(
         string state,
         CancellationToken cancellationToken)
     {
-        var scope = await GetRepositoryCacheScopeAsync(repositoryName, cancellationToken);
-        if (!scope.IsShared)
+        var eligibility = await cacheScopeResolver.GetPublicCacheRepositoryEligibilityAsync(
+            repositoryName,
+            forceRefresh: true,
+            cancellationToken);
+        if (eligibility != GitHubPublicCacheRepositoryEligibility.Public)
         {
+            if (eligibility is GitHubPublicCacheRepositoryEligibility.NotAllowlisted
+                or GitHubPublicCacheRepositoryEligibility.NotPublic)
+            {
+                publicCacheStore.RemoveRepository(repositoryName);
+            }
+
             return false;
         }
 
+        var scope = GitHubCachePolicy.CreatePublicRepositoryScope();
+        var cacheKey = CreateRepositoryCacheKey(
+            scope,
+            repositoryName,
+            "pulls",
+            state);
         await GetPullRequestsAsync(
             repositoryName,
             state,
-            forceRefresh: false,
+            forceRefresh: true,
             scope,
+            cacheOnly: false,
             transientFallbackCacheKey: null,
             cancellationToken);
+        publicCacheStore.Track(repositoryName, cacheKey);
         return true;
     }
 
@@ -394,6 +431,7 @@ sealed partial class GitHubClient(
         string state,
         bool forceRefresh,
         GitHubCacheScope scope,
+        bool cacheOnly,
         string? transientFallbackCacheKey,
         CancellationToken cancellationToken)
     {
@@ -407,6 +445,7 @@ sealed partial class GitHubClient(
             cacheKey,
             CacheDurationForScope(scope),
             refreshCache,
+            cacheOnly,
             async () =>
         {
             var sort = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "created" : "updated";
@@ -420,6 +459,11 @@ sealed partial class GitHubClient(
             var activePullRequestDtos = pullRequestDtos
                 .Where(pullRequest => !pullRequest.Draft)
                 .ToArray();
+            if (scope.IsShared)
+            {
+                return CreatePullRequestBaselineSummaries(activePullRequestDtos);
+            }
+
             var mergeableStateEnrichmentNumbers = activePullRequestDtos
                 .Select(pullRequest => pullRequest.Number)
                 .ToHashSet();
@@ -462,6 +506,24 @@ sealed partial class GitHubClient(
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return pullRequest;
+            }
+
+            yield break;
+        }
+
+        if (scopeSelection.CacheOnly)
+        {
+            if (!TryGetLastGood(cacheKey, out IReadOnlyList<PullRequestSummary>? cacheOnlyPullRequests)
+                && !TryGetCachedFallback(transientFallbackCacheKey, out cacheOnlyPullRequests)
+                && (transientFallbackCacheKey is null || !TryGetLastGood(transientFallbackCacheKey, out cacheOnlyPullRequests)))
+            {
+                throw CreatePublicCacheUnavailableException();
+            }
+
+            foreach (var stalePullRequest in cacheOnlyPullRequests!)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return stalePullRequest;
             }
 
             yield break;
@@ -562,8 +624,14 @@ sealed partial class GitHubClient(
             cacheKey,
             CacheDurationForScope(scope),
             refreshCache,
+            scopeSelection.CacheOnly,
             async () =>
         {
+            if (scope.IsShared)
+            {
+                throw CreatePublicCacheUnavailableException();
+            }
+
             var sort = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "created" : "updated";
             var direction = state.Equals("open", StringComparison.OrdinalIgnoreCase) ? "asc" : "desc";
             var issues = await GetIssuesAsync(
@@ -653,6 +721,24 @@ sealed partial class GitHubClient(
             yield break;
         }
 
+        if (scopeSelection.CacheOnly)
+        {
+            if (!TryGetLastGood(cacheKey, out IReadOnlyList<PullRequestSummary>? cacheOnlyPullRequests)
+                && !TryGetCachedFallback(transientFallbackCacheKey, out cacheOnlyPullRequests)
+                && (transientFallbackCacheKey is null || !TryGetLastGood(transientFallbackCacheKey, out cacheOnlyPullRequests)))
+            {
+                throw CreatePublicCacheUnavailableException();
+            }
+
+            foreach (var stalePullRequest in cacheOnlyPullRequests!)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return stalePullRequest;
+            }
+
+            yield break;
+        }
+
         IReadOnlyList<PullRequestSummary>? stalePullRequests = null;
         var streamedPullRequests = new List<PullRequestSummary>();
         await using var enumerator = CreatePullRequestSummariesInBatchesAsync(
@@ -737,8 +823,14 @@ sealed partial class GitHubClient(
             cacheKey,
             CacheDurationForScope(scope),
             refreshCache,
+            scopeSelection.CacheOnly,
             async () =>
         {
+            if (scope.IsShared)
+            {
+                throw CreatePublicCacheUnavailableException();
+            }
+
             var regressionIssuesTask = GetIssuesMatchingLabelMarkerAsync(
                 repositoryName,
                 state,
@@ -801,8 +893,14 @@ sealed partial class GitHubClient(
             cacheKey,
             CacheDurationForScope(scope),
             refreshCache,
+            scopeSelection.CacheOnly,
             async () =>
         {
+            if (scope.IsShared)
+            {
+                throw CreatePublicCacheUnavailableException();
+            }
+
             var milestone = await GetMilestoneByTitleAsync(repositoryName, normalizedMilestoneTitle, scope, cancellationToken);
             if (milestone is null)
             {
@@ -1117,7 +1215,7 @@ sealed partial class GitHubClient(
 
         var reviewTasks = pullRequests.ToDictionary(
             pullRequest => pullRequest.Number,
-            pullRequest => GetReviewStatusAsync(repositoryName, pullRequest.Number, forceRefresh, scope, cancellationToken));
+            pullRequest => GetReviewStatusAsync(repositoryName, pullRequest.Number, forceRefresh, scope, cacheOnly: false, cancellationToken));
         var linkedIssueTasks = uniquePullRequestDtos.ToDictionary(
             pullRequest => pullRequest.Number,
             pullRequest => GetLinkedIssuesAsync(repositoryName, pullRequest.Body, forceRefresh, scope, cancellationToken));
@@ -1184,6 +1282,20 @@ sealed partial class GitHubClient(
                     Review = reviewsByPullRequest[pullRequest.Number],
                     Checks = pullRequest.Checks
                 };
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<PullRequestSummary> CreatePullRequestBaselineSummaries(
+        IReadOnlyList<GitHubPullRequestDto> pullRequestDtos)
+    {
+        var fetchedAt = DateTimeOffset.UtcNow;
+        return pullRequestDtos
+            .GroupBy(pullRequest => pullRequest.Number)
+            .Select(group => PullRequestSummary.FromDto(group.First()) with
+            {
+                FetchedAt = fetchedAt,
+                Checks = ChecksStatus.None
             })
             .ToArray();
     }
@@ -1361,6 +1473,7 @@ sealed partial class GitHubClient(
             cacheKey,
             TimeSpan.FromMinutes(5),
             refreshCache,
+            cacheOnly: false,
             async () =>
         {
             var labels = await SendPagedGitHubRequestAsync(
@@ -1606,6 +1719,7 @@ sealed partial class GitHubClient(
                 scopeSelection.Refresh,
                 scope,
                 scopeSelection.SharedFallbackScope,
+                scopeSelection.CacheOnly,
                 cancellationToken)));
     }
 
@@ -1616,6 +1730,7 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         GitHubCacheScope scope,
         GitHubCacheScope? sharedFallbackScope,
+        bool cacheOnly,
         CancellationToken cancellationToken)
     {
         await s_checksFetchThrottle.WaitAsync(cancellationToken);
@@ -1630,6 +1745,7 @@ sealed partial class GitHubClient(
                     forceRefresh,
                     scope,
                     CreateSharedFallbackCacheKey(sharedFallbackScope, repositoryName, "checks", headSha),
+                    cacheOnly,
                     cancellationToken));
         }
         finally
@@ -1651,6 +1767,7 @@ sealed partial class GitHubClient(
             scopeSelection.Refresh,
             scopeSelection.Scope,
             CreateSharedFallbackCacheKey(scopeSelection.SharedFallbackScope, repositoryName, "checks", headSha),
+            scopeSelection.CacheOnly,
             cancellationToken);
     }
 
@@ -1660,6 +1777,7 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         GitHubCacheScope scope,
         string? transientFallbackCacheKey,
+        bool cacheOnly,
         CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(headSha))
@@ -1691,6 +1809,7 @@ sealed partial class GitHubClient(
             cacheKey,
             CacheDurationForScope(scope),
             refreshCache,
+            cacheOnly,
             async () =>
         {
             var checkRunsTask = TryGetCheckRunsAsync(repositoryName, headSha, scope, preserveCachedStatusOnTransientFailure, cancellationToken);
@@ -1948,6 +2067,7 @@ sealed partial class GitHubClient(
             number,
             scopeSelection.Refresh,
             scopeSelection.Scope,
+            scopeSelection.CacheOnly,
             cancellationToken);
     }
 
@@ -1956,6 +2076,7 @@ sealed partial class GitHubClient(
         int number,
         bool forceRefresh,
         GitHubCacheScope scope,
+        bool cacheOnly,
         CancellationToken cancellationToken)
     {
         var cacheKey = CreateRepositoryCacheKey(
@@ -1968,6 +2089,7 @@ sealed partial class GitHubClient(
             cacheKey,
             CacheDurationForScope(scope),
             refreshCache,
+            cacheOnly,
             async () =>
         {
             GitHubReviewDto[] reviews;
@@ -2031,6 +2153,7 @@ sealed partial class GitHubClient(
             number,
             scopeSelection.Refresh,
             scopeSelection.Scope,
+            scopeSelection.CacheOnly,
             cancellationToken);
     }
 
@@ -2039,6 +2162,7 @@ sealed partial class GitHubClient(
         int number,
         bool forceRefresh,
         GitHubCacheScope scope,
+        bool cacheOnly,
         CancellationToken cancellationToken)
     {
         var cacheKey = CreateRepositoryCacheKey(
@@ -2051,6 +2175,7 @@ sealed partial class GitHubClient(
             cacheKey,
             CacheDurationForScope(scope),
             refreshCache,
+            cacheOnly,
             async () =>
         {
             // PRs are issues in the GitHub REST API timeline model, so this endpoint returns
@@ -2092,6 +2217,7 @@ sealed partial class GitHubClient(
             scopeSelection.Refresh,
             scopeSelection.Scope,
             CreateSharedFallbackCacheKey(scopeSelection.SharedFallbackScope, repositoryName, "pull", number.ToString()),
+            scopeSelection.CacheOnly,
             cancellationToken);
     }
 
@@ -2101,6 +2227,7 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         GitHubCacheScope scope,
         string? transientFallbackCacheKey,
+        bool cacheOnly,
         CancellationToken cancellationToken)
     {
         var cacheKey = CreateRepositoryCacheKey(
@@ -2113,6 +2240,7 @@ sealed partial class GitHubClient(
             cacheKey,
             CacheDurationForScope(scope),
             refreshCache,
+            cacheOnly,
             async () =>
         {
             var pullRequest = await SendGitHubRequestAsync(
@@ -2142,6 +2270,7 @@ sealed partial class GitHubClient(
                 forceRefresh,
                 scope,
                 transientFallbackCacheKey: null,
+                cacheOnly: false,
                 cancellationToken);
         }
         catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
@@ -2168,6 +2297,7 @@ sealed partial class GitHubClient(
             cacheKey,
             CacheDurationForScope(scope),
             refreshCache,
+            cacheOnly: false,
             async () =>
         {
             var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}/commits?per_page=100";
@@ -2260,8 +2390,7 @@ sealed partial class GitHubClient(
 
         if (sourceScope.IsShared)
         {
-            var linkedVisibility = await GetRepositoryVisibilityAsync(linkedRepositoryName, cancellationToken);
-            return linkedVisibility == GitHubRepositoryVisibility.Public
+            return cacheScopeResolver.IsPublicCacheAllowlisted(linkedRepositoryName)
                 ? GitHubCachePolicy.CreatePublicRepositoryScope()
                 : null;
         }
@@ -2286,6 +2415,7 @@ sealed partial class GitHubClient(
             cacheKey,
             CacheDurationForScope(scope),
             refreshCache,
+            cacheOnly: false,
             async () =>
         {
             GitHubIssueDto issue;
@@ -2301,6 +2431,10 @@ sealed partial class GitHubClient(
             {
                 // Linked issues are enrichment-only. GitHub returns 404 for deleted, private, or
                 // accidentally parsed same-repo references, so skip them instead of failing the list.
+                return null;
+            }
+            catch (Exception ex) when (IsTransientGitHubFailure(ex, cancellationToken))
+            {
                 return null;
             }
 
@@ -2431,6 +2565,16 @@ sealed partial class GitHubClient(
                     environment.IsDevelopment()
                         ? "GitHub authentication is required. Set GITHUB_TOKEN or GH_TOKEN, run `gh auth login`, or sign in with GitHub."
                         : "GitHub authentication is required. Sign in with GitHub.");
+            }
+        }
+        else if (authorization == GitHubRequestAuthorization.PublicCacheToken)
+        {
+            token = publicCacheIdentity.GetToken();
+            if (token is null)
+            {
+                throw new GitHubApiException(
+                    HttpStatusCode.ServiceUnavailable,
+                    "GitHub public cache refresh is not configured with a server token.");
             }
         }
 

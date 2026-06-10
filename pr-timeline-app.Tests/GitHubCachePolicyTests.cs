@@ -20,30 +20,26 @@ public sealed class GitHubCachePolicyTests
     }
 
     [Fact]
-    public void PublicRepositoryScopeUsesSharedAnonymousLane()
+    public void PublicRepositoryScopeUsesSharedServerPublicCacheLane()
     {
         const string authCacheKey = "oauth:abcdef0123456789:0";
 
-        var scope = GitHubCachePolicy.CreateRepositoryScope(authCacheKey, GitHubRepositoryVisibility.Public);
+        var scope = GitHubCachePolicy.CreatePublicRepositoryScope();
         var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(scope, MixedCaseRepository, "pulls", "open");
 
         Assert.Equal(GitHubCacheScopeKind.Public, scope.Kind);
         Assert.True(scope.IsShared);
-        Assert.Equal(GitHubRequestAuthorization.Anonymous, scope.RequestAuthorization);
+        Assert.Equal(GitHubRequestAuthorization.PublicCacheToken, scope.RequestAuthorization);
         Assert.Equal("pulls:public:example/repo:open", cacheKey);
         Assert.DoesNotContain(authCacheKey, cacheKey, StringComparison.Ordinal);
     }
 
-    [Theory]
-    [InlineData(nameof(GitHubRepositoryVisibility.Unknown))]
-    [InlineData(nameof(GitHubRepositoryVisibility.Private))]
-    [InlineData(nameof(GitHubRepositoryVisibility.Internal))]
-    public void NonPublicRepositoryScopeUsesTokenLane(string visibilityName)
+    [Fact]
+    public void TokenRepositoryScopeUsesTokenLane()
     {
         const string authCacheKey = "oauth:abcdef0123456789:0";
-        var visibility = Enum.Parse<GitHubRepositoryVisibility>(visibilityName);
 
-        var scope = GitHubCachePolicy.CreateRepositoryScope(authCacheKey, visibility);
+        var scope = GitHubCachePolicy.CreateTokenScope(authCacheKey);
         var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(scope, MixedCaseRepository, "pulls", "open");
 
         Assert.Equal(GitHubCacheScopeKind.Token, scope.Kind);
@@ -76,7 +72,8 @@ public sealed class GitHubCachePolicyTests
 
     [Theory]
     [InlineData(nameof(GitHubCacheScopeKind.Public), "public", nameof(GitHubRequestAuthorization.Token))]
-    [InlineData(nameof(GitHubCacheScopeKind.Public), "token:oauth:abcdef0123456789:0", nameof(GitHubRequestAuthorization.Anonymous))]
+    [InlineData(nameof(GitHubCacheScopeKind.Public), "public", nameof(GitHubRequestAuthorization.Anonymous))]
+    [InlineData(nameof(GitHubCacheScopeKind.Public), "token:oauth:abcdef0123456789:0", nameof(GitHubRequestAuthorization.PublicCacheToken))]
     [InlineData(nameof(GitHubCacheScopeKind.Token), "token:oauth:abcdef0123456789:0", nameof(GitHubRequestAuthorization.Anonymous))]
     [InlineData(nameof(GitHubCacheScopeKind.Token), "public", nameof(GitHubRequestAuthorization.Token))]
     [InlineData(nameof(GitHubCacheScopeKind.User), "user:oauth:abcdef0123456789:0", nameof(GitHubRequestAuthorization.Anonymous))]

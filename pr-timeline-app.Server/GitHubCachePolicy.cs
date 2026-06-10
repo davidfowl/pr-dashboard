@@ -16,6 +16,7 @@ enum GitHubCacheScopeKind
 enum GitHubRequestAuthorization
 {
     Token,
+    PublicCacheToken,
     Anonymous
 }
 
@@ -49,9 +50,9 @@ readonly record struct GitHubCacheScope
 
         if (IsShared)
         {
-            if (RequestAuthorization != GitHubRequestAuthorization.Anonymous)
+            if (RequestAuthorization != GitHubRequestAuthorization.PublicCacheToken)
             {
-                throw new ArgumentException("Public cache scopes must use anonymous GitHub requests.");
+                throw new ArgumentException("Public cache scopes must use the server public-cache GitHub identity.");
             }
 
             if (!KeyPrefix.Equals("public", StringComparison.Ordinal))
@@ -109,14 +110,7 @@ static class GitHubCachePolicy
         new(
             GitHubCacheScopeKind.Public,
             "public",
-            GitHubRequestAuthorization.Anonymous);
-
-    public static GitHubCacheScope CreateRepositoryScope(
-        string authCacheKey,
-        GitHubRepositoryVisibility visibility) =>
-        visibility == GitHubRepositoryVisibility.Public
-            ? CreatePublicRepositoryScope()
-            : CreateTokenScope(authCacheKey);
+            GitHubRequestAuthorization.PublicCacheToken);
 
     public static GitHubRepositoryVisibility ClassifyRepositoryVisibility(string? visibility) =>
         visibility?.Trim().ToLowerInvariant() switch

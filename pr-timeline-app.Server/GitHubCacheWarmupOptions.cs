@@ -8,5 +8,9 @@ sealed class GitHubCacheWarmupOptions
 
     public string State { get; init; } = "open";
 
+    public int RefreshIntervalMinutes { get; init; } = 60;
+
+    public string? PublicCacheToken { get; init; }
+
     public string[] Repositories { get; init; } = [];
 }
