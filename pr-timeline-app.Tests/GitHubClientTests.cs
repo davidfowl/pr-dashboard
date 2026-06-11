@@ -1909,6 +1909,118 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullRequestChecksUsesLatestRunWhenSameShaHasRerunChecks()
+    {
+        // A re-triggered workflow leaves an older failing run and a newer passing run with the same
+        // name on the same head SHA. GitHub's check-runs API returns both; the rollup must count only
+        // the latest run per name (newer started_at), matching GitHub's own PR check rollup.
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/commits/rerun/check-runs?filter=latest&per_page=100" => Json(
+                """
+                {
+                  "total_count": 4,
+                  "check_runs": [
+                    { "id": 11, "name": "Tests / Final Test Results", "status": "completed", "conclusion": "success", "started_at": "2026-06-10T22:56:39Z", "completed_at": "2026-06-10T23:00:00Z" },
+                    { "id": 12, "name": "Tests / Final Test Results", "status": "completed", "conclusion": "failure", "started_at": "2026-06-09T23:13:08Z", "completed_at": "2026-06-09T23:14:21Z", "html_url": "https://ci.example/stale" },
+                    { "id": 13, "name": "Tests / Qdrant.Client", "status": "completed", "conclusion": "failure", "started_at": "2026-06-09T22:54:35Z", "completed_at": "2026-06-09T22:56:21Z", "html_url": "https://ci.example/stale-qdrant" },
+                    { "id": 14, "name": "Tests / Qdrant.Client", "status": "completed", "conclusion": "success", "started_at": "2026-06-10T01:12:30Z", "completed_at": "2026-06-10T01:20:00Z" }
+                  ]
+                }
+                """),
+            "repos/example/repo/commits/rerun/status?per_page=100" => Json(
+                """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestChecksAsync(
+            new RepositoryName("example", "repo"),
+            [new PullRequestChecksRequestItem(1, "rerun")],
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("success", pullRequest.Checks.State);
+        Assert.Equal(2, pullRequest.Checks.TotalCount);
+        Assert.Equal(2, pullRequest.Checks.SuccessCount);
+        Assert.Equal(0, pullRequest.Checks.FailureCount);
+        Assert.Empty(pullRequest.Checks.FailingChecks);
+    }
+
+    [Fact]
+    public async Task PullRequestChecksReportsFailureWhenLatestRerunFails()
+    {
+        // Inverse of the re-run case: the newer run is the failing one. Dedup must keep the latest by
+        // started_at, so the rollup is failure even though an older run for the same name passed.
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/commits/regress/check-runs?filter=latest&per_page=100" => Json(
+                """
+                {
+                  "total_count": 2,
+                  "check_runs": [
+                    { "id": 21, "name": "build", "status": "completed", "conclusion": "success", "started_at": "2026-06-09T10:00:00Z", "completed_at": "2026-06-09T10:05:00Z" },
+                    { "id": 22, "name": "build", "status": "completed", "conclusion": "failure", "started_at": "2026-06-10T10:00:00Z", "completed_at": "2026-06-10T10:05:00Z", "html_url": "https://ci.example/build-rerun" }
+                  ]
+                }
+                """),
+            "repos/example/repo/commits/regress/status?per_page=100" => Json(
+                """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestChecksAsync(
+            new RepositoryName("example", "repo"),
+            [new PullRequestChecksRequestItem(1, "regress")],
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("failure", pullRequest.Checks.State);
+        Assert.Equal(1, pullRequest.Checks.TotalCount);
+        Assert.Equal(1, pullRequest.Checks.FailureCount);
+        var failing = Assert.Single(pullRequest.Checks.FailingChecks);
+        Assert.Equal("build", failing.Name);
+        Assert.Equal("https://ci.example/build-rerun", failing.HtmlUrl);
+    }
+
+    [Fact]
+    public async Task PullRequestChecksDoesNotCollapseRunsWithEmptyNames()
+    {
+        // Dedup groups only by name. If the API returns blank names, those runs must be treated as
+        // distinct (like null names) rather than collapsed under a shared empty-string key — otherwise
+        // a passing blank-named run could hide a failing one.
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/commits/blank/check-runs?filter=latest&per_page=100" => Json(
+                """
+                {
+                  "total_count": 2,
+                  "check_runs": [
+                    { "id": 31, "name": "", "status": "completed", "conclusion": "success", "started_at": "2026-06-10T10:00:00Z", "completed_at": "2026-06-10T10:05:00Z" },
+                    { "id": 32, "name": "", "status": "completed", "conclusion": "failure", "started_at": "2026-06-09T10:00:00Z", "completed_at": "2026-06-09T10:05:00Z", "html_url": "https://ci.example/blank-fail" }
+                  ]
+                }
+                """),
+            "repos/example/repo/commits/blank/status?per_page=100" => Json(
+                """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestChecksAsync(
+            new RepositoryName("example", "repo"),
+            [new PullRequestChecksRequestItem(1, "blank")],
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("failure", pullRequest.Checks.State);
+        Assert.Equal(2, pullRequest.Checks.TotalCount);
+        Assert.Equal(1, pullRequest.Checks.SuccessCount);
+        Assert.Equal(1, pullRequest.Checks.FailureCount);
+    }
+
+    [Fact]
     public async Task PullListSkipsChecksWhenStateIsClosed()
     {
         var client = CreateClient(path => path switch
