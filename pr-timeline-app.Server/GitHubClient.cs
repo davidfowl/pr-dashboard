@@ -1838,8 +1838,90 @@ sealed partial class GitHubClient(
     private static readonly TimeSpan FailingChecksCacheDuration = TimeSpan.FromSeconds(20);
     private const int MaxFailingChecksTracked = 5;
 
+    // Returns one check run per name — the most recent by started_at (tie-break completed_at, then
+    // id) — mirroring how GitHub's PR check rollup ignores superseded runs from earlier suites.
+    // Runs without a name are never collapsed together since name is the only identity we can group
+    // on; in practice GitHub always names check runs.
+    private static IReadOnlyList<GitHubCheckRunDto> DeduplicateLatestCheckRuns(IReadOnlyList<GitHubCheckRunDto> checkRuns)
+    {
+        if (checkRuns.Count <= 1)
+        {
+            return checkRuns;
+        }
+
+        var latestByName = new Dictionary<string, GitHubCheckRunDto>(StringComparer.Ordinal);
+        var hasDuplicates = false;
+        foreach (var run in checkRuns)
+        {
+            if (run.Name is null)
+            {
+                continue;
+            }
+
+            if (latestByName.TryGetValue(run.Name, out var existing))
+            {
+                hasDuplicates = true;
+                if (IsMoreRecentRun(run, existing))
+                {
+                    latestByName[run.Name] = run;
+                }
+            }
+            else
+            {
+                latestByName[run.Name] = run;
+            }
+        }
+
+        if (!hasDuplicates)
+        {
+            return checkRuns;
+        }
+
+        // Emit one entry per name in first-appearance order, plus any unnamed runs in place, so the
+        // resulting rollup (and the capped failing-checks list) stays deterministic.
+        var deduplicated = new List<GitHubCheckRunDto>(latestByName.Count);
+        var emitted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var run in checkRuns)
+        {
+            if (run.Name is null)
+            {
+                deduplicated.Add(run);
+            }
+            else if (emitted.Add(run.Name))
+            {
+                deduplicated.Add(latestByName[run.Name]);
+            }
+        }
+
+        return deduplicated;
+    }
+
+    private static bool IsMoreRecentRun(GitHubCheckRunDto candidate, GitHubCheckRunDto existing)
+    {
+        var byStarted = Nullable.Compare(candidate.StartedAt, existing.StartedAt);
+        if (byStarted != 0)
+        {
+            return byStarted > 0;
+        }
+
+        var byCompleted = Nullable.Compare(candidate.CompletedAt, existing.CompletedAt);
+        if (byCompleted != 0)
+        {
+            return byCompleted > 0;
+        }
+
+        return candidate.Id > existing.Id;
+    }
+
     private static ChecksStatus MergeChecks(IReadOnlyList<GitHubCheckRunDto> checkRuns, IReadOnlyList<GitHubStatusDto> statuses)
     {
+        // A re-run or re-triggered workflow leaves the older check runs with the same name attached
+        // to the same head SHA. GitHub's check-runs API returns every one of them (filter=latest only
+        // dedupes within a single check suite, not across re-triggered suites), but GitHub's own PR
+        // rollup considers only the most recent run per check name. Collapse to the latest run per
+        // name first so a since-fixed re-run is not still counted as failing.
+        checkRuns = DeduplicateLatestCheckRuns(checkRuns);
+
         var success = 0;
         var failure = 0;
         var pending = 0;
