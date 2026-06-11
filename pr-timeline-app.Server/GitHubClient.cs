@@ -1840,8 +1840,8 @@ sealed partial class GitHubClient(
 
     // Returns one check run per name — the most recent by started_at (tie-break completed_at, then
     // id) — mirroring how GitHub's PR check rollup ignores superseded runs from earlier suites.
-    // Runs without a name are never collapsed together since name is the only identity we can group
-    // on; in practice GitHub always names check runs.
+    // Runs without a (non-whitespace) name are never collapsed together since name is the only
+    // identity we can group on; in practice GitHub always names check runs.
     private static IReadOnlyList<GitHubCheckRunDto> DeduplicateLatestCheckRuns(IReadOnlyList<GitHubCheckRunDto> checkRuns)
     {
         if (checkRuns.Count <= 1)
@@ -1850,11 +1850,13 @@ sealed partial class GitHubClient(
         }
 
         var latestByName = new Dictionary<string, GitHubCheckRunDto>(StringComparer.Ordinal);
+        var unnamedCount = 0;
         var hasDuplicates = false;
         foreach (var run in checkRuns)
         {
-            if (run.Name is null)
+            if (string.IsNullOrWhiteSpace(run.Name))
             {
+                unnamedCount++;
                 continue;
             }
 
@@ -1879,11 +1881,11 @@ sealed partial class GitHubClient(
 
         // Emit one entry per name in first-appearance order, plus any unnamed runs in place, so the
         // resulting rollup (and the capped failing-checks list) stays deterministic.
-        var deduplicated = new List<GitHubCheckRunDto>(latestByName.Count);
+        var deduplicated = new List<GitHubCheckRunDto>(latestByName.Count + unnamedCount);
         var emitted = new HashSet<string>(StringComparer.Ordinal);
         foreach (var run in checkRuns)
         {
-            if (run.Name is null)
+            if (string.IsNullOrWhiteSpace(run.Name))
             {
                 deduplicated.Add(run);
             }

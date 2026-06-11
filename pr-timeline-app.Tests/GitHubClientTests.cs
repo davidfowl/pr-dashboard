@@ -1985,6 +1985,42 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullRequestChecksDoesNotCollapseRunsWithEmptyNames()
+    {
+        // Dedup groups only by name. If the API returns blank names, those runs must be treated as
+        // distinct (like null names) rather than collapsed under a shared empty-string key — otherwise
+        // a passing blank-named run could hide a failing one.
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/commits/blank/check-runs?filter=latest&per_page=100" => Json(
+                """
+                {
+                  "total_count": 2,
+                  "check_runs": [
+                    { "id": 31, "name": "", "status": "completed", "conclusion": "success", "started_at": "2026-06-10T10:00:00Z", "completed_at": "2026-06-10T10:05:00Z" },
+                    { "id": 32, "name": "", "status": "completed", "conclusion": "failure", "started_at": "2026-06-09T10:00:00Z", "completed_at": "2026-06-09T10:05:00Z", "html_url": "https://ci.example/blank-fail" }
+                  ]
+                }
+                """),
+            "repos/example/repo/commits/blank/status?per_page=100" => Json(
+                """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestChecksAsync(
+            new RepositoryName("example", "repo"),
+            [new PullRequestChecksRequestItem(1, "blank")],
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("failure", pullRequest.Checks.State);
+        Assert.Equal(2, pullRequest.Checks.TotalCount);
+        Assert.Equal(1, pullRequest.Checks.SuccessCount);
+        Assert.Equal(1, pullRequest.Checks.FailureCount);
+    }
+
+    [Fact]
     public async Task PullListSkipsChecksWhenStateIsClosed()
     {
         var client = CreateClient(path => path switch
