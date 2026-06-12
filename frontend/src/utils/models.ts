@@ -1646,5 +1646,6 @@ function isBotAuthor(author: string) {
   return normalized.endsWith('[bot]')
     || normalized.includes('bot')
     || normalized === 'copilot'
+    || normalized.endsWith('/copilot')
     || normalized === 'github-actions';
 }
