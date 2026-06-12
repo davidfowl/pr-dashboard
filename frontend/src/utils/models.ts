@@ -134,7 +134,15 @@ export function createForMeItems(pullRequests: PullRequestSummary[], login?: str
 
 function createPersonalPick(pullRequest: PullRequestSummary, login: string): PickItem | null {
   if (hasMergeConflicts(pullRequest)) {
-    return null;
+    return sameLogin(pullRequest.author, login)
+      ? {
+        pullRequest,
+        action: 'Resolve conflicts',
+        reason: `Your PR has merge conflicts · ${pickReason(pullRequest)}`,
+        tone: 'danger',
+        personal: true,
+      }
+      : null;
   }
 
   if (hasNeedsAuthorActionLabel(pullRequest)) {
@@ -199,6 +207,8 @@ function createPersonalPick(pullRequest: PullRequestSummary, login: string): Pic
 
 function pickScore(item: PickItem) {
   let score = item.personal ? 1000 : 0;
+  if (item.action === 'Resolve conflicts') score += 200;
+  if (item.action === 'Needs your attention') score += 190;
   if (item.action === 'Fix CI') score += 110;
   if (item.action === 'Review this') score += 90;
   if (item.action === 'Merge this' || item.action === 'Finish this') score += 80;

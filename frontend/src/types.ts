@@ -242,6 +242,7 @@ export type AttentionBucket = {
   tone: 'success' | 'warning' | 'danger' | 'accent';
   metric: string;
   items: AttentionItem[];
+  preserveItemOrder?: boolean;
 };
 
 export type AttentionIssueBucket = {
