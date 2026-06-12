@@ -125,7 +125,10 @@ export function createForMeItems(pullRequests: PullRequestSummary[], login?: str
   }
 
   return pullRequests
-    .filter((pullRequest) => pullRequest.state === 'open' && !pullRequest.draft)
+    .filter((pullRequest) =>
+      pullRequest.state === 'open'
+      && !pullRequest.draft
+      && !isOwnCopilotAuthor(pullRequest.author, login))
     .map((pullRequest) => createPersonalPick(pullRequest, login))
     .filter((item): item is PickItem => item !== null)
     .sort((first, second) => pickScore(second) - pickScore(first))
@@ -234,6 +237,15 @@ function pickReason(pullRequest: PullRequestSummary) {
 
 function sameLogin(first: string, second: string) {
   return actorIdentityKey(first) === actorIdentityKey(second);
+}
+
+function isOwnCopilotAuthor(author: string, login: string) {
+  const suffix = '/copilot';
+  if (!author.toLowerCase().endsWith(suffix)) {
+    return false;
+  }
+
+  return sameLogin(author.slice(0, author.length - suffix.length), login);
 }
 
 export function createAttentionBuckets(pullRequests: PullRequestSummary[]): AttentionBucket[] {
