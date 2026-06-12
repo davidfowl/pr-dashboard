@@ -9,6 +9,7 @@ import type {
   ShipWeekResponse,
 } from '../../types';
 import { formatCount } from '../../utils/format';
+import { shouldHideFromSharedPullRequestLists } from '../../utils/models';
 import IssueListItem from '../IssueListItem';
 import LoadingBadge from '../LoadingBadge';
 import PullRequestList from '../PullRequestList';
@@ -227,14 +228,16 @@ function SectionLoadingIndicator() {
 }
 
 function createShipModeModel(shipWeek: ShipWeekResponse) {
-  const milestonePullRequests = shipWeek.pullRequests
-    .filter((item) => item.releaseScope.inMilestone && !item.pullRequest.draft)
+  const visiblePullRequests = shipWeek.pullRequests
+    .filter((item) => !item.pullRequest.draft && !shouldHideFromSharedPullRequestLists(item.pullRequest));
+  const milestonePullRequests = visiblePullRequests
+    .filter((item) => item.releaseScope.inMilestone)
     .map(createShipModePullRequestItem);
-  const baseBranchPullRequests = shipWeek.pullRequests
-    .filter((item) => item.releaseScope.targetsReleaseBranch && !item.pullRequest.draft)
+  const baseBranchPullRequests = visiblePullRequests
+    .filter((item) => item.releaseScope.targetsReleaseBranch)
     .map(createShipModePullRequestItem);
-  const docsFromCodePullRequests = shipWeek.pullRequests
-    .filter((item) => item.releaseScope.docsFromCode && !item.pullRequest.draft)
+  const docsFromCodePullRequests = visiblePullRequests
+    .filter((item) => item.releaseScope.docsFromCode)
     .map(createShipModePullRequestItem);
   const actionablePullRequests = [
     ...milestonePullRequests,

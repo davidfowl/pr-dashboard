@@ -48,6 +48,7 @@ const regressionBucketLabel = 'Regression';
 const ctiTeamIssueBucketLabel = 'CTI team';
 const ctiTeamTitleMarker = '[aspiree2e]';
 const releaseBlockingLabelMarker = 'blocking-release';
+const needsAuthorActionLabel = 'needs-author-action';
 
 type FocusIssueBucketDefinition = Omit<AttentionIssueBucket, 'issues'> & {
   matches: (issue: ShipWeekIssueSummary) => boolean;
@@ -83,7 +84,11 @@ export function createDeveloperPullRequestCounts(pullRequests: PullRequestSummar
   );
 
   for (const pullRequest of pullRequests) {
-    if (pullRequest.state !== 'open' || isCommunityToolkitPullRequest(pullRequest)) {
+    if (
+      pullRequest.state !== 'open'
+      || isCommunityToolkitPullRequest(pullRequest)
+      || shouldHideFromSharedPullRequestLists(pullRequest)
+    ) {
       continue;
     }
 
@@ -128,6 +133,22 @@ export function createForMeItems(pullRequests: PullRequestSummary[], login?: str
 }
 
 function createPersonalPick(pullRequest: PullRequestSummary, login: string): PickItem | null {
+  if (hasMergeConflicts(pullRequest)) {
+    return null;
+  }
+
+  if (hasNeedsAuthorActionLabel(pullRequest)) {
+    return sameLogin(pullRequest.author, login)
+      ? {
+        pullRequest,
+        action: 'Needs your attention',
+        reason: `Your PR is labeled ${needsAuthorActionLabel} · ${pickReason(pullRequest)}`,
+        tone: 'danger',
+        personal: true,
+      }
+      : null;
+  }
+
   if (sameLogin(pullRequest.author, login) && pullRequest.checks?.state === 'failure') {
     return {
       pullRequest,
@@ -324,8 +345,10 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
     },
   ];
   const bucketsByLabel = new Map(buckets.map((bucket) => [bucket.label, bucket]));
+  const visibleOpenPullRequests = pullRequests.filter((item) =>
+    item.state === 'open' && !shouldHideFromSharedPullRequestLists(item));
 
-  for (const pullRequest of pullRequests.filter((item) => item.state === 'open')) {
+  for (const pullRequest of visibleOpenPullRequests) {
     for (const bucketLabel of reviewBucketLabels(pullRequest)) {
       bucketsByLabel.get(bucketLabel)?.items.push({
         pullRequest,
@@ -662,8 +685,16 @@ function isChecksPending(pullRequest: PullRequestSummary) {
   return pullRequest.checks?.state === 'pending' || pullRequest.checks?.state === 'unknown';
 }
 
-function hasMergeConflicts(pullRequest: PullRequestSummary) {
+export function hasMergeConflicts(pullRequest: PullRequestSummary) {
   return pullRequest.mergeableState === 'dirty';
+}
+
+export function hasNeedsAuthorActionLabel(pullRequest: PullRequestSummary) {
+  return pullRequest.labels.some((label) => label.toLowerCase() === needsAuthorActionLabel);
+}
+
+export function shouldHideFromSharedPullRequestLists(pullRequest: PullRequestSummary) {
+  return hasMergeConflicts(pullRequest) || hasNeedsAuthorActionLabel(pullRequest);
 }
 
 function hasRegressionSignal(pullRequest: PullRequestSummary) {
