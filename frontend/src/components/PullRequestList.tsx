@@ -17,6 +17,7 @@ type PullRequestListProps = {
   onVisiblePullRequest?: (repository: string, pullRequest: PullRequestSummary) => void;
   emptyState?: string;
   limit?: number;
+  preserveOrder?: boolean;
 };
 
 const recentlyUpdatedWindowMs = 2 * dayMs;
@@ -38,11 +39,15 @@ function PullRequestList({
   onVisiblePullRequest,
   emptyState,
   limit,
+  preserveOrder,
 }: PullRequestListProps) {
   const visibleEntries = useMemo(() => {
-    const sortedEntries = [...entries].sort(comparePullRequestListEntries);
-    return limit === undefined ? sortedEntries : sortedEntries.slice(0, limit);
-  }, [entries, limit]);
+    const orderedEntries = [...entries];
+    if (!preserveOrder) {
+      orderedEntries.sort(comparePullRequestListEntries);
+    }
+    return limit === undefined ? orderedEntries : orderedEntries.slice(0, limit);
+  }, [entries, limit, preserveOrder]);
 
   return (
     <div className="attention-list">

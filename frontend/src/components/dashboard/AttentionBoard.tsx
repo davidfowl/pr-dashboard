@@ -146,6 +146,7 @@ function AttentionBoard({
                   },
                 }))}
                 limit={bucketItemLimit}
+                preserveOrder={bucket.preserveItemOrder}
                 onSelectPullRequest={onSelectPullRequest}
                 onVisiblePullRequest={onVisiblePullRequest}
               />
