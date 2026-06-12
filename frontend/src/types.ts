@@ -1,3 +1,5 @@
+import type { PersonalPickAction } from './constants';
+
 export type AppInfoResponse = {
   commitSha: string;
   shortCommitSha: string;
@@ -260,7 +262,7 @@ export type AttentionSignal = {
 
 export type PickItem = {
   pullRequest: PullRequestSummary;
-  action: string;
+  action: PersonalPickAction;
   reason: string;
   tone: 'success' | 'warning' | 'danger' | 'accent';
   personal: boolean;

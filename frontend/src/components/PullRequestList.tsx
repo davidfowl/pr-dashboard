@@ -42,7 +42,10 @@ function PullRequestList({
   preserveOrder,
 }: PullRequestListProps) {
   const visibleEntries = useMemo(() => {
-    const orderedEntries = preserveOrder ? entries : [...entries].sort(comparePullRequestListEntries);
+    const orderedEntries = [...entries];
+    if (!preserveOrder) {
+      orderedEntries.sort(comparePullRequestListEntries);
+    }
     return limit === undefined ? orderedEntries : orderedEntries.slice(0, limit);
   }, [entries, limit, preserveOrder]);
 
