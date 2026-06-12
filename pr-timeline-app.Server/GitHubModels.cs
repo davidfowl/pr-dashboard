@@ -142,7 +142,7 @@ record PullRequestSummary(
             pullRequest.Title ?? "",
             pullRequest.State ?? "",
             pullRequest.Draft,
-            pullRequest.User?.Login ?? "unknown",
+            ResolveAuthor(pullRequest),
             pullRequest.HtmlUrl ?? "",
             pullRequest.CreatedAt,
             pullRequest.UpdatedAt,
@@ -172,6 +172,42 @@ record PullRequestSummary(
                 && !string.IsNullOrEmpty(pullRequest.Head?.Sha)
                     ? ChecksStatus.Unknown
                     : ChecksStatus.None);
+
+    private static string ResolveAuthor(GitHubPullRequestDto pullRequest)
+    {
+        var login = pullRequest.User?.Login;
+        if (string.IsNullOrWhiteSpace(login))
+        {
+            return "unknown";
+        }
+
+        if (!IsCopilotLogin(login))
+        {
+            return login;
+        }
+
+        // Copilot-authored PRs are assigned to both Copilot and the human who started the work.
+        // Attribute the PR to that human while keeping the Copilot marker, but only when there is
+        // exactly one human assignee; otherwise the human is ambiguous, so keep the Copilot login.
+        var humans = pullRequest.Assignees
+            .Select(assignee => assignee.Login)
+            .Where(assignee => !string.IsNullOrWhiteSpace(assignee) && !IsCopilotLogin(assignee))
+            .ToArray();
+
+        return humans.Length == 1 ? $"{humans[0]}/copilot" : login;
+    }
+
+    private static bool IsCopilotLogin(string? login)
+    {
+        if (string.IsNullOrWhiteSpace(login))
+        {
+            return false;
+        }
+
+        var normalized = login.Trim().ToLowerInvariant();
+        return normalized == "copilot"
+            || (normalized.StartsWith("copilot") && normalized.EndsWith("[bot]"));
+    }
 }
 
 record LinkedIssueSummary(
@@ -610,6 +646,7 @@ sealed class GitHubPullRequestDto
     public DateTimeOffset CreatedAt { get; init; }
     public DateTimeOffset UpdatedAt { get; init; }
     public GitHubLabelDto[] Labels { get; init; } = [];
+    public GitHubActorDto[] Assignees { get; init; } = [];
     public GitHubActorDto[] RequestedReviewers { get; init; } = [];
     public GitHubTeamDto[] RequestedTeams { get; init; } = [];
     public GitHubMilestoneDto? Milestone { get; init; }
