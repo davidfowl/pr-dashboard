@@ -206,7 +206,7 @@ record PullRequestSummary(
 
         var normalized = login.Trim().ToLowerInvariant();
         return normalized == "copilot"
-            || (normalized.Contains("copilot") && normalized.EndsWith("[bot]"));
+            || (normalized.StartsWith("copilot") && normalized.EndsWith("[bot]"));
     }
 }
 

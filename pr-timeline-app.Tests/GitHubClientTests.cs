@@ -921,259 +921,60 @@ public sealed class GitHubClientTests
     [Fact]
     public async Task PullListAttributesCopilotAuthorToHumanAssignee()
     {
-        var client = CreateClient(path => path switch
-        {
-            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
-                """
-                [
-                  {
-                    "number": 1,
-                    "title": "Copilot change",
-                    "state": "open",
-                    "body": null,
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": "2026-01-02T00:00:00Z",
-                    "draft": false,
-                    "user": { "login": "Copilot" },
-                    "html_url": "https://github.com/example/repo/pull/1",
-                    "labels": [],
-                    "assignees": [
-                      { "login": "JamesNK" },
-                      { "login": "Copilot" }
-                    ],
-                    "requested_reviewers": [],
-                    "requested_teams": []
-                  }
-                ]
-            """),
-            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
-            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
-            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
-        });
+        var client = CreateCopilotAttributionClient("Copilot", "JamesNK", "Copilot");
 
-        var pullRequests = await client.GetPullRequestsAsync(
-            new RepositoryName("example", "repo"),
-            "open",
-            false,
-            TestContext.Current.CancellationToken);
-
-        var pullRequest = Assert.Single(pullRequests);
-        Assert.Equal("JamesNK/copilot", pullRequest.Author);
+        Assert.Equal("JamesNK/copilot", await ResolveSingleAuthorAsync(client));
     }
 
     [Fact]
     public async Task PullListAttributesCopilotBotLoginToHumanAssignee()
     {
-        var client = CreateClient(path => path switch
-        {
-            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
-                """
-                [
-                  {
-                    "number": 1,
-                    "title": "Copilot change",
-                    "state": "open",
-                    "body": null,
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": "2026-01-02T00:00:00Z",
-                    "draft": false,
-                    "user": { "login": "copilot-swe-agent[bot]" },
-                    "html_url": "https://github.com/example/repo/pull/1",
-                    "labels": [],
-                    "assignees": [
-                      { "login": "JamesNK" },
-                      { "login": "copilot-swe-agent[bot]" }
-                    ],
-                    "requested_reviewers": [],
-                    "requested_teams": []
-                  }
-                ]
-            """),
-            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
-            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
-            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
-        });
+        var client = CreateCopilotAttributionClient(
+            "copilot-swe-agent[bot]",
+            "JamesNK",
+            "copilot-swe-agent[bot]");
 
-        var pullRequests = await client.GetPullRequestsAsync(
-            new RepositoryName("example", "repo"),
-            "open",
-            false,
-            TestContext.Current.CancellationToken);
-
-        var pullRequest = Assert.Single(pullRequests);
-        Assert.Equal("JamesNK/copilot", pullRequest.Author);
+        Assert.Equal("JamesNK/copilot", await ResolveSingleAuthorAsync(client));
     }
 
     [Fact]
     public async Task PullListExcludesCopilotAssigneeCaseInsensitively()
     {
-        var client = CreateClient(path => path switch
-        {
-            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
-                """
-                [
-                  {
-                    "number": 1,
-                    "title": "Copilot change",
-                    "state": "open",
-                    "body": null,
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": "2026-01-02T00:00:00Z",
-                    "draft": false,
-                    "user": { "login": "Copilot" },
-                    "html_url": "https://github.com/example/repo/pull/1",
-                    "labels": [],
-                    "assignees": [
-                      { "login": "octocat" },
-                      { "login": "copilot" }
-                    ],
-                    "requested_reviewers": [],
-                    "requested_teams": []
-                  }
-                ]
-            """),
-            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
-            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
-            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
-        });
+        var client = CreateCopilotAttributionClient("Copilot", "octocat", "copilot");
 
-        var pullRequests = await client.GetPullRequestsAsync(
-            new RepositoryName("example", "repo"),
-            "open",
-            false,
-            TestContext.Current.CancellationToken);
-
-        var pullRequest = Assert.Single(pullRequests);
-        Assert.Equal("octocat/copilot", pullRequest.Author);
+        Assert.Equal("octocat/copilot", await ResolveSingleAuthorAsync(client));
     }
 
     [Fact]
     public async Task PullListKeepsCopilotAuthorWhenNoHumanAssignee()
     {
-        var client = CreateClient(path => path switch
-        {
-            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
-                """
-                [
-                  {
-                    "number": 1,
-                    "title": "Copilot change",
-                    "state": "open",
-                    "body": null,
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": "2026-01-02T00:00:00Z",
-                    "draft": false,
-                    "user": { "login": "Copilot" },
-                    "html_url": "https://github.com/example/repo/pull/1",
-                    "labels": [],
-                    "assignees": [
-                      { "login": "Copilot" }
-                    ],
-                    "requested_reviewers": [],
-                    "requested_teams": []
-                  }
-                ]
-            """),
-            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
-            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
-            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
-        });
+        var client = CreateCopilotAttributionClient("Copilot", "Copilot");
 
-        var pullRequests = await client.GetPullRequestsAsync(
-            new RepositoryName("example", "repo"),
-            "open",
-            false,
-            TestContext.Current.CancellationToken);
-
-        var pullRequest = Assert.Single(pullRequests);
-        Assert.Equal("Copilot", pullRequest.Author);
+        Assert.Equal("Copilot", await ResolveSingleAuthorAsync(client));
     }
 
     [Fact]
     public async Task PullListKeepsCopilotAuthorWhenMultipleHumanAssignees()
     {
-        var client = CreateClient(path => path switch
-        {
-            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
-                """
-                [
-                  {
-                    "number": 1,
-                    "title": "Copilot change",
-                    "state": "open",
-                    "body": null,
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": "2026-01-02T00:00:00Z",
-                    "draft": false,
-                    "user": { "login": "Copilot" },
-                    "html_url": "https://github.com/example/repo/pull/1",
-                    "labels": [],
-                    "assignees": [
-                      { "login": "JamesNK" },
-                      { "login": "adamint" },
-                      { "login": "Copilot" }
-                    ],
-                    "requested_reviewers": [],
-                    "requested_teams": []
-                  }
-                ]
-            """),
-            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
-            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
-            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
-        });
+        var client = CreateCopilotAttributionClient("Copilot", "JamesNK", "adamint", "Copilot");
 
-        var pullRequests = await client.GetPullRequestsAsync(
-            new RepositoryName("example", "repo"),
-            "open",
-            false,
-            TestContext.Current.CancellationToken);
-
-        var pullRequest = Assert.Single(pullRequests);
-        Assert.Equal("Copilot", pullRequest.Author);
+        Assert.Equal("Copilot", await ResolveSingleAuthorAsync(client));
     }
 
     [Fact]
     public async Task PullListLeavesNonCopilotAuthorUnchanged()
     {
-        var client = CreateClient(path => path switch
-        {
-            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
-                """
-                [
-                  {
-                    "number": 1,
-                    "title": "Human change",
-                    "state": "open",
-                    "body": null,
-                    "created_at": "2026-01-01T00:00:00Z",
-                    "updated_at": "2026-01-02T00:00:00Z",
-                    "draft": false,
-                    "user": { "login": "octocat" },
-                    "html_url": "https://github.com/example/repo/pull/1",
-                    "labels": [],
-                    "assignees": [
-                      { "login": "octocat" },
-                      { "login": "Copilot" }
-                    ],
-                    "requested_reviewers": [],
-                    "requested_teams": []
-                  }
-                ]
-            """),
-            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
-            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
-            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
-        });
+        var client = CreateCopilotAttributionClient("octocat", "octocat", "Copilot");
 
-        var pullRequests = await client.GetPullRequestsAsync(
-            new RepositoryName("example", "repo"),
-            "open",
-            false,
-            TestContext.Current.CancellationToken);
+        Assert.Equal("octocat", await ResolveSingleAuthorAsync(client));
+    }
 
-        var pullRequest = Assert.Single(pullRequests);
-        Assert.Equal("octocat", pullRequest.Author);
+    [Fact]
+    public async Task PullListDoesNotTreatNonCopilotBotAsCopilot()
+    {
+        var client = CreateCopilotAttributionClient("mycopilot-helper[bot]", "JamesNK", "mycopilot-helper[bot]");
+
+        Assert.Equal("mycopilot-helper[bot]", await ResolveSingleAuthorAsync(client));
     }
 
     [Fact]
@@ -3254,6 +3055,53 @@ public sealed class GitHubClientTests
 
     private static string PullRequestsJson(IEnumerable<string> pullRequests) =>
         $"[\n{string.Join(",\n", pullRequests)}\n]";
+
+    private static GitHubClient CreateCopilotAttributionClient(string authorLogin, params string[] assigneeLogins)
+    {
+        var assigneesJson = string.Join(
+            ",\n",
+            assigneeLogins.Select(login => $$"""{ "login": {{JsonSerializer.Serialize(login)}} }"""));
+
+        var listJson =
+            $$"""
+            [
+              {
+                "number": 1,
+                "title": "Copilot change",
+                "state": "open",
+                "body": null,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-02T00:00:00Z",
+                "draft": false,
+                "user": { "login": {{JsonSerializer.Serialize(authorLogin)}} },
+                "html_url": "https://github.com/example/repo/pull/1",
+                "labels": [],
+                "assignees": [ {{assigneesJson}} ],
+                "requested_reviewers": [],
+                "requested_teams": []
+              }
+            ]
+            """;
+
+        return CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(listJson),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+    }
+
+    private static async Task<string> ResolveSingleAuthorAsync(GitHubClient client)
+    {
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        return Assert.Single(pullRequests).Author;
+    }
 
     private static string PullRequestJson(
         int number,
