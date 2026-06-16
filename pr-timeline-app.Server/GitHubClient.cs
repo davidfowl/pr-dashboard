@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
 
 sealed partial class GitHubClient(
     HttpClient httpClient,
@@ -13,7 +14,8 @@ sealed partial class GitHubClient(
     GitHubPublicCacheStore publicCacheStore,
     GitHubCacheScopeResolver cacheScopeResolver,
     IMemoryCache cache,
-    IHostEnvironment environment)
+    IHostEnvironment environment,
+    IOptions<GitHubReviewPolicyOptions> reviewPolicyOptions)
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
     internal static readonly TimeSpan PublicCacheDuration = TimeSpan.FromHours(1);
@@ -29,6 +31,12 @@ sealed partial class GitHubClient(
     private const string CtiTeamSearchTerm = "AspireE2E";
     private static readonly SemaphoreSlim s_githubRequestThrottle = new(MaxConcurrentGitHubRequests, MaxConcurrentGitHubRequests);
     private static readonly SemaphoreSlim s_checksFetchThrottle = new(MaxConcurrentChecksFetches, MaxConcurrentChecksFetches);
+
+    private readonly HashSet<string> _conversationResolutionRepositories =
+        new(reviewPolicyOptions.Value.RequireConversationResolution, StringComparer.OrdinalIgnoreCase);
+
+    private bool RequiresConversationResolution(RepositoryName repositoryName) =>
+        _conversationResolutionRepositories.Contains(repositoryName.ToString());
 
     private async Task<GitHubCacheScope> GetRepositoryCacheScopeAsync(
         RepositoryName repositoryName,
@@ -2212,6 +2220,20 @@ sealed partial class GitHubClient(
                 latestByReviewer.Any(review => review.State == "COMMENTED") ? "reviewed" :
                 "waiting";
 
+            // Unresolved review threads block merging on approved PRs, but only when the
+            // repository's branch protection requires conversation resolution. Enrollment is
+            // configured per repo (GitHubReviewPolicy:RequireConversationResolution) because the
+            // branch-protection API needs admin access this app's tokens don't have. Thread
+            // resolution is only available via GraphQL, which requires a token, so this is fetched
+            // only for approved PRs in enrolled repositories.
+            var unresolvedThreadCount = state == "approved" && RequiresConversationResolution(repositoryName)
+                ? await GetUnresolvedReviewThreadCountAsync(
+                    repositoryName,
+                    number,
+                    scope.RequestAuthorization,
+                    cancellationToken)
+                : 0;
+
             return new ReviewStatus(
                 State: state,
                 LatestState: humanReviews.LastOrDefault()?.State,
@@ -2220,9 +2242,83 @@ sealed partial class GitHubClient(
                 ChangesRequestedCount: humanReviews.Count(review => review.State == "CHANGES_REQUESTED"),
                 CommentedReviewCount: humanReviews.Count(review => review.State == "COMMENTED"),
                 LastApprovedAt: humanReviews.LastOrDefault(review => review.State == "APPROVED")?.SubmittedAt,
-                LastReviewedAt: humanReviews.LastOrDefault()?.SubmittedAt);
+                LastReviewedAt: humanReviews.LastOrDefault()?.SubmittedAt,
+                UnresolvedThreadCount: unresolvedThreadCount);
         },
             cancellationToken) ?? ReviewStatus.Waiting;
+    }
+
+    private const string ReviewThreadsGraphQlQuery =
+        "query($owner:String!,$name:String!,$number:Int!){" +
+        "repository(owner:$owner,name:$name){" +
+        "pullRequest(number:$number){" +
+        "reviewThreads(first:100){nodes{isResolved}}}}}";
+
+    private async Task<int> GetUnresolvedReviewThreadCountAsync(
+        RepositoryName repositoryName,
+        int number,
+        GitHubRequestAuthorization authorization,
+        CancellationToken cancellationToken)
+    {
+        var token = authorization switch
+        {
+            GitHubRequestAuthorization.Token => (await tokenProvider.GetTokenAsync(cancellationToken))?.Value,
+            GitHubRequestAuthorization.PublicCacheToken => publicCacheIdentity.GetToken()?.Value,
+            _ => null,
+        };
+
+        if (token is null)
+        {
+            return 0;
+        }
+
+        var requestBody = new GitHubGraphQlRequestDto
+        {
+            Query = ReviewThreadsGraphQlQuery,
+            Variables = new GitHubReviewThreadsVariablesDto
+            {
+                Owner = repositoryName.Owner,
+                Name = repositoryName.Name,
+                Number = number,
+            },
+        };
+
+        await s_githubRequestThrottle.WaitAsync(cancellationToken);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "graphql")
+            {
+                Content = JsonContent.Create(
+                    requestBody,
+                    GitHubJsonSerializerContext.Default.GitHubGraphQlRequestDto),
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            using var response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                // Unresolved-thread enrichment is best-effort; never fail review status on it.
+                return 0;
+            }
+
+            var payload = await response.Content.ReadFromJsonAsync(
+                GitHubJsonSerializerContext.Default.GitHubReviewThreadsResponseDto,
+                cancellationToken);
+
+            var nodes = payload?.Data?.Repository?.PullRequest?.ReviewThreads?.Nodes;
+            return nodes is null ? 0 : nodes.Count(node => !node.IsResolved);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsTransientGitHubTransportFailure(ex))
+        {
+            return 0;
+        }
+        finally
+        {
+            s_githubRequestThrottle.Release();
+        }
     }
 
     public async Task<IReadOnlyList<TimelineItem>> GetPullRequestTimelineAsync(

@@ -6,6 +6,8 @@ builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
 builder.Services.Configure<GitHubCacheWarmupOptions>(
     builder.Configuration.GetSection(GitHubCacheWarmupOptions.SectionName));
+builder.Services.Configure<GitHubReviewPolicyOptions>(
+    builder.Configuration.GetSection(GitHubReviewPolicyOptions.SectionName));
 builder.Services.AddGitHubApiServices(builder.Environment);
 
 var app = builder.Build();

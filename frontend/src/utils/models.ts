@@ -281,6 +281,13 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
       items: [],
     },
     {
+      label: 'Unresolved feedback',
+      summary: 'Approved PRs with unresolved review threads that block merging until conversations are resolved.',
+      tone: 'danger',
+      metric: 'resolve threads',
+      items: [],
+    },
+    {
       label: 'Ready to merge',
       summary: 'Recently approved and waiting on a maintainer or author to finish.',
       tone: 'success',
@@ -612,8 +619,14 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
     labels.push('Approved but aging');
   }
 
-  // Failing CI disqualifies "Ready to merge" — the PR is not actually ready to land.
-  if (pullRequest.review.state === 'approved' && !approvedButAging && !ciFailing) {
+  const unresolvedFeedback = hasUnresolvedFeedback(pullRequest);
+  if (unresolvedFeedback && !ciFailing) {
+    labels.push('Unresolved feedback');
+  }
+
+  // Failing CI or unresolved review threads disqualify "Ready to merge" — the PR is not
+  // actually ready to land until CI is green and all conversations are resolved.
+  if (pullRequest.review.state === 'approved' && !approvedButAging && !ciFailing && !unresolvedFeedback) {
     labels.push('Ready to merge');
   }
 
@@ -662,6 +675,8 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
       return approvedAt ? `Approved ${formatAge(approvedAt)}` : 'Approved';
     case 'CI failing':
       return formatCount(pullRequest.checks?.failureCount ?? 0, 'failing check');
+    case 'Unresolved feedback':
+      return formatCount(pullRequest.review.unresolvedThreadCount, 'unresolved thread');
     case 'Ready to merge':
       return `${formatCount(pullRequest.review.approvalCount, 'approval')}`;
     case 'Re-review needed':
@@ -696,6 +711,11 @@ function isApprovedButAging(pullRequest: PullRequestSummary) {
   return pullRequest.review.state === 'approved'
     && approvedAt != null
     && ageMs(approvedAt) >= approvedAgingMs;
+}
+
+function hasUnresolvedFeedback(pullRequest: PullRequestSummary) {
+  return pullRequest.review.state === 'approved'
+    && pullRequest.review.unresolvedThreadCount > 0;
 }
 
 function isChecksFailing(pullRequest: PullRequestSummary) {
@@ -847,6 +867,13 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
 
   if (hasMergeConflicts(pullRequest) && action.label !== 'merge conflicts') {
     signals.push({ label: 'merge conflicts', tone: 'danger' });
+  }
+
+  if (hasUnresolvedFeedback(pullRequest)) {
+    signals.push({
+      label: formatCount(pullRequest.review.unresolvedThreadCount, 'unresolved', 'unresolved'),
+      tone: 'danger',
+    });
   }
 
   const approvedAt = approvalAgeAt(pullRequest);
@@ -1002,6 +1029,10 @@ function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {
 
   if (hasMergeConflicts(pullRequest)) {
     return { label: 'merge conflicts', tone: 'danger' };
+  }
+
+  if (hasUnresolvedFeedback(pullRequest)) {
+    return { label: 'resolve feedback', tone: 'danger' };
   }
 
   if (isApprovedButAging(pullRequest)) {
