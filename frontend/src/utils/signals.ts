@@ -10,6 +10,7 @@ const synonymGroups: string[][] = [
   ['ready to merge', 'merge'],
   ['re-review needed', 're-review', 'commit after review'],
   ['ci failing', 'fix ci'],
+  ['wait for ci', 'ci running'],
   ['author response', 'author fix', 'changes requested'],
   ['unresolved feedback', 'resolve feedback', 'address feedback', 'copilot feedback'],
   ['quick wins', 'quick win'],
