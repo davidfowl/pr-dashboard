@@ -39,6 +39,12 @@ Some repositories require all review conversations to be resolved before an appr
 
 This is opt-in per repo because the branch-protection setting is only readable through GitHub's admin-scoped branch-protection API, which this app's tokens do not have. Repositories not in the list are unaffected, and no extra GitHub calls are made for them.
 
+## Copilot review feedback
+
+The Copilot review bot's reviews are filtered out of a PR's human review state, so a PR that only Copilot has commented on otherwise looks like it still "needs a reviewer". To avoid surfacing those as actionable review work, the dashboard also fetches unresolved review-thread counts for **waiting** PRs that the Copilot reviewer has reviewed (this is independent of the conversation-resolution policy above, since it is a triage signal rather than a merge gate).
+
+A waiting PR with unresolved threads is treated as waiting on the author: it shows an `address feedback` action, moves to a **Copilot feedback** bucket, and is kept out of the **Needs attention** focus queue. The extra GraphQL call is bounded to waiting PRs the bot actually reviewed.
+
 ## Production public cache
 
 Logged-out users read pull request data only from the shared public cache for repositories in `GitHubCacheWarmup:Repositories`. Configure `GITHUB_PUBLIC_CACHE_TOKEN` or `GitHubCacheWarmup:PublicCacheToken` with a server-owned fine-grained PAT or GitHub App token so the backend can verify allowlisted public visibility and refresh that cache without using anonymous quota or user tokens. Visibility verification uses the server token and is cached separately from PR data. The current last-good fallback uses the server memory cache; replace it with durable storage before relying on cache continuity across restarts or multiple backend instances.

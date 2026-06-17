@@ -2220,13 +2220,28 @@ sealed partial class GitHubClient(
                 latestByReviewer.Any(review => review.State == "COMMENTED") ? "reviewed" :
                 "waiting";
 
-            // Unresolved review threads block merging on approved PRs, but only when the
-            // repository's branch protection requires conversation resolution. Enrollment is
-            // configured per repo (GitHubReviewPolicy:RequireConversationResolution) because the
-            // branch-protection API needs admin access this app's tokens don't have. Thread
-            // resolution is only available via GraphQL, which requires a token, so this is fetched
-            // only for approved PRs in enrolled repositories.
-            var unresolvedThreadCount = state == "approved" && RequiresConversationResolution(repositoryName)
+            // Unresolved review threads matter in two cases, both of which need GraphQL (thread
+            // resolution is GraphQL-only) and a token:
+            //
+            //  1. Approved PRs in repositories whose branch protection requires conversation
+            //     resolution — there an unresolved thread blocks merge. Enrollment is configured
+            //     per repo (GitHubReviewPolicy:RequireConversationResolution) because the
+            //     branch-protection API needs admin access this app's tokens don't have.
+            //  2. Waiting PRs that the Copilot review bot has commented on. The bot's reviews are
+            //     filtered out of the human review state, so such a PR looks like it "needs a
+            //     reviewer" when it is really waiting on the author to address Copilot's feedback.
+            //     Surfacing the unresolved thread count lets the dashboard route it to a
+            //     "Copilot feedback" lane instead of the needs-review queue.
+            //
+            // The Copilot case is bounded to waiting PRs the bot actually reviewed to keep the
+            // extra GraphQL calls off PRs that have no review threads at all.
+            var copilotReviewed = reviews
+                .Select(ReviewEvent.FromDto)
+                .Any(review => IsCopilotReviewer(review.Actor));
+            var shouldCountUnresolvedThreads =
+                (state == "approved" && RequiresConversationResolution(repositoryName))
+                || (state == "waiting" && copilotReviewed);
+            var unresolvedThreadCount = shouldCountUnresolvedThreads
                 ? await GetUnresolvedReviewThreadCountAsync(
                     repositoryName,
                     number,
@@ -2922,6 +2937,10 @@ sealed partial class GitHubClient(
     private static bool IsBotActor(string actor) =>
         actor.EndsWith("[bot]", StringComparison.OrdinalIgnoreCase)
         || s_knownBotActors.Contains(actor);
+
+    private static bool IsCopilotReviewer(string actor) =>
+        actor.Equals("copilot-pull-request-reviewer", StringComparison.OrdinalIgnoreCase)
+        || actor.Equals("copilot-pull-request-reviewer[bot]", StringComparison.OrdinalIgnoreCase);
 
     private static readonly HashSet<string> s_knownBotActors = new(StringComparer.OrdinalIgnoreCase)
     {

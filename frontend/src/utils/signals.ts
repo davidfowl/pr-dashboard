@@ -1,13 +1,47 @@
 import type { AttentionSignal } from '../types';
 
+// Several independent generators (bucket labels, action signals, review-progress signals) can emit
+// the same underlying concept in different casing — e.g. "Needs review" / "needs reviewer" /
+// "no reviews", or "Ready to merge" / "merge". Rendering all of them produces redundant pills, so
+// signals are collapsed to one per concept. The first occurrence wins, which keeps the leading
+// bucket label (passed first) over the lower-value computed duplicates.
+const synonymGroups: string[][] = [
+  ['needs review', 'needs reviewer', 'no reviews'],
+  ['ready to merge', 'merge'],
+  ['re-review needed', 're-review', 'commit after review'],
+  ['ci failing', 'fix ci'],
+  ['author response', 'author fix', 'changes requested'],
+  ['unresolved feedback', 'resolve feedback', 'address feedback', 'copilot feedback'],
+  ['quick wins', 'quick win'],
+  ['stalled', 'unstick'],
+  ['docs', 'docs review'],
+  ['community toolkit', 'toolkit review'],
+  ['bots / automation', 'automation', 'bot'],
+];
+
+const conceptByLabel = new Map<string, string>(
+  synonymGroups.flatMap((group) => group.map((label) => [label, group[0]] as const)),
+);
+
+function signalConcept(label: string): string {
+  const normalized = label.trim().toLowerCase();
+  // CI failing carries a variable suffix ("CI failing · 4 checks"); fold every variant together.
+  if (normalized.startsWith('ci failing')) {
+    return 'ci failing';
+  }
+
+  return conceptByLabel.get(normalized) ?? normalized;
+}
+
 export function dedupeSignals(signals: AttentionSignal[]) {
   const seen = new Set<string>();
   return signals.filter((signal) => {
-    if (seen.has(signal.label)) {
+    const concept = signalConcept(signal.label);
+    if (seen.has(concept)) {
       return false;
     }
 
-    seen.add(signal.label);
+    seen.add(concept);
     return true;
   });
 }

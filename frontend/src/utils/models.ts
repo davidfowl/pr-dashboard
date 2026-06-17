@@ -302,6 +302,13 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
       items: [],
     },
     {
+      label: 'Copilot feedback',
+      summary: 'The Copilot review bot left unresolved feedback the author has not addressed yet — waiting on the author, not a new reviewer.',
+      tone: 'warning',
+      metric: 'author action',
+      items: [],
+    },
+    {
       label: 'Docs',
       summary: 'Generated aspire.dev docs PRs waiting on review.',
       tone: 'accent',
@@ -651,6 +658,10 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
     labels.push('Quick wins');
   }
 
+  if (hasCopilotFeedback(pullRequest)) {
+    labels.push('Copilot feedback');
+  }
+
   if (needsReview(pullRequest)) {
     labels.push('Needs review');
   }
@@ -683,6 +694,8 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
       return pullRequest.lastCommitAt
         ? `Pushed ${formatAge(pullRequest.lastCommitAt)}`
         : 'Pushed after review';
+    case 'Copilot feedback':
+      return formatCount(pullRequest.review.unresolvedThreadCount, 'unresolved thread');
     case 'Docs':
       return 'generated docs';
     case 'Community Toolkit':
@@ -715,6 +728,15 @@ function isApprovedButAging(pullRequest: PullRequestSummary) {
 
 function hasUnresolvedFeedback(pullRequest: PullRequestSummary) {
   return pullRequest.review.state === 'approved'
+    && pullRequest.review.unresolvedThreadCount > 0;
+}
+
+// A PR that only the Copilot review bot has commented on shows up with no human review state
+// (the bot is filtered out), so it looks like it "needs a reviewer". When the bot left an
+// unresolved thread, the PR is really waiting on the author to address that feedback, so it
+// belongs in the "Copilot feedback" lane rather than the needs-review queue.
+function hasCopilotFeedback(pullRequest: PullRequestSummary) {
+  return pullRequest.review.state === 'waiting'
     && pullRequest.review.unresolvedThreadCount > 0;
 }
 
@@ -816,6 +838,7 @@ function isQuickWin(pullRequest: PullRequestSummary) {
 
 function needsReview(pullRequest: PullRequestSummary) {
   return pullRequest.review.state === 'waiting'
+    && !hasCopilotFeedback(pullRequest)
     && isCoreTeamAuthor(pullRequest.author)
     && ageMs(pullRequest.updatedAt) < needsReviewFreshMs;
 }
@@ -848,6 +871,13 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
   const action = actionSignal(pullRequest);
   const signals: AttentionSignal[] = [action];
 
+  // Merge conflicts are a hard blocker, so surface the pill right after the action signal —
+  // otherwise a stacked PR (release + regression + CI) can push it past computedSignalLimit and
+  // hide the conflict entirely.
+  if (hasMergeConflicts(pullRequest) && action.label !== 'merge conflicts') {
+    signals.push({ label: 'merge conflicts', tone: 'danger' });
+  }
+
   if (targetsCurrentRelease(pullRequest)) {
     signals.push({ label: `release ${currentRelease}`, tone: 'danger' });
   }
@@ -863,10 +893,6 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
   const checksSignal = checksAttentionSignal(pullRequest);
   if (checksSignal) {
     signals.push(checksSignal);
-  }
-
-  if (hasMergeConflicts(pullRequest) && action.label !== 'merge conflicts') {
-    signals.push({ label: 'merge conflicts', tone: 'danger' });
   }
 
   if (hasUnresolvedFeedback(pullRequest)) {
@@ -1033,6 +1059,10 @@ function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {
 
   if (hasUnresolvedFeedback(pullRequest)) {
     return { label: 'resolve feedback', tone: 'danger' };
+  }
+
+  if (hasCopilotFeedback(pullRequest)) {
+    return { label: 'address feedback', tone: 'warning' };
   }
 
   if (isApprovedButAging(pullRequest)) {

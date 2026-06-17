@@ -1958,6 +1958,92 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListCountsUnresolvedCopilotThreadsForWaitingPullRequests()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                PullRequestsJson([PullRequestJson(1, title: "Copilot reviewed work")])),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                """
+                [
+                  {
+                    "user": { "login": "copilot-pull-request-reviewer[bot]" },
+                    "state": "COMMENTED",
+                    "submitted_at": "2026-01-02T00:00:00Z"
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/commits?per_page=100" => Json("[]"),
+            "graphql" => Json(
+                """
+                {
+                  "data": {
+                    "repository": {
+                      "pullRequest": {
+                        "reviewThreads": {
+                          "nodes": [
+                            { "isResolved": false },
+                            { "isResolved": true },
+                            { "isResolved": false }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+                """),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("waiting", pullRequest.Review.State);
+        Assert.Equal(2, pullRequest.Review.UnresolvedThreadCount);
+    }
+
+    [Fact]
+    public async Task PullListSkipsUnresolvedThreadFetchForWaitingPullRequestsWithoutCopilotReview()
+    {
+        var graphqlRequested = false;
+        var client = CreateClient(path =>
+        {
+            if (path == "graphql")
+            {
+                graphqlRequested = true;
+                return Json("{}");
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    PullRequestsJson([PullRequestJson(1)])),
+                "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+                "repos/example/repo/pulls/1/commits?per_page=100" => Json("[]"),
+                "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("waiting", pullRequest.Review.State);
+        Assert.Equal(0, pullRequest.Review.UnresolvedThreadCount);
+        Assert.False(graphqlRequested);
+    }
+
+    [Fact]
     public async Task PullListIncludesMergeableStateFromDetailsForOpenPullRequests()
     {
         var client = CreateClient(path => path switch
