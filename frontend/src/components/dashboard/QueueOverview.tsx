@@ -90,6 +90,8 @@ function QueueOverview({
             : 'Pull requests that need your review or response.',
           tone: 'accent',
           metric: 'personal queue',
+          // forMeItems arrives pre-ranked by pickScore; keep that order instead of the recency re-sort.
+          preserveItemOrder: true,
           items: forMeItems.map((item) => ({
             pullRequest: item.pullRequest,
             reason: item.action,

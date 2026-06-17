@@ -5,6 +5,7 @@ import {
   docsFromCodeLabel,
   docsFromCodeRepository,
   hourMs,
+  personalPickActions,
 } from '../constants';
 import type {
   ActivityMarker,
@@ -137,14 +138,22 @@ export function createForMeItems(pullRequests: PullRequestSummary[], login?: str
 
 function createPersonalPick(pullRequest: PullRequestSummary, login: string): PickItem | null {
   if (hasMergeConflicts(pullRequest)) {
-    return null;
+    return sameLogin(pullRequest.author, login)
+      ? {
+        pullRequest,
+        action: personalPickActions.resolveConflicts,
+        reason: `Your PR has merge conflicts · ${pickReason(pullRequest)}`,
+        tone: 'danger',
+        personal: true,
+      }
+      : null;
   }
 
   if (hasNeedsAuthorActionLabel(pullRequest)) {
     return sameLogin(pullRequest.author, login)
       ? {
         pullRequest,
-        action: 'Needs your attention',
+        action: personalPickActions.needsAttention,
         reason: `Your PR is labeled ${needsAuthorActionLabel} · ${pickReason(pullRequest)}`,
         tone: 'danger',
         personal: true,
@@ -155,7 +164,7 @@ function createPersonalPick(pullRequest: PullRequestSummary, login: string): Pic
   if (sameLogin(pullRequest.author, login) && pullRequest.checks?.state === 'failure') {
     return {
       pullRequest,
-      action: 'Fix CI',
+      action: personalPickActions.fixCi,
       reason: `Your PR has ${formatCount(pullRequest.checks.failureCount, 'failing check')} · ${pickReason(pullRequest)}`,
       tone: 'danger',
       personal: true,
@@ -170,7 +179,7 @@ function createPersonalPick(pullRequest: PullRequestSummary, login: string): Pic
         : '';
     return {
       pullRequest,
-      action: 'Review this',
+      action: personalPickActions.reviewThis,
       reason: `Review requested from you · ${pickReason(pullRequest)}${ciSuffix}`,
       tone: 'warning',
       personal: true,
@@ -180,7 +189,7 @@ function createPersonalPick(pullRequest: PullRequestSummary, login: string): Pic
   if (sameLogin(pullRequest.author, login) && pullRequest.review.state === 'changes_requested') {
     return {
       pullRequest,
-      action: 'Respond here',
+      action: personalPickActions.respondHere,
       reason: `Your PR has changes requested · ${pickReason(pullRequest)}`,
       tone: 'danger',
       personal: true,
@@ -190,7 +199,7 @@ function createPersonalPick(pullRequest: PullRequestSummary, login: string): Pic
   if (sameLogin(pullRequest.author, login) && pullRequest.review.state === 'approved') {
     return {
       pullRequest,
-      action: 'Finish this',
+      action: personalPickActions.finishThis,
       reason: `Your PR is approved and still open · ${pickReason(pullRequest)}`,
       tone: 'success',
       personal: true,
@@ -202,12 +211,12 @@ function createPersonalPick(pullRequest: PullRequestSummary, login: string): Pic
 
 function pickScore(item: PickItem) {
   let score = item.personal ? 1000 : 0;
-  if (item.action === 'Fix CI') score += 110;
-  if (item.action === 'Review this') score += 90;
-  if (item.action === 'Merge this' || item.action === 'Finish this') score += 80;
-  if (item.action === 'Respond here') score += 75;
-  if (item.action === 'Finish review') score += 65;
-  if (item.action === 'Unstick this') score += 45;
+  if (item.action === personalPickActions.resolveConflicts) score += 200;
+  if (item.action === personalPickActions.needsAttention) score += 190;
+  if (item.action === personalPickActions.fixCi) score += 110;
+  if (item.action === personalPickActions.reviewThis) score += 90;
+  if (item.action === personalPickActions.finishThis) score += 80;
+  if (item.action === personalPickActions.respondHere) score += 75;
   if (item.pullRequest.review.state === 'changes_requested') score += 30;
   if (item.pullRequest.review.state === 'waiting') score += 45;
   if (item.pullRequest.review.state === 'reviewed') score += 25;
