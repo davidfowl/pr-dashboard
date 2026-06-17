@@ -919,6 +919,65 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListAttributesCopilotAuthorToHumanAssignee()
+    {
+        var client = CreateCopilotAttributionClient("Copilot", "JamesNK", "Copilot");
+
+        Assert.Equal("JamesNK/copilot", await ResolveSingleAuthorAsync(client));
+    }
+
+    [Fact]
+    public async Task PullListAttributesCopilotBotLoginToHumanAssignee()
+    {
+        var client = CreateCopilotAttributionClient(
+            "copilot-swe-agent[bot]",
+            "JamesNK",
+            "copilot-swe-agent[bot]");
+
+        Assert.Equal("JamesNK/copilot", await ResolveSingleAuthorAsync(client));
+    }
+
+    [Fact]
+    public async Task PullListExcludesCopilotAssigneeCaseInsensitively()
+    {
+        var client = CreateCopilotAttributionClient("Copilot", "octocat", "copilot");
+
+        Assert.Equal("octocat/copilot", await ResolveSingleAuthorAsync(client));
+    }
+
+    [Fact]
+    public async Task PullListKeepsCopilotAuthorWhenNoHumanAssignee()
+    {
+        var client = CreateCopilotAttributionClient("Copilot", "Copilot");
+
+        Assert.Equal("Copilot", await ResolveSingleAuthorAsync(client));
+    }
+
+    [Fact]
+    public async Task PullListKeepsCopilotAuthorWhenMultipleHumanAssignees()
+    {
+        var client = CreateCopilotAttributionClient("Copilot", "JamesNK", "adamint", "Copilot");
+
+        Assert.Equal("Copilot", await ResolveSingleAuthorAsync(client));
+    }
+
+    [Fact]
+    public async Task PullListLeavesNonCopilotAuthorUnchanged()
+    {
+        var client = CreateCopilotAttributionClient("octocat", "octocat", "Copilot");
+
+        Assert.Equal("octocat", await ResolveSingleAuthorAsync(client));
+    }
+
+    [Fact]
+    public async Task PullListDoesNotTreatNonCopilotBotAsCopilot()
+    {
+        var client = CreateCopilotAttributionClient("mycopilot-helper[bot]", "JamesNK", "mycopilot-helper[bot]");
+
+        Assert.Equal("mycopilot-helper[bot]", await ResolveSingleAuthorAsync(client));
+    }
+
+    [Fact]
     public async Task PullListByLabelLoadsOnlyMatchingPullRequests()
     {
         var requestedPaths = new List<string>();
@@ -2996,6 +3055,53 @@ public sealed class GitHubClientTests
 
     private static string PullRequestsJson(IEnumerable<string> pullRequests) =>
         $"[\n{string.Join(",\n", pullRequests)}\n]";
+
+    private static GitHubClient CreateCopilotAttributionClient(string authorLogin, params string[] assigneeLogins)
+    {
+        var assigneesJson = string.Join(
+            ",\n",
+            assigneeLogins.Select(login => $$"""{ "login": {{JsonSerializer.Serialize(login)}} }"""));
+
+        var listJson =
+            $$"""
+            [
+              {
+                "number": 1,
+                "title": "Copilot change",
+                "state": "open",
+                "body": null,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-02T00:00:00Z",
+                "draft": false,
+                "user": { "login": {{JsonSerializer.Serialize(authorLogin)}} },
+                "html_url": "https://github.com/example/repo/pull/1",
+                "labels": [],
+                "assignees": [ {{assigneesJson}} ],
+                "requested_reviewers": [],
+                "requested_teams": []
+              }
+            ]
+            """;
+
+        return CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(listJson),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+    }
+
+    private static async Task<string> ResolveSingleAuthorAsync(GitHubClient client)
+    {
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        return Assert.Single(pullRequests).Author;
+    }
 
     private static string PullRequestJson(
         int number,
