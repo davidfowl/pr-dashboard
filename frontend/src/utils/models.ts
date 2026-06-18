@@ -281,6 +281,13 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
       items: [],
     },
     {
+      label: 'Merge conflicts',
+      summary: 'Open PRs with conflicts against the base branch — waiting on the author to rebase, not on a reviewer.',
+      tone: 'danger',
+      metric: 'unblock merges',
+      items: [],
+    },
+    {
       label: 'Unresolved feedback',
       summary: 'Approved PRs with unresolved review threads that block merging until conversations are resolved.',
       tone: 'danger',
@@ -380,8 +387,12 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
     },
   ];
   const bucketsByLabel = new Map(buckets.map((bucket) => [bucket.label, bucket]));
+  // Unlike the other shared lists (core-team ownership, Ship week) which use
+  // shouldHideFromSharedPullRequestLists, the attention board surfaces merge-conflict PRs in their
+  // own "Merge conflicts" lane (kept out of the Needs attention focus queue). Only needs-author-action
+  // PRs are hidden here.
   const visibleOpenPullRequests = pullRequests.filter((item) =>
-    item.state === 'open' && !shouldHideFromSharedPullRequestLists(item));
+    item.state === 'open' && !hasNeedsAuthorActionLabel(item));
 
   for (const pullRequest of visibleOpenPullRequests) {
     for (const bucketLabel of reviewBucketLabels(pullRequest)) {
@@ -621,6 +632,14 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
     labels.push('CI failing');
   }
 
+  // Conflicted PRs are author-blocked (they need a rebase, not a reviewer), so they get their own
+  // lane and are kept out of the reviewer-discovery lanes (Needs review, Quick wins, Ready to
+  // merge) below. They still overlap with other blocker lanes such as CI failing.
+  const mergeConflicts = hasMergeConflicts(pullRequest);
+  if (mergeConflicts) {
+    labels.push('Merge conflicts');
+  }
+
   const approvedButAging = isApprovedButAging(pullRequest);
   if (approvedButAging) {
     labels.push('Approved but aging');
@@ -631,9 +650,10 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
     labels.push('Unresolved feedback');
   }
 
-  // Failing CI or unresolved review threads disqualify "Ready to merge" — the PR is not
-  // actually ready to land until CI is green and all conversations are resolved.
-  if (pullRequest.review.state === 'approved' && !approvedButAging && !ciFailing && !unresolvedFeedback) {
+  // Failing CI, unresolved review threads, or merge conflicts disqualify "Ready to merge" — the PR
+  // is not actually ready to land until CI is green, conversations are resolved, and it merges
+  // cleanly.
+  if (pullRequest.review.state === 'approved' && !approvedButAging && !ciFailing && !unresolvedFeedback && !mergeConflicts) {
     labels.push('Ready to merge');
   }
 
@@ -696,6 +716,8 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
         : 'Pushed after review';
     case 'Copilot feedback':
       return formatCount(pullRequest.review.unresolvedThreadCount, 'unresolved thread');
+    case 'Merge conflicts':
+      return 'Merge conflicts';
     case 'Docs':
       return 'generated docs';
     case 'Community Toolkit':
@@ -825,6 +847,7 @@ function isCommunityWaiting(pullRequest: PullRequestSummary) {
 function isQuickWin(pullRequest: PullRequestSummary) {
   const linesChanged = changedLineCount(pullRequest);
   return pullRequest.review.state === 'waiting'
+    && !hasMergeConflicts(pullRequest)
     && isCoreTeamAuthor(pullRequest.author)
     && !targetsCurrentRelease(pullRequest)
     && pullRequest.linkedIssues.length <= 1
@@ -839,6 +862,7 @@ function isQuickWin(pullRequest: PullRequestSummary) {
 function needsReview(pullRequest: PullRequestSummary) {
   return pullRequest.review.state === 'waiting'
     && !hasCopilotFeedback(pullRequest)
+    && !hasMergeConflicts(pullRequest)
     && isCoreTeamAuthor(pullRequest.author)
     && ageMs(pullRequest.updatedAt) < needsReviewFreshMs;
 }
