@@ -988,6 +988,8 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
 
   if (isBotAuthor(pullRequest.author)) {
     signals.push({ label: 'bot', tone: 'accent' });
+  } else if (isCopilotAttributedAuthor(pullRequest.author)) {
+    signals.push({ label: 'copilot', tone: 'accent' });
   }
 
   return signals.slice(0, 7);
@@ -1329,7 +1331,13 @@ function mergeDevelopers(developers: DeveloperStats[], actor: string): Developer
 }
 
 function actorIdentityKey(actor: string) {
-  return actor.toLowerCase().replace(/[^a-z0-9]/g, '');
+  // A "{human}/copilot" author identifies as the human who started the Copilot PR, so ownership,
+  // core-team matching, and dedupe all key off that human.
+  const normalized = actor.toLowerCase();
+  const human = normalized.endsWith('/copilot')
+    ? normalized.slice(0, -'/copilot'.length)
+    : normalized;
+  return human.replace(/[^a-z0-9]/g, '');
 }
 
 function actorKeysMatch(first: string, second: string) {
@@ -1749,9 +1757,18 @@ function isIdle(pullRequest: PullRequestSummary) {
 
 function isBotAuthor(author: string) {
   const normalized = author.toLowerCase();
+  // A "{human}/copilot" author is a Copilot PR attributed to the human who started it; treat it as
+  // that human's work, not automation. Only an unattributed Copilot login (or other bots) is a bot.
+  if (isCopilotAttributedAuthor(author)) {
+    return false;
+  }
+
   return normalized.endsWith('[bot]')
     || normalized.includes('bot')
     || normalized === 'copilot'
-    || normalized.endsWith('/copilot')
     || normalized === 'github-actions';
+}
+
+function isCopilotAttributedAuthor(author: string) {
+  return author.toLowerCase().endsWith('/copilot');
 }
