@@ -64,6 +64,21 @@ export function upsertPullRequestsByUpdatedAt(
   return upsertManyByUpdatedAt(items, newItems, mergePullRequestOverlay);
 }
 
+export function replacePullRequestsByUpdatedAt(
+  items: PullRequestSummary[],
+  newItems: PullRequestSummary[],
+) {
+  const itemsByKey = new Map(items.map((item) => [itemKey(item), item]));
+  return upsertManyByUpdatedAt(
+    [],
+    newItems.map((item) => {
+      const current = itemsByKey.get(itemKey(item));
+      return current ? mergePullRequestOverlay(current, item) : item;
+    }),
+    mergePullRequestOverlay,
+  );
+}
+
 function normalizeStreamedPullRequest(item: PullRequestStreamItem): PullRequestSummary {
   return {
     ...item.pullRequest,

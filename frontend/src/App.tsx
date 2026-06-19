@@ -34,9 +34,9 @@ import { readJson } from './utils/http';
 import { beginAbortableLoad } from './utils/loadLifecycle';
 import {
   streamPullRequests,
+  replacePullRequestsByUpdatedAt,
   upsertManyByUpdatedAt,
   upsertPullRequestByUpdatedAt,
-  upsertPullRequestsByUpdatedAt,
 } from './utils/pullRequests';
 import {
   createActivityModel,
@@ -469,8 +469,8 @@ function App() {
       const pullRequestGroups = await Promise.all(pullRequestTasks);
       if (isCurrentLoad()) {
         const streamedPullRequests = pullRequestGroups.flat();
-        setPullRequests((currentPullRequests) => upsertPullRequestsByUpdatedAt(currentPullRequests, streamedPullRequests));
-        setReviewLastUpdatedAt(getReviewLastUpdatedAt(upsertPullRequestsByUpdatedAt([], streamedPullRequests)));
+        setPullRequests((currentPullRequests) => replacePullRequestsByUpdatedAt(currentPullRequests, streamedPullRequests));
+        setReviewLastUpdatedAt(getReviewLastUpdatedAt(replacePullRequestsByUpdatedAt([], streamedPullRequests)));
       }
     } catch (err) {
       if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
