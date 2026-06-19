@@ -854,6 +854,7 @@ function isCommunityWaiting(pullRequest: PullRequestSummary) {
 function isQuickWin(pullRequest: PullRequestSummary) {
   const linesChanged = changedLineCount(pullRequest);
   return pullRequest.review.state === 'waiting'
+    && !hasCopilotFeedback(pullRequest)
     && !hasMergeConflicts(pullRequest)
     && isCoreTeamAuthor(pullRequest.author)
     && !targetsCurrentRelease(pullRequest)
