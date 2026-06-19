@@ -52,6 +52,8 @@ public sealed class GitHubCachePolicyTests
     [InlineData("pulls:public:example/repo:open", true)]
     [InlineData("last-good:pulls:public:example/repo:open", true)]
     [InlineData("pulls:token:oauth:abcdef0123456789:0:example/repo:open", false)]
+    [InlineData("pulls:token:oauth:abcdef0123456789:0:example/repo:public:foo", false)]
+    [InlineData("pulls:user:oauth:abcdef0123456789:0:public:foo", false)]
     [InlineData("current-user:user:oauth:abcdef0123456789:0", false)]
     public void IdentifiesPublicCacheKeys(string cacheKey, bool expected) =>
         Assert.Equal(expected, GitHubCachePolicy.IsPublicCacheKey(cacheKey));

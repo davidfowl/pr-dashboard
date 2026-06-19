@@ -124,7 +124,7 @@ sealed class GitHubPublicCacheStore
 {
     public const string ConnectionName = "github-cache";
     private const string LastGoodCacheKeyPrefix = "last-good:";
-    private const string ExpiresAtMetadataName = "expiresAtUnixTimeSeconds";
+    private const string ExpiresAtMetadataName = "expiresatunixtimeseconds";
     private static readonly JsonSerializerOptions s_jsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly IMemoryCache memoryCache;

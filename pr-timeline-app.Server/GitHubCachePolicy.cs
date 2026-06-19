@@ -147,8 +147,20 @@ static class GitHubCachePolicy
     public static string NormalizeRepositoryName(RepositoryName repositoryName) =>
         $"{repositoryName.Owner.ToLowerInvariant()}/{repositoryName.Name.ToLowerInvariant()}";
 
-    public static bool IsPublicCacheKey(string cacheKey) =>
-        cacheKey.Contains(":public:", StringComparison.Ordinal);
+    public static bool IsPublicCacheKey(string cacheKey)
+    {
+        var publicLaneIndex = cacheKey.IndexOf(":public:", StringComparison.Ordinal);
+        if (publicLaneIndex < 0)
+        {
+            return false;
+        }
+
+        var tokenLaneIndex = cacheKey.IndexOf(":token:", StringComparison.Ordinal);
+        var userLaneIndex = cacheKey.IndexOf(":user:", StringComparison.Ordinal);
+
+        return IsBeforeLane(publicLaneIndex, tokenLaneIndex)
+            && IsBeforeLane(publicLaneIndex, userLaneIndex);
+    }
 
     private static string CreateCacheKey(
         GitHubCacheScope scope,
@@ -182,4 +194,7 @@ static class GitHubCachePolicy
 
         return value.Trim();
     }
+
+    private static bool IsBeforeLane(int publicLaneIndex, int otherLaneIndex) =>
+        otherLaneIndex < 0 || publicLaneIndex < otherLaneIndex;
 }
