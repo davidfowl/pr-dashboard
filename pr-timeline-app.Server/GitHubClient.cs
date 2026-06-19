@@ -4,7 +4,6 @@ using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization.Metadata;
-using Microsoft.Extensions.Caching.Memory;
 
 sealed partial class GitHubClient(
     HttpClient httpClient,
@@ -12,7 +11,7 @@ sealed partial class GitHubClient(
     GitHubPublicCacheIdentity publicCacheIdentity,
     GitHubPublicCacheStore publicCacheStore,
     GitHubCacheScopeResolver cacheScopeResolver,
-    IMemoryCache cache,
+    GitHubResponseCache cache,
     IHostEnvironment environment)
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
@@ -85,72 +84,78 @@ sealed partial class GitHubClient(
         }
 
         var refreshCacheKey = $"force-refresh:{cacheKey}";
-        if (cache.TryGetValue(refreshCacheKey, out _))
+        if (cache.TryGetLocalValue(refreshCacheKey, out bool _))
         {
             return false;
         }
 
-        cache.Set(refreshCacheKey, true, ForceRefreshCooldown);
+        cache.SetLocalValue(refreshCacheKey, true, ForceRefreshCooldown);
         return true;
     }
 
     private static TimeSpan CacheDurationForScope(GitHubCacheScope scope) =>
         scope.IsShared ? PublicCacheDuration : CacheDuration;
 
-    private void SetCacheEntry<T>(string cacheKey, T value, TimeSpan cacheDuration) =>
-        cache.Set(cacheKey, value, CreateCacheEntryOptions(cacheDuration));
-
-    private static MemoryCacheEntryOptions CreateCacheEntryOptions(TimeSpan cacheDuration)
-    {
-        var options = new MemoryCacheEntryOptions();
-        if (cacheDuration == Timeout.InfiniteTimeSpan)
-        {
-            options.Priority = CacheItemPriority.NeverRemove;
-        }
-        else
-        {
-            options.AbsoluteExpirationRelativeToNow = cacheDuration;
-        }
-
-        return options;
-    }
+    private async Task SetCacheEntryAsync<T>(
+        string cacheKey,
+        T value,
+        TimeSpan cacheDuration,
+        CancellationToken cancellationToken) =>
+        await cache.SetAsync(cacheKey, value, cacheDuration, cancellationToken);
 
     private static string GetLastGoodCacheKey(string cacheKey) => $"last-good:{cacheKey}";
 
-    private void SetLastGood<T>(string cacheKey, T value) =>
-        cache.Set(GetLastGoodCacheKey(cacheKey), value, LastGoodCacheDuration);
-
-    private bool TryGetLastGood<T>(string cacheKey, out T? value) =>
-        cache.TryGetValue(GetLastGoodCacheKey(cacheKey), out value) && value is not null;
-
-    private bool TryGetCachedFallback<T>(string? cacheKey, out T? value)
-    {
-        value = default;
-        return cacheKey is not null
-            && cache.TryGetValue(cacheKey, out value)
-            && value is not null;
-    }
-
-    private bool TryUseLastGoodFallback<T>(
+    private async Task SetLastGoodAsync<T>(
         string cacheKey,
-        Exception exception,
-        CancellationToken cancellationToken,
-        out T? value)
+        T value,
+        CancellationToken cancellationToken) =>
+        await cache.SetAsync(GetLastGoodCacheKey(cacheKey), value, LastGoodCacheDuration, cancellationToken);
+
+    private async Task<GitHubCacheLookup<T>> GetLastGoodAsync<T>(
+        string cacheKey,
+        CancellationToken cancellationToken)
     {
-        value = default;
-        return IsTransientGitHubFailure(exception, cancellationToken)
-            && TryGetLastGood(cacheKey, out value);
+        var lookup = await cache.GetAsync<T>(GetLastGoodCacheKey(cacheKey), cancellationToken);
+        return lookup.Found && lookup.Value is not null ? lookup : default;
     }
 
-    private bool TryUseCachedFallback<T>(
+    private async Task RemoveLastGoodAsync(string cacheKey, CancellationToken cancellationToken) =>
+        await cache.RemoveAsync(GetLastGoodCacheKey(cacheKey), cancellationToken);
+
+    private async Task<GitHubCacheLookup<T>> GetCachedFallbackAsync<T>(
         string? cacheKey,
-        Exception exception,
-        CancellationToken cancellationToken,
-        out T? value)
+        CancellationToken cancellationToken)
     {
-        value = default;
-        return IsTransientGitHubFailure(exception, cancellationToken)
-            && TryGetCachedFallback(cacheKey, out value);
+        if (cacheKey is null)
+        {
+            return default;
+        }
+
+        var lookup = await cache.GetAsync<T>(cacheKey, cancellationToken);
+        return lookup.Found && lookup.Value is not null ? lookup : default;
+    }
+
+    private async Task<GitHubCacheLookup<T>> GetTransientFallbackAsync<T>(
+        string cacheKey,
+        string? transientFallbackCacheKey,
+        CancellationToken cancellationToken)
+    {
+        var cachedFallback = await GetCachedFallbackAsync<T>(transientFallbackCacheKey, cancellationToken);
+        if (cachedFallback.Found)
+        {
+            return cachedFallback;
+        }
+
+        if (transientFallbackCacheKey is not null)
+        {
+            var fallbackLastGood = await GetLastGoodAsync<T>(transientFallbackCacheKey, cancellationToken);
+            if (fallbackLastGood.Found)
+            {
+                return fallbackLastGood;
+            }
+        }
+
+        return await GetLastGoodAsync<T>(cacheKey, cancellationToken);
     }
 
     private async Task<T> GetOrCreateWithLastGoodFallbackAsync<T>(
@@ -165,28 +170,34 @@ sealed partial class GitHubClient(
         string? transientFallbackCacheKey = null)
         where T : class
     {
-        var hasCachedValue = cache.TryGetValue(cacheKey, out T? cachedValue) && cachedValue is not null;
+        var cachedLookup = await cache.GetAsync<T>(cacheKey, cancellationToken);
+        var hasCachedValue = cachedLookup.Found && cachedLookup.Value is not null;
         if (!refresh && hasCachedValue)
         {
-            return cachedValue!;
+            return cachedLookup.Value!;
         }
 
         if (cacheOnly)
         {
-            if (TryGetLastGood(cacheKey, out T? lastGood))
+            var lastGood = await GetLastGoodAsync<T>(cacheKey, cancellationToken);
+            if (lastGood.Found)
             {
-                return lastGood!;
+                return lastGood.Value!;
             }
 
-            if (TryGetCachedFallback(transientFallbackCacheKey, out T? cachedFallback))
+            var cachedFallback = await GetCachedFallbackAsync<T>(transientFallbackCacheKey, cancellationToken);
+            if (cachedFallback.Found)
             {
-                return cachedFallback!;
+                return cachedFallback.Value!;
             }
 
-            if (transientFallbackCacheKey is not null
-                && TryGetLastGood(transientFallbackCacheKey, out T? fallbackLastGood))
+            if (transientFallbackCacheKey is not null)
             {
-                return fallbackLastGood!;
+                var fallbackLastGood = await GetLastGoodAsync<T>(transientFallbackCacheKey, cancellationToken);
+                if (fallbackLastGood.Found)
+                {
+                    return fallbackLastGood.Value!;
+                }
             }
 
             throw CreatePublicCacheUnavailableException();
@@ -197,32 +208,30 @@ sealed partial class GitHubClient(
             var value = await factory();
             if (storeLastGood?.Invoke(value) ?? true)
             {
-                SetLastGood(cacheKey, value);
+                await SetLastGoodAsync(cacheKey, value, cancellationToken);
             }
             else
             {
-                cache.Remove(GetLastGoodCacheKey(cacheKey));
+                await RemoveLastGoodAsync(cacheKey, cancellationToken);
             }
 
-            SetCacheEntry(cacheKey, value, cacheDurationSelector?.Invoke(value) ?? cacheDuration);
+            await SetCacheEntryAsync(cacheKey, value, cacheDurationSelector?.Invoke(value) ?? cacheDuration, cancellationToken);
             return value;
         }
-        catch (Exception ex) when (hasCachedValue && IsTransientGitHubFailure(ex, cancellationToken))
+        catch (Exception ex) when (IsTransientGitHubFailure(ex, cancellationToken))
         {
-            return cachedValue!;
-        }
-        catch (Exception ex) when (TryUseCachedFallback(transientFallbackCacheKey, ex, cancellationToken, out T? fallback))
-        {
-            return fallback!;
-        }
-        catch (Exception ex) when (transientFallbackCacheKey is not null
-            && TryUseLastGoodFallback(transientFallbackCacheKey, ex, cancellationToken, out T? fallbackLastGood))
-        {
-            return fallbackLastGood!;
-        }
-        catch (Exception ex) when (TryUseLastGoodFallback(cacheKey, ex, cancellationToken, out T? lastGood))
-        {
-            return lastGood!;
+            if (hasCachedValue)
+            {
+                return cachedLookup.Value!;
+            }
+
+            var fallback = await GetTransientFallbackAsync<T>(cacheKey, transientFallbackCacheKey, cancellationToken);
+            if (fallback.Found)
+            {
+                return fallback.Value!;
+            }
+
+            throw;
         }
     }
 
@@ -237,28 +246,33 @@ sealed partial class GitHubClient(
         Func<T?, bool>? storeValue = null,
         string? transientFallbackCacheKey = null)
     {
-        var hasCachedValue = cache.TryGetValue(cacheKey, out T? cachedValue);
-        if (!refresh && hasCachedValue)
+        var cachedLookup = await cache.GetAsync<T>(cacheKey, cancellationToken);
+        if (!refresh && cachedLookup.Found)
         {
-            return cachedValue;
+            return cachedLookup.Value;
         }
 
         if (cacheOnly)
         {
-            if (TryGetLastGood(cacheKey, out T? lastGood))
+            var lastGood = await GetLastGoodAsync<T>(cacheKey, cancellationToken);
+            if (lastGood.Found)
             {
-                return lastGood;
+                return lastGood.Value;
             }
 
-            if (TryGetCachedFallback(transientFallbackCacheKey, out T? cachedFallback))
+            var cachedFallback = await GetCachedFallbackAsync<T>(transientFallbackCacheKey, cancellationToken);
+            if (cachedFallback.Found)
             {
-                return cachedFallback;
+                return cachedFallback.Value;
             }
 
-            if (transientFallbackCacheKey is not null
-                && TryGetLastGood(transientFallbackCacheKey, out T? fallbackLastGood))
+            if (transientFallbackCacheKey is not null)
             {
-                return fallbackLastGood;
+                var fallbackLastGood = await GetLastGoodAsync<T>(transientFallbackCacheKey, cancellationToken);
+                if (fallbackLastGood.Found)
+                {
+                    return fallbackLastGood.Value;
+                }
             }
 
             throw CreatePublicCacheUnavailableException();
@@ -272,41 +286,39 @@ sealed partial class GitHubClient(
             {
                 if (value is not null)
                 {
-                    SetLastGood(cacheKey, value);
+                    await SetLastGoodAsync(cacheKey, value, cancellationToken);
                 }
                 else
                 {
-                    cache.Remove(GetLastGoodCacheKey(cacheKey));
+                    await RemoveLastGoodAsync(cacheKey, cancellationToken);
                 }
 
                 var resolvedCacheDuration = value is not null && cacheDurationSelector is not null
                     ? cacheDurationSelector(value)
                     : cacheDuration;
-                SetCacheEntry(cacheKey, value, resolvedCacheDuration);
+                await SetCacheEntryAsync(cacheKey, value, resolvedCacheDuration, cancellationToken);
             }
             else
             {
-                cache.Remove(GetLastGoodCacheKey(cacheKey));
+                await RemoveLastGoodAsync(cacheKey, cancellationToken);
             }
 
             return value;
         }
-        catch (Exception ex) when (hasCachedValue && IsTransientGitHubFailure(ex, cancellationToken))
+        catch (Exception ex) when (IsTransientGitHubFailure(ex, cancellationToken))
         {
-            return cachedValue;
-        }
-        catch (Exception ex) when (TryUseCachedFallback(transientFallbackCacheKey, ex, cancellationToken, out T? fallback))
-        {
-            return fallback;
-        }
-        catch (Exception ex) when (transientFallbackCacheKey is not null
-            && TryUseLastGoodFallback(transientFallbackCacheKey, ex, cancellationToken, out T? fallbackLastGood))
-        {
-            return fallbackLastGood;
-        }
-        catch (Exception ex) when (TryUseLastGoodFallback(cacheKey, ex, cancellationToken, out T? lastGood))
-        {
-            return lastGood;
+            if (cachedLookup.Found)
+            {
+                return cachedLookup.Value;
+            }
+
+            var fallback = await GetTransientFallbackAsync<T>(cacheKey, transientFallbackCacheKey, cancellationToken);
+            if (fallback.Found)
+            {
+                return fallback.Value;
+            }
+
+            throw;
         }
     }
 
@@ -359,16 +371,23 @@ sealed partial class GitHubClient(
         var cacheKey = GitHubCachePolicy.CreateUserCacheKey(
             GitHubCachePolicy.CreateUserScope(authCacheKey),
             "current-user");
-        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        var cachedLogin = await cache.GetAsync<string>(cacheKey, cancellationToken);
+        if (cachedLogin.Found)
         {
-            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);
-            var user = await SendGitHubRequestAsync(
-                "user",
-                GitHubJsonSerializerContext.Default.GitHubActorDto,
-                GitHubRequestAuthorization.Token,
-                cancellationToken);
-            return user.Login;
-        });
+            return cachedLogin.Value;
+        }
+
+        var user = await SendGitHubRequestAsync(
+            "user",
+            GitHubJsonSerializerContext.Default.GitHubActorDto,
+            GitHubRequestAuthorization.Token,
+            cancellationToken);
+        if (!string.IsNullOrWhiteSpace(user.Login))
+        {
+            await SetCacheEntryAsync(cacheKey, user.Login, TimeSpan.FromMinutes(5), cancellationToken);
+        }
+
+        return user.Login;
     }
 
     public async Task<IReadOnlyList<PullRequestSummary>> GetPullRequestsAsync(
@@ -402,7 +421,7 @@ sealed partial class GitHubClient(
             if (eligibility is GitHubPublicCacheRepositoryEligibility.NotAllowlisted
                 or GitHubPublicCacheRepositoryEligibility.NotPublic)
             {
-                publicCacheStore.RemoveRepository(repositoryName);
+                await publicCacheStore.RemoveRepositoryAsync(repositoryName, cancellationToken);
             }
 
             return false;
@@ -422,7 +441,7 @@ sealed partial class GitHubClient(
             cacheOnly: false,
             transientFallbackCacheKey: null,
             cancellationToken);
-        publicCacheStore.Track(repositoryName, cacheKey);
+        await publicCacheStore.TrackAsync(repositoryName, cacheKey, cancellationToken);
         return true;
     }
 
@@ -500,9 +519,10 @@ sealed partial class GitHubClient(
             state);
         var refreshCache = TryBeginCacheRefresh(cacheKey, scopeSelection.Refresh);
 
-        if (!refreshCache && cache.TryGetValue(cacheKey, out IReadOnlyList<PullRequestSummary>? cachedPullRequests) && cachedPullRequests is not null)
+        var cachedPullRequests = await cache.GetAsync<IReadOnlyList<PullRequestSummary>>(cacheKey, cancellationToken);
+        if (!refreshCache && cachedPullRequests is { Found: true, Value: not null })
         {
-            foreach (var pullRequest in cachedPullRequests)
+            foreach (var pullRequest in cachedPullRequests.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return pullRequest;
@@ -513,14 +533,27 @@ sealed partial class GitHubClient(
 
         if (scopeSelection.CacheOnly)
         {
-            if (!TryGetLastGood(cacheKey, out IReadOnlyList<PullRequestSummary>? cacheOnlyPullRequests)
-                && !TryGetCachedFallback(transientFallbackCacheKey, out cacheOnlyPullRequests)
-                && (transientFallbackCacheKey is null || !TryGetLastGood(transientFallbackCacheKey, out cacheOnlyPullRequests)))
+            var cacheOnlyPullRequests = await GetLastGoodAsync<IReadOnlyList<PullRequestSummary>>(cacheKey, cancellationToken);
+            if (!cacheOnlyPullRequests.Found)
+            {
+                cacheOnlyPullRequests = await GetCachedFallbackAsync<IReadOnlyList<PullRequestSummary>>(
+                    transientFallbackCacheKey,
+                    cancellationToken);
+            }
+
+            if (!cacheOnlyPullRequests.Found && transientFallbackCacheKey is not null)
+            {
+                cacheOnlyPullRequests = await GetLastGoodAsync<IReadOnlyList<PullRequestSummary>>(
+                    transientFallbackCacheKey,
+                    cancellationToken);
+            }
+
+            if (cacheOnlyPullRequests is not { Found: true, Value: not null })
             {
                 throw CreatePublicCacheUnavailableException();
             }
 
-            foreach (var stalePullRequest in cacheOnlyPullRequests!)
+            foreach (var stalePullRequest in cacheOnlyPullRequests.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return stalePullRequest;
@@ -551,14 +584,18 @@ sealed partial class GitHubClient(
                     pullRequest = enumerator.Current;
                 }
             }
-            catch (Exception ex) when (streamedPullRequests.Count == 0
-                && TryUseCachedFallback(transientFallbackCacheKey, ex, cancellationToken, out stalePullRequests))
+            catch (Exception ex) when (streamedPullRequests.Count == 0 && IsTransientGitHubFailure(ex, cancellationToken))
             {
-                hasPullRequest = false;
-            }
-            catch (Exception ex) when (streamedPullRequests.Count == 0
-                && TryUseLastGoodFallback(cacheKey, ex, cancellationToken, out stalePullRequests))
-            {
+                var fallback = await GetTransientFallbackAsync<IReadOnlyList<PullRequestSummary>>(
+                    cacheKey,
+                    transientFallbackCacheKey,
+                    cancellationToken);
+                if (!fallback.Found)
+                {
+                    throw;
+                }
+
+                stalePullRequests = fallback.Value;
                 hasPullRequest = false;
             }
 
@@ -586,8 +623,8 @@ sealed partial class GitHubClient(
         }
 
         var completedPullRequests = streamedPullRequests.ToArray();
-        SetLastGood(cacheKey, completedPullRequests);
-        SetCacheEntry(cacheKey, completedPullRequests, CacheDurationForScope(scope));
+        await SetLastGoodAsync(cacheKey, completedPullRequests, cancellationToken);
+        await SetCacheEntryAsync(cacheKey, completedPullRequests, CacheDurationForScope(scope), cancellationToken);
     }
 
     public async Task<IReadOnlyList<PullRequestSummary>> GetPullRequestsByLabelAsync(
@@ -710,9 +747,10 @@ sealed partial class GitHubClient(
             normalizedLabel);
         var refreshCache = TryBeginCacheRefresh(cacheKey, scopeSelection.Refresh);
 
-        if (!refreshCache && cache.TryGetValue(cacheKey, out IReadOnlyList<PullRequestSummary>? cachedPullRequests) && cachedPullRequests is not null)
+        var cachedPullRequests = await cache.GetAsync<IReadOnlyList<PullRequestSummary>>(cacheKey, cancellationToken);
+        if (!refreshCache && cachedPullRequests is { Found: true, Value: not null })
         {
-            foreach (var pullRequest in cachedPullRequests)
+            foreach (var pullRequest in cachedPullRequests.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return pullRequest;
@@ -723,14 +761,27 @@ sealed partial class GitHubClient(
 
         if (scopeSelection.CacheOnly)
         {
-            if (!TryGetLastGood(cacheKey, out IReadOnlyList<PullRequestSummary>? cacheOnlyPullRequests)
-                && !TryGetCachedFallback(transientFallbackCacheKey, out cacheOnlyPullRequests)
-                && (transientFallbackCacheKey is null || !TryGetLastGood(transientFallbackCacheKey, out cacheOnlyPullRequests)))
+            var cacheOnlyPullRequests = await GetLastGoodAsync<IReadOnlyList<PullRequestSummary>>(cacheKey, cancellationToken);
+            if (!cacheOnlyPullRequests.Found)
+            {
+                cacheOnlyPullRequests = await GetCachedFallbackAsync<IReadOnlyList<PullRequestSummary>>(
+                    transientFallbackCacheKey,
+                    cancellationToken);
+            }
+
+            if (!cacheOnlyPullRequests.Found && transientFallbackCacheKey is not null)
+            {
+                cacheOnlyPullRequests = await GetLastGoodAsync<IReadOnlyList<PullRequestSummary>>(
+                    transientFallbackCacheKey,
+                    cancellationToken);
+            }
+
+            if (cacheOnlyPullRequests is not { Found: true, Value: not null })
             {
                 throw CreatePublicCacheUnavailableException();
             }
 
-            foreach (var stalePullRequest in cacheOnlyPullRequests!)
+            foreach (var stalePullRequest in cacheOnlyPullRequests.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return stalePullRequest;
@@ -761,14 +812,18 @@ sealed partial class GitHubClient(
                     pullRequest = enumerator.Current;
                 }
             }
-            catch (Exception ex) when (streamedPullRequests.Count == 0
-                && TryUseCachedFallback(transientFallbackCacheKey, ex, cancellationToken, out stalePullRequests))
+            catch (Exception ex) when (streamedPullRequests.Count == 0 && IsTransientGitHubFailure(ex, cancellationToken))
             {
-                hasPullRequest = false;
-            }
-            catch (Exception ex) when (streamedPullRequests.Count == 0
-                && TryUseLastGoodFallback(cacheKey, ex, cancellationToken, out stalePullRequests))
-            {
+                var fallback = await GetTransientFallbackAsync<IReadOnlyList<PullRequestSummary>>(
+                    cacheKey,
+                    transientFallbackCacheKey,
+                    cancellationToken);
+                if (!fallback.Found)
+                {
+                    throw;
+                }
+
+                stalePullRequests = fallback.Value;
                 hasPullRequest = false;
             }
 
@@ -796,8 +851,8 @@ sealed partial class GitHubClient(
         }
 
         var completedPullRequests = streamedPullRequests.ToArray();
-        SetLastGood(cacheKey, completedPullRequests);
-        SetCacheEntry(cacheKey, completedPullRequests, CacheDurationForScope(scope));
+        await SetLastGoodAsync(cacheKey, completedPullRequests, cancellationToken);
+        await SetCacheEntryAsync(cacheKey, completedPullRequests, CacheDurationForScope(scope), cancellationToken);
     }
 
     public async Task<IReadOnlyList<ShipWeekIssueSummary>> GetFocusIssuesAsync(
@@ -1793,13 +1848,14 @@ sealed partial class GitHubClient(
             "checks",
             headSha);
         var refreshCache = TryBeginCacheRefresh(cacheKey, forceRefresh);
-        var hasCachedStatus = cache.TryGetValue(cacheKey, out ChecksStatus? cachedStatus) && cachedStatus is not null;
-        var hasLastGoodStatus = TryGetLastGood(cacheKey, out ChecksStatus? _);
-        var hasTransientFallbackStatus = transientFallbackCacheKey is not null
-            && cache.TryGetValue(transientFallbackCacheKey, out ChecksStatus? fallbackStatus)
-            && fallbackStatus is not null;
+        var cachedStatus = await cache.GetAsync<ChecksStatus>(cacheKey, cancellationToken);
+        var hasCachedStatus = cachedStatus is { Found: true, Value: not null };
+        var hasLastGoodStatus = (await GetLastGoodAsync<ChecksStatus>(cacheKey, cancellationToken)).Found;
+        var hasTransientFallbackStatus = (await GetCachedFallbackAsync<ChecksStatus>(
+            transientFallbackCacheKey,
+            cancellationToken)).Found;
         var hasTransientFallbackLastGoodStatus = transientFallbackCacheKey is not null
-            && TryGetLastGood(transientFallbackCacheKey, out ChecksStatus? _);
+            && (await GetLastGoodAsync<ChecksStatus>(transientFallbackCacheKey, cancellationToken)).Found;
         var preserveCachedStatusOnTransientFailure = hasCachedStatus
             || hasLastGoodStatus
             || hasTransientFallbackStatus

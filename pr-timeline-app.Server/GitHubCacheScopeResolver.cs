@@ -41,11 +41,11 @@ sealed class GitHubCacheScopeResolver(
 
             if (eligibility == GitHubPublicCacheRepositoryEligibility.NotPublic)
             {
-                publicCacheStore.RemoveRepository(repositoryName);
+                await publicCacheStore.RemoveRepositoryAsync(repositoryName, cancellationToken);
             }
 
             if (eligibility == GitHubPublicCacheRepositoryEligibility.Unverified
-                && publicCacheStore.HasTrackedSnapshot(repositoryName))
+                && await publicCacheStore.HasTrackedSnapshotAsync(repositoryName, cancellationToken))
             {
                 return GitHubCachePolicy.CreatePublicRepositoryScope();
             }
