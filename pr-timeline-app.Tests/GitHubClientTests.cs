@@ -1413,6 +1413,52 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListForcedRefreshAlwaysFetchesFreshData()
+    {
+        var listRequests = 0;
+        var client = CreateClient(path =>
+        {
+            if (TryGetPullRequestNumber(path, "/reviews?per_page=100", out _))
+            {
+                return Json("[]");
+            }
+
+            if (TryGetPullRequestNumber(path, "", out var detailsNumber))
+            {
+                return Json(PullRequestDetailsJson(detailsNumber));
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    PullRequestsJson([PullRequestJson(1, title: $"List {++listRequests}")])),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var originalPullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+        var firstRefreshPullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            true,
+            TestContext.Current.CancellationToken);
+        var secondRefreshPullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("List 1", Assert.Single(originalPullRequests).Title);
+        Assert.Equal("List 2", Assert.Single(firstRefreshPullRequests).Title);
+        Assert.Equal("List 3", Assert.Single(secondRefreshPullRequests).Title);
+        Assert.Equal(3, listRequests);
+    }
+
+    [Fact]
     public async Task PullListUsesLastGoodDataWhenForcedRefreshHitsTransientFailure()
     {
         var listRequests = 0;
@@ -1607,10 +1653,59 @@ public sealed class GitHubClientTests
             TestContext.Current.CancellationToken));
 
         Assert.Equal(Enumerable.Range(1, 21), refreshedPullRequests.Take(21).Select(pullRequest => pullRequest.Number));
-        Assert.Equal(Enumerable.Range(1, 20), refreshedPullRequests.Skip(21).Take(20).Select(pullRequest => pullRequest.Number));
-        Assert.Equal(Enumerable.Range(1, 20), refreshedPullRequests.Skip(41).Select(pullRequest => pullRequest.Number));
+        Assert.Equal(Enumerable.Range(1, 20), refreshedPullRequests.Skip(21).Select(pullRequest => pullRequest.Number));
         Assert.All(refreshedPullRequests.Take(21), pullRequest => Assert.StartsWith("Good ", pullRequest.Title));
         Assert.All(refreshedPullRequests.Skip(21), pullRequest => Assert.StartsWith("Fresh ", pullRequest.Title));
+    }
+
+    [Fact]
+    public async Task StreamPullRequestsDoesNotDowngradeStaleItemsWhenRefreshFailsBeforeBatchIsEnriched()
+    {
+        var listRequests = 0;
+        var client = CreateClient(path =>
+        {
+            if (TryGetPullRequestNumber(path, "/reviews?per_page=100", out _))
+            {
+                return Json("[]");
+            }
+
+            if (TryGetPullRequestNumber(path, "", out var detailsNumber))
+            {
+                return Json(PullRequestDetailsJson(detailsNumber));
+            }
+
+            if (path == "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2")
+            {
+                return Json(
+                    """{ "message": "GitHub unavailable" }""",
+                    HttpStatusCode.ServiceUnavailable);
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when ++listRequests == 1 => Json(
+                    PullRequestsJson(Enumerable.Range(1, 5).Select(number => PullRequestJson(number, title: $"Good {number}")))),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    PullRequestsJson(Enumerable.Range(1, 5).Select(number => PullRequestJson(number, title: $"Fresh baseline {number}"))),
+                    linkHeader: "<https://api.github.com/repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2>; rel=\"next\""),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        await EnumerateAsync(client.StreamPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken));
+
+        var refreshedPullRequests = await EnumerateAsync(client.StreamPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            true,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(Enumerable.Range(1, 5), refreshedPullRequests.Select(pullRequest => pullRequest.Number));
+        Assert.All(refreshedPullRequests, pullRequest => Assert.StartsWith("Good ", pullRequest.Title));
     }
 
     [Fact]
@@ -2461,7 +2556,7 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
-    public async Task PullRequestChecksForceRefreshUsesCooldownAfterBypassingCachedStatus()
+    public async Task PullRequestChecksForceRefreshAlwaysBypassesCachedStatus()
     {
         var requestCount = 0;
         var client = CreateClient(path =>
@@ -2505,7 +2600,7 @@ public sealed class GitHubClientTests
             true,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(4, requestCount);
+        Assert.Equal(6, requestCount);
     }
 
     [Fact]
