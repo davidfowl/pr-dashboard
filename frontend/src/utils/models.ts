@@ -49,7 +49,10 @@ const regressionBucketLabel = 'Regression';
 const ctiTeamIssueBucketLabel = 'CTI team';
 const ctiTeamTitleMarker = '[aspiree2e]';
 const releaseBlockingLabelMarker = 'blocking-release';
-const needsAuthorActionLabel = 'needs-author-action';
+// Labels that mark a PR as "do not merge / waiting on the author"; matched case-insensitively.
+// Different repos in the dashboard use different names (e.g. needs-author-action, NO-MERGE), so
+// honor any of them.
+const doNotMergeLabels = new Set(['needs-author-action', 'no-merge']);
 
 type FocusIssueBucketDefinition = Omit<AttentionIssueBucket, 'issues'> & {
   matches: (issue: ShipWeekIssueSummary) => boolean;
@@ -154,7 +157,7 @@ function createPersonalPick(pullRequest: PullRequestSummary, login: string): Pic
       ? {
         pullRequest,
         action: personalPickActions.needsAttention,
-        reason: `Your PR is labeled ${needsAuthorActionLabel} · ${pickReason(pullRequest)}`,
+        reason: `Your PR is labeled ${matchingDoNotMergeLabel(pullRequest) ?? 'no-merge'} · ${pickReason(pullRequest)}`,
         tone: 'danger',
         personal: true,
       }
@@ -775,7 +778,11 @@ export function hasMergeConflicts(pullRequest: PullRequestSummary) {
 }
 
 export function hasNeedsAuthorActionLabel(pullRequest: PullRequestSummary) {
-  return pullRequest.labels.some((label) => label.toLowerCase() === needsAuthorActionLabel);
+  return matchingDoNotMergeLabel(pullRequest) !== null;
+}
+
+function matchingDoNotMergeLabel(pullRequest: PullRequestSummary): string | null {
+  return pullRequest.labels.find((label) => doNotMergeLabels.has(label.toLowerCase())) ?? null;
 }
 
 export function shouldHideFromSharedPullRequestLists(pullRequest: PullRequestSummary) {
