@@ -32,7 +32,12 @@ import type {
 import { colorForText } from './utils/format';
 import { readJson } from './utils/http';
 import { beginAbortableLoad } from './utils/loadLifecycle';
-import { streamPullRequests, upsertByUpdatedAt, upsertManyByUpdatedAt } from './utils/pullRequests';
+import {
+  streamPullRequests,
+  replacePullRequestsByUpdatedAt,
+  upsertManyByUpdatedAt,
+  upsertPullRequestByUpdatedAt,
+} from './utils/pullRequests';
 import {
   createActivityModel,
   createAttentionBuckets,
@@ -140,7 +145,6 @@ function App() {
   const pendingVisibleChecksRef = useRef(new Set<string>());
   const visibleChecksTimerRef = useRef<number | null>(null);
   const visibleChecksAbortControllerRef = useRef<AbortController | null>(null);
-  const forceVisibleChecksRefreshRef = useRef(false);
   const pullRequestsLoadVersionRef = useRef(0);
   const pullRequestsAbortControllerRef = useRef<AbortController | null>(null);
   const issuesLoadVersionRef = useRef(0);
@@ -426,7 +430,6 @@ function App() {
     setPullsLoading(true);
     setError(null);
     beginVisibleChecksRequestScope();
-    forceVisibleChecksRefreshRef.current = options.forceRefresh ?? false;
     if (!options.preserveResults) {
       currentSelectionRef.current = null;
       setSelectedPullRequest(null);
@@ -458,16 +461,16 @@ function App() {
               return;
             }
 
-            setPullRequests((currentPullRequests) => upsertByUpdatedAt(currentPullRequests, pullRequest));
+            setPullRequests((currentPullRequests) => upsertPullRequestByUpdatedAt(currentPullRequests, pullRequest));
           },
         });
       });
 
       const pullRequestGroups = await Promise.all(pullRequestTasks);
       if (isCurrentLoad()) {
-        const nextPullRequests = upsertManyByUpdatedAt([], pullRequestGroups.flat());
-        setPullRequests(nextPullRequests);
-        setReviewLastUpdatedAt(getReviewLastUpdatedAt(nextPullRequests));
+        const streamedPullRequests = pullRequestGroups.flat();
+        setPullRequests((currentPullRequests) => replacePullRequestsByUpdatedAt(currentPullRequests, streamedPullRequests));
+        setReviewLastUpdatedAt(getReviewLastUpdatedAt(replacePullRequestsByUpdatedAt([], streamedPullRequests)));
       }
     } catch (err) {
       if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
@@ -566,7 +569,6 @@ function App() {
     setShipWeekSnapshotError(null);
     setShowShipWeekSnapshotDownload(false);
     beginVisibleChecksRequestScope();
-    forceVisibleChecksRefreshRef.current = options.forceRefresh ?? false;
 
     try {
       const shipWeekParams = normalizeShipWeekRouteParams({ repositoryInput, milestoneInput, releaseBranchInput });
@@ -616,7 +618,7 @@ function App() {
       });
       const docsTasks = docsRepositories.map((repository) =>
         loadDocsFromCodePullRequests(repository, options, abortController.signal, (pullRequest) => {
-          docsPullRequests = upsertByUpdatedAt(docsPullRequests, pullRequest);
+          docsPullRequests = upsertPullRequestByUpdatedAt(docsPullRequests, pullRequest);
           publishShipWeek();
         }));
       const releaseDoneTask = Promise.all(releaseTasks).finally(() => {
@@ -728,10 +730,6 @@ function App() {
 
     const abortController = visibleChecksAbortControllerRef.current ?? new AbortController();
     visibleChecksAbortControllerRef.current = abortController;
-    const forceRefresh = forceVisibleChecksRefreshRef.current;
-    if (forceRefresh) {
-      forceVisibleChecksRefreshRef.current = false;
-    }
     const itemsByRepository = queuedItems.reduce((groups, item) => {
       const repositoryItems = groups.get(item.repository) ?? [];
       repositoryItems.push(item);
@@ -739,7 +737,7 @@ function App() {
       return groups;
     }, new Map<string, VisibleChecksRequestItem[]>());
     await Promise.all([...itemsByRepository].map(([repository, items]) =>
-      loadVisibleChecks(repository, items, requestVersion, abortController.signal, forceRefresh)));
+      loadVisibleChecks(repository, items, requestVersion, abortController.signal)));
   }
 
   async function loadVisibleChecks(
@@ -747,14 +745,10 @@ function App() {
     items: VisibleChecksRequestItem[],
     requestVersion: number,
     signal: AbortSignal,
-    forceRefresh: boolean,
   ) {
     const requestedKeys = items.map((item) => checksRequestKey(item.repository, item.number, item.headSha));
     try {
       const query = new URLSearchParams({ repo: repository });
-      if (forceRefresh) {
-        query.set('refresh', 'true');
-      }
       const body: PullRequestChecksRequest = {
         pullRequests: items.map((item) => ({
           number: item.number,

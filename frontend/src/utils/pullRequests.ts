@@ -1,4 +1,4 @@
-import type { PullRequestStreamItem, PullRequestSummary } from '../types';
+import type { CheckState, PullRequestStreamItem, PullRequestSummary } from '../types';
 import { readJsonLines } from './http';
 
 type PullRequestCollectionItem = {
@@ -34,17 +34,49 @@ export function upsertByUpdatedAt<T extends PullRequestCollectionItem>(items: T[
   return upsertManyByUpdatedAt(items, [item]);
 }
 
-export function upsertManyByUpdatedAt<T extends PullRequestCollectionItem>(items: T[], newItems: T[]) {
+export function upsertManyByUpdatedAt<T extends PullRequestCollectionItem>(
+  items: T[],
+  newItems: T[],
+  merge?: (current: T, next: T) => T,
+) {
   if (newItems.length === 0) {
     return items;
   }
 
   const itemsByKey = new Map(items.map((item) => [itemKey(item), item]));
   for (const item of newItems) {
-    itemsByKey.set(itemKey(item), item);
+    const key = itemKey(item);
+    const current = itemsByKey.get(key);
+    itemsByKey.set(key, current && merge ? merge(current, item) : item);
   }
 
   return [...itemsByKey.values()].sort((first, second) => updatedAtSortValue(second) - updatedAtSortValue(first));
+}
+
+export function upsertPullRequestByUpdatedAt(items: PullRequestSummary[], item: PullRequestSummary) {
+  return upsertPullRequestsByUpdatedAt(items, [item]);
+}
+
+export function upsertPullRequestsByUpdatedAt(
+  items: PullRequestSummary[],
+  newItems: PullRequestSummary[],
+) {
+  return upsertManyByUpdatedAt(items, newItems, mergePullRequestOverlay);
+}
+
+export function replacePullRequestsByUpdatedAt(
+  items: PullRequestSummary[],
+  newItems: PullRequestSummary[],
+) {
+  const itemsByKey = new Map(items.map((item) => [itemKey(item), item]));
+  return upsertManyByUpdatedAt(
+    [],
+    newItems.map((item) => {
+      const current = itemsByKey.get(itemKey(item));
+      return current ? mergePullRequestOverlay(current, item) : item;
+    }),
+    mergePullRequestOverlay,
+  );
 }
 
 function normalizeStreamedPullRequest(item: PullRequestStreamItem): PullRequestSummary {
@@ -52,6 +84,29 @@ function normalizeStreamedPullRequest(item: PullRequestStreamItem): PullRequestS
     ...item.pullRequest,
     repository: item.repository,
   };
+}
+
+function mergePullRequestOverlay(current: PullRequestSummary, next: PullRequestSummary) {
+  if (
+    next.headSha
+    && next.headSha === current.headSha
+    && shouldPreserveChecks(current.checks.state, next.checks.state)
+  ) {
+    return {
+      ...next,
+      checks: current.checks,
+    };
+  }
+
+  return next;
+}
+
+function shouldPreserveChecks(currentState: CheckState, nextState: CheckState) {
+  return isLoadedCheckState(currentState) && !isLoadedCheckState(nextState);
+}
+
+function isLoadedCheckState(state: CheckState) {
+  return state === 'success' || state === 'failure' || state === 'pending';
 }
 
 function itemKey(item: { repository: string; number: number }) {
