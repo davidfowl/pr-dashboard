@@ -147,6 +147,9 @@ static class GitHubCachePolicy
     public static string NormalizeRepositoryName(RepositoryName repositoryName) =>
         $"{repositoryName.Owner.ToLowerInvariant()}/{repositoryName.Name.ToLowerInvariant()}";
 
+    public static bool IsPublicCacheKey(string cacheKey) =>
+        cacheKey.Contains(":public:", StringComparison.Ordinal);
+
     private static string CreateCacheKey(
         GitHubCacheScope scope,
         string resourceName,

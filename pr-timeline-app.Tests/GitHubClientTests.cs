@@ -2875,9 +2875,10 @@ public sealed class GitHubClientTests
         var options = CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
         var publicCacheStore = new GitHubPublicCacheStore(cache);
+        var responseCache = new GitHubResponseCache(cache, publicCacheStore);
         var cacheScopeResolver = new GitHubCacheScopeResolver(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, options, cache);
 
-        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, cache, new TestHostEnvironment());
+        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment());
     }
 
     private static GitHubClient CreateClientFromRequests(
@@ -2897,9 +2898,10 @@ public sealed class GitHubClientTests
         options ??= CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
         publicCacheStore ??= new GitHubPublicCacheStore(cache);
+        var responseCache = new GitHubResponseCache(cache, publicCacheStore);
         var cacheScopeResolver = new GitHubCacheScopeResolver(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, options, cache);
 
-        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, cache, new TestHostEnvironment());
+        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment());
     }
 
     private static GitHubClient CreateAnonymousClientFromRequests(
@@ -2918,9 +2920,10 @@ public sealed class GitHubClientTests
         options ??= CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
         publicCacheStore ??= new GitHubPublicCacheStore(cache);
+        var responseCache = new GitHubResponseCache(cache, publicCacheStore);
         var cacheScopeResolver = new GitHubCacheScopeResolver(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, options, cache);
 
-        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, cache, new TestHostEnvironment());
+        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment());
     }
 
     private static IOptions<GitHubCacheWarmupOptions> CreateWarmupOptions(
