@@ -653,10 +653,15 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
     labels.push('Unresolved feedback');
   }
 
-  // Failing CI, unresolved review threads, or merge conflicts disqualify "Ready to merge" — the PR
-  // is not actually ready to land until CI is green, conversations are resolved, and it merges
-  // cleanly.
-  if (pullRequest.review.state === 'approved' && !approvedButAging && !ciFailing && !unresolvedFeedback && !mergeConflicts) {
+  // Failing CI, unresolved review threads, merge conflicts, or a do-not-merge label disqualify
+  // "Ready to merge" — the PR is not actually ready to land until CI is green, conversations are
+  // resolved, it merges cleanly, and it is not explicitly held by a no-merge label.
+  if (pullRequest.review.state === 'approved'
+    && !approvedButAging
+    && !ciFailing
+    && !unresolvedFeedback
+    && !mergeConflicts
+    && !hasNeedsAuthorActionLabel(pullRequest)) {
     labels.push('Ready to merge');
   }
 
