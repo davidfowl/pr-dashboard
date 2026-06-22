@@ -7,6 +7,7 @@ import type {
   DeveloperPullRequestCount,
   PickItem,
   PullRequestSummary,
+  VisiblePullRequestHandler,
 } from '../../types';
 import { colorForText, formatCount, formatRelative, initials } from '../../utils/format';
 import LoadingBadge from '../LoadingBadge';
@@ -22,7 +23,8 @@ type QueueOverviewProps = {
   login?: string;
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
-  onVisiblePullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest: VisiblePullRequestHandler;
+  visibleChecksRefreshKey: number;
 };
 
 type FocusItem = AttentionItem & {
@@ -56,6 +58,7 @@ function QueueOverview({
   onSelectBucket,
   onSelectPullRequest,
   onVisiblePullRequest,
+  visibleChecksRefreshKey,
 }: QueueOverviewProps) {
   const [showAllCoreMembers, setShowAllCoreMembers] = useState(false);
 
@@ -170,6 +173,7 @@ function QueueOverview({
           emptyState={loading ? 'Loading review queue...' : 'No recent non-automation PRs need attention in the current results.'}
           onSelectPullRequest={onSelectPullRequest}
           onVisiblePullRequest={onVisiblePullRequest}
+          visibleChecksRefreshKey={visibleChecksRefreshKey}
         />
       </section>
 
@@ -193,6 +197,7 @@ function QueueOverview({
           onSelectBucket={onSelectBucket}
           onSelectPullRequest={onSelectPullRequest}
           onVisiblePullRequest={onVisiblePullRequest}
+          visibleChecksRefreshKey={visibleChecksRefreshKey}
         />
       )}
     </section>

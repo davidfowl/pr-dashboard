@@ -13,21 +13,43 @@ type StreamPullRequestsOptions = {
   onPullRequest?: (pullRequest: PullRequestSummary, item: PullRequestStreamItem) => void;
 };
 
+export type StreamPullRequestsResult = {
+  pullRequests: PullRequestSummary[];
+  completed: boolean;
+};
+
 export async function streamPullRequests(url: string, options: StreamPullRequestsOptions = {}) {
-  const pullRequests: PullRequestSummary[] = [];
+  const displayedPullRequests: PullRequestSummary[] = [];
+  const livePullRequests: PullRequestSummary[] = [];
+  let completed = false;
   const response = await fetch(url, { signal: options.signal });
 
   await readJsonLines<PullRequestStreamItem>(response, (item) => {
-    const pullRequest = normalizeStreamedPullRequest(item);
+    if (item.isComplete) {
+      completed = true;
+      return;
+    }
+
+    if (!item.pullRequest) {
+      return;
+    }
+
+    const pullRequest = normalizeStreamedPullRequest(item.repository, item.pullRequest);
     if (options.filter && !options.filter(pullRequest, item)) {
       return;
     }
 
-    pullRequests.push(pullRequest);
+    displayedPullRequests.push(pullRequest);
+    if (!item.isStale) {
+      livePullRequests.push(pullRequest);
+    }
     options.onPullRequest?.(pullRequest, item);
   });
 
-  return pullRequests;
+  return {
+    pullRequests: completed ? livePullRequests : displayedPullRequests,
+    completed,
+  };
 }
 
 export function upsertByUpdatedAt<T extends PullRequestCollectionItem>(items: T[], item: T) {
@@ -79,10 +101,13 @@ export function replacePullRequestsByUpdatedAt(
   );
 }
 
-function normalizeStreamedPullRequest(item: PullRequestStreamItem): PullRequestSummary {
+function normalizeStreamedPullRequest(
+  repository: string,
+  pullRequest: NonNullable<PullRequestStreamItem['pullRequest']>,
+): PullRequestSummary {
   return {
-    ...item.pullRequest,
-    repository: item.repository,
+    ...pullRequest,
+    repository,
   };
 }
 

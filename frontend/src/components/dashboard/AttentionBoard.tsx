@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AttentionBucket, PullRequestSummary } from '../../types';
+import type { AttentionBucket, PullRequestSummary, VisiblePullRequestHandler } from '../../types';
 import { formatCount } from '../../utils/format';
 import { bucketRouteId, createBucketUrl } from '../../utils/routing';
 import LoadingBadge from '../LoadingBadge';
@@ -13,7 +13,8 @@ type AttentionBoardProps = {
   selectedBucketId: string;
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
-  onVisiblePullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest: VisiblePullRequestHandler;
+  visibleChecksRefreshKey: number;
 };
 
 type ReviewBucketTile = DrilldownTile & {
@@ -36,6 +37,7 @@ function AttentionBoard({
   onSelectBucket,
   onSelectPullRequest,
   onVisiblePullRequest,
+  visibleChecksRefreshKey,
 }: AttentionBoardProps) {
   const [copyStatus, setCopyStatus] = useState<CopyStatus | null>(null);
   const bucketTiles: ReviewBucketTile[] = buckets.map((bucket) => ({
@@ -149,6 +151,7 @@ function AttentionBoard({
                 preserveOrder={bucket.preserveItemOrder}
                 onSelectPullRequest={onSelectPullRequest}
                 onVisiblePullRequest={onVisiblePullRequest}
+                visibleChecksRefreshKey={visibleChecksRefreshKey}
               />
             </section>
           );

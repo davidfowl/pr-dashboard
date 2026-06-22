@@ -162,6 +162,22 @@ static class GitHubCachePolicy
             && IsBeforeLane(publicLaneIndex, userLaneIndex);
     }
 
+    public static bool TryGetPublicCacheRepositoryName(string cacheKey, out RepositoryName repositoryName)
+    {
+        repositoryName = default;
+        if (!IsPublicCacheKey(cacheKey))
+        {
+            return false;
+        }
+
+        var repositoryStart = cacheKey.IndexOf(":public:", StringComparison.Ordinal) + ":public:".Length;
+        var repositoryEnd = cacheKey.IndexOf(':', repositoryStart);
+        var repositoryPart = repositoryEnd < 0
+            ? cacheKey[repositoryStart..]
+            : cacheKey[repositoryStart..repositoryEnd];
+        return RepositoryName.TryParse(repositoryPart, out repositoryName);
+    }
+
     private static string CreateCacheKey(
         GitHubCacheScope scope,
         string resourceName,

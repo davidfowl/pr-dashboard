@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { dayMs } from '../constants';
-import type { LinkedIssueSummary, PullRequestSummary } from '../types';
+import type { LinkedIssueSummary, PullRequestSummary, VisiblePullRequestHandler } from '../types';
 import PullRequestListItem from './PullRequestListItem';
 import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
 
@@ -14,10 +14,11 @@ export type PullRequestListEntry = {
 type PullRequestListProps = {
   entries: PullRequestListEntry[];
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
-  onVisiblePullRequest?: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest?: VisiblePullRequestHandler;
   emptyState?: string;
   limit?: number;
   preserveOrder?: boolean;
+  visibleChecksRefreshKey?: number;
 };
 
 const recentlyUpdatedWindowMs = 2 * dayMs;
@@ -40,6 +41,7 @@ function PullRequestList({
   emptyState,
   limit,
   preserveOrder,
+  visibleChecksRefreshKey = 0,
 }: PullRequestListProps) {
   const visibleEntries = useMemo(() => {
     const orderedEntries = [...entries];
@@ -60,6 +62,7 @@ function PullRequestList({
           pullRequest={entry.pullRequest}
           onSelectPullRequest={onSelectPullRequest}
           onVisiblePullRequest={onVisiblePullRequest}
+          visibleChecksRefreshKey={visibleChecksRefreshKey}
           signalProps={entry.signalProps}
           linkedIssues={entry.linkedIssues}
         />

@@ -70,6 +70,10 @@ sealed class GitHubResponseCache(IMemoryCache memoryCache, GitHubPublicCacheStor
         if (GitHubCachePolicy.IsPublicCacheKey(cacheKey))
         {
             await publicCacheStore.SetAsync(cacheKey, value, cacheDuration, cancellationToken);
+            if (GitHubCachePolicy.TryGetPublicCacheRepositoryName(cacheKey, out var repositoryName))
+            {
+                await publicCacheStore.TrackAsync(repositoryName, cacheKey, cancellationToken);
+            }
         }
     }
 
@@ -252,19 +256,30 @@ sealed class GitHubPublicCacheStore
         var cacheKeys = cacheKeysByRepository.GetOrAdd(
             repositoryKey,
             _ => new ConcurrentDictionary<string, byte>(StringComparer.Ordinal));
-        cacheKeys.TryAdd(cacheKey, 0);
+        if (!cacheKeys.TryAdd(cacheKey, 0))
+        {
+            return;
+        }
 
         if (blobContainer is null)
         {
             return;
         }
 
-        var trackedKeys = await ReadTrackedCacheKeysAsync(repositoryKey, cancellationToken);
-        if (trackedKeys.Add(cacheKey))
+        try
         {
-            // The index blob is intentionally small JSON, not blob tags, because Azurite
-            // support and local emulator behavior are simpler for plain blobs.
-            await WriteTrackedCacheKeysAsync(repositoryKey, trackedKeys, cancellationToken);
+            var trackedKeys = await ReadTrackedCacheKeysAsync(repositoryKey, cancellationToken);
+            if (trackedKeys.Add(cacheKey))
+            {
+                // The index blob is intentionally small JSON, not blob tags, because Azurite
+                // support and local emulator behavior are simpler for plain blobs.
+                await WriteTrackedCacheKeysAsync(repositoryKey, trackedKeys, cancellationToken);
+            }
+        }
+        catch
+        {
+            cacheKeys.TryRemove(cacheKey, out _);
+            throw;
         }
     }
 

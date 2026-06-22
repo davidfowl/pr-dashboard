@@ -36,7 +36,8 @@ sealed partial class GitHubClient(
     private async Task<RepositoryCacheScopeSelection> GetRepositoryCacheScopeSelectionAsync(
         RepositoryName repositoryName,
         bool forceRefresh,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowSharedLiveFetch = false)
     {
         var scope = await GetRepositoryCacheScopeAsync(repositoryName, cancellationToken);
         if (scope.IsShared)
@@ -44,8 +45,8 @@ sealed partial class GitHubClient(
             return new RepositoryCacheScopeSelection(
                 scope,
                 SharedFallbackScope: null,
-                Refresh: false,
-                CacheOnly: true);
+                Refresh: allowSharedLiveFetch && forceRefresh,
+                CacheOnly: !allowSharedLiveFetch);
         }
 
         var sharedFallbackScope = await GetSharedFallbackScopeAsync(repositoryName, cancellationToken);
@@ -89,6 +90,19 @@ sealed partial class GitHubClient(
         sharedFallbackScope is { } scope
             ? CreateRepositoryCacheKey(scope, repositoryName, resourceName, parts)
             : null;
+
+    private static async IAsyncEnumerable<PullRequestSummary> SelectPullRequestsAsync(
+        IAsyncEnumerable<PullRequestStreamEntry> entries,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await foreach (var entry in entries.WithCancellation(cancellationToken))
+        {
+            if (entry.PullRequest is not null && !entry.IsStaleRefreshOverlay)
+            {
+                yield return entry.PullRequest;
+            }
+        }
+    }
 
     private static TimeSpan CacheDurationForScope(GitHubCacheScope scope) =>
         scope.IsShared ? PublicCacheDuration : CacheDuration;
@@ -524,7 +538,16 @@ sealed partial class GitHubClient(
             transientFallbackCacheKey: transientFallbackCacheKey);
     }
 
-    public async IAsyncEnumerable<PullRequestSummary> StreamPullRequestsAsync(
+    public IAsyncEnumerable<PullRequestSummary> StreamPullRequestsAsync(
+        RepositoryName repositoryName,
+        string state,
+        bool forceRefresh,
+        CancellationToken cancellationToken) =>
+        SelectPullRequestsAsync(
+            StreamPullRequestEntriesAsync(repositoryName, state, forceRefresh, cancellationToken),
+            cancellationToken);
+
+    public async IAsyncEnumerable<PullRequestStreamEntry> StreamPullRequestEntriesAsync(
         RepositoryName repositoryName,
         string state,
         bool forceRefresh,
@@ -552,7 +575,7 @@ sealed partial class GitHubClient(
             foreach (var pullRequest in cachedPullRequests.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                yield return pullRequest;
+                yield return new PullRequestStreamEntry(pullRequest);
             }
 
             yield break;
@@ -574,15 +597,16 @@ sealed partial class GitHubClient(
                 cancellationToken);
         }
         var emittedStaleSnapshot = false;
-        HashSet<int>? stalePullRequestNumbers = null;
+        Dictionary<int, PullRequestSummary>? stalePullRequestsByNumber = null;
         if (stalePullRequests is { Found: true, Value: not null })
         {
-            stalePullRequestNumbers = new HashSet<int>();
+            stalePullRequestsByNumber = new Dictionary<int, PullRequestSummary>();
+            var staleRowsAreOverlay = !scopeSelection.CacheOnly;
             foreach (var stalePullRequest in stalePullRequests.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                stalePullRequestNumbers.Add(stalePullRequest.Number);
-                yield return stalePullRequest;
+                stalePullRequestsByNumber[stalePullRequest.Number] = stalePullRequest;
+                yield return new PullRequestStreamEntry(stalePullRequest, staleRowsAreOverlay);
             }
 
             emittedStaleSnapshot = true;
@@ -606,11 +630,12 @@ sealed partial class GitHubClient(
             enrichMergeableStateFromDetails: true,
             refreshCache,
             scope,
-            stalePullRequestNumbers,
+            stalePullRequestsByNumber,
             publicBaselinePullRequestsByNumber,
             cancellationToken).GetAsyncEnumerator(cancellationToken);
         while (true)
         {
+            PullRequestStreamEntry livePullRequestEntry = default;
             PullRequestSummary? pullRequest = null;
             bool hasPullRequest;
             try
@@ -618,7 +643,8 @@ sealed partial class GitHubClient(
                 hasPullRequest = await livePullRequests.MoveNextAsync();
                 if (hasPullRequest)
                 {
-                    pullRequest = livePullRequests.Current;
+                    livePullRequestEntry = livePullRequests.Current;
+                    pullRequest = livePullRequestEntry.PullRequest;
                 }
             }
             catch (Exception ex) when (emittedStaleSnapshot && IsTransientGitHubFailure(ex, cancellationToken))
@@ -634,7 +660,7 @@ sealed partial class GitHubClient(
             if (pullRequest is not null)
             {
                 completedPullRequestsByNumber[pullRequest.Number] = pullRequest;
-                yield return pullRequest;
+                yield return livePullRequestEntry;
             }
         }
 
@@ -649,6 +675,8 @@ sealed partial class GitHubClient(
                 publicBaselinePullRequestsByNumber.Values.ToArray(),
                 cancellationToken);
         }
+
+        yield return new PullRequestStreamEntry(IsComplete: true);
     }
 
     public async Task<IReadOnlyList<PullRequestSummary>> GetPullRequestsByLabelAsync(
@@ -735,7 +763,17 @@ sealed partial class GitHubClient(
             transientFallbackCacheKey: transientFallbackCacheKey);
     }
 
-    public async IAsyncEnumerable<PullRequestSummary> StreamPullRequestsByLabelAsync(
+    public IAsyncEnumerable<PullRequestSummary> StreamPullRequestsByLabelAsync(
+        RepositoryName repositoryName,
+        string state,
+        string label,
+        bool forceRefresh,
+        CancellationToken cancellationToken) =>
+        SelectPullRequestsAsync(
+            StreamPullRequestEntriesByLabelAsync(repositoryName, state, label, forceRefresh, cancellationToken),
+            cancellationToken);
+
+    public async IAsyncEnumerable<PullRequestStreamEntry> StreamPullRequestEntriesByLabelAsync(
         RepositoryName repositoryName,
         string state,
         string label,
@@ -745,9 +783,9 @@ sealed partial class GitHubClient(
         var normalizedLabel = label.Trim();
         if (string.IsNullOrWhiteSpace(normalizedLabel))
         {
-            await foreach (var pullRequest in StreamPullRequestsAsync(repositoryName, state, forceRefresh, cancellationToken))
+            await foreach (var entry in StreamPullRequestEntriesAsync(repositoryName, state, forceRefresh, cancellationToken))
             {
-                yield return pullRequest;
+                yield return entry;
             }
 
             yield break;
@@ -777,7 +815,7 @@ sealed partial class GitHubClient(
             foreach (var pullRequest in cachedPullRequests.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                yield return pullRequest;
+                yield return new PullRequestStreamEntry(pullRequest);
             }
 
             yield break;
@@ -788,15 +826,16 @@ sealed partial class GitHubClient(
             transientFallbackCacheKey,
             cancellationToken);
         var emittedStaleSnapshot = false;
-        HashSet<int>? stalePullRequestNumbers = null;
+        Dictionary<int, PullRequestSummary>? stalePullRequestsByNumber = null;
         if (stalePullRequests is { Found: true, Value: not null })
         {
-            stalePullRequestNumbers = new HashSet<int>();
+            stalePullRequestsByNumber = new Dictionary<int, PullRequestSummary>();
+            var staleRowsAreOverlay = !scopeSelection.CacheOnly;
             foreach (var stalePullRequest in stalePullRequests.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                stalePullRequestNumbers.Add(stalePullRequest.Number);
-                yield return stalePullRequest;
+                stalePullRequestsByNumber[stalePullRequest.Number] = stalePullRequest;
+                yield return new PullRequestStreamEntry(stalePullRequest, staleRowsAreOverlay);
             }
 
             emittedStaleSnapshot = true;
@@ -820,11 +859,12 @@ sealed partial class GitHubClient(
             enrichMergeableStateFromDetails: false,
             refreshCache,
             scope,
-            stalePullRequestNumbers,
+            stalePullRequestsByNumber,
             publicBaselinePullRequestsByNumber,
             cancellationToken).GetAsyncEnumerator(cancellationToken);
         while (true)
         {
+            PullRequestStreamEntry livePullRequestEntry = default;
             PullRequestSummary? pullRequest = null;
             bool hasPullRequest;
             try
@@ -832,7 +872,8 @@ sealed partial class GitHubClient(
                 hasPullRequest = await livePullRequests.MoveNextAsync();
                 if (hasPullRequest)
                 {
-                    pullRequest = livePullRequests.Current;
+                    livePullRequestEntry = livePullRequests.Current;
+                    pullRequest = livePullRequestEntry.PullRequest;
                 }
             }
             catch (Exception ex) when (emittedStaleSnapshot && IsTransientGitHubFailure(ex, cancellationToken))
@@ -848,13 +889,15 @@ sealed partial class GitHubClient(
             if (pullRequest is not null)
             {
                 completedPullRequestsByNumber[pullRequest.Number] = pullRequest;
-                yield return pullRequest;
+                yield return livePullRequestEntry;
             }
         }
 
         var completedPullRequests = completedPullRequestsByNumber.Values.ToArray();
         await SetLastGoodAsync(cacheKey, completedPullRequests, cancellationToken);
         await SetCacheEntryAsync(cacheKey, completedPullRequests, CacheDurationForScope(scope), cancellationToken);
+
+        yield return new PullRequestStreamEntry(IsComplete: true);
     }
 
     public async Task<IReadOnlyList<ShipWeekIssueSummary>> GetFocusIssuesAsync(
@@ -1093,13 +1136,13 @@ sealed partial class GitHubClient(
             transientFallbackCacheKey: transientFallbackCacheKey);
     }
 
-    private async IAsyncEnumerable<PullRequestSummary> StreamPullRequestSummariesWithBaselineAsync(
+    private async IAsyncEnumerable<PullRequestStreamEntry> StreamPullRequestSummariesWithBaselineAsync(
         RepositoryName repositoryName,
         IAsyncEnumerable<GitHubPullRequestDto> pullRequestDtos,
         bool enrichMergeableStateFromDetails,
         bool forceRefresh,
         GitHubCacheScope scope,
-        IReadOnlySet<int>? previouslyEmittedPullRequestNumbers,
+        IReadOnlyDictionary<int, PullRequestSummary>? stalePullRequestsByNumber,
         IDictionary<int, PullRequestSummary> publicBaselinePullRequestsByNumber,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -1115,9 +1158,15 @@ sealed partial class GitHubClient(
 
             var baseline = CreatePullRequestBaselineSummary(pullRequestDto);
             publicBaselinePullRequestsByNumber[baseline.Number] = baseline;
-            if (previouslyEmittedPullRequestNumbers?.Contains(baseline.Number) != true)
+            if (stalePullRequestsByNumber?.TryGetValue(baseline.Number, out var stalePullRequest) == true)
             {
-                yield return baseline;
+                yield return new PullRequestStreamEntry(
+                    CreateStalePreservingLiveBaseline(stalePullRequest, baseline),
+                    IsStaleRefreshOverlay: true);
+            }
+            else
+            {
+                yield return new PullRequestStreamEntry(baseline);
             }
 
             batch.Add(pullRequestDto);
@@ -1134,7 +1183,7 @@ sealed partial class GitHubClient(
                 scope,
                 cancellationToken))
             {
-                yield return pullRequest;
+                yield return new PullRequestStreamEntry(pullRequest);
             }
 
             batch.Clear();
@@ -1153,7 +1202,7 @@ sealed partial class GitHubClient(
             scope,
             cancellationToken))
         {
-            yield return pullRequest;
+            yield return new PullRequestStreamEntry(pullRequest);
         }
     }
 
@@ -1400,6 +1449,22 @@ sealed partial class GitHubClient(
         {
             FetchedAt = DateTimeOffset.UtcNow,
             Checks = ChecksStatus.None
+        };
+
+    private static PullRequestSummary CreateStalePreservingLiveBaseline(
+        PullRequestSummary stalePullRequest,
+        PullRequestSummary liveBaseline) =>
+        liveBaseline with
+        {
+            LinkedIssues = stalePullRequest.LinkedIssues,
+            CommitCount = stalePullRequest.CommitCount,
+            Additions = stalePullRequest.Additions,
+            Deletions = stalePullRequest.Deletions,
+            ChangedFiles = stalePullRequest.ChangedFiles,
+            LastCommitAt = stalePullRequest.LastCommitAt,
+            MergeableState = liveBaseline.MergeableState ?? stalePullRequest.MergeableState,
+            Review = stalePullRequest.Review,
+            Checks = stalePullRequest.Checks
         };
 
     private static IReadOnlySet<int>? MergeableStateEnrichmentNumbers(
@@ -1862,7 +1927,11 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         CancellationToken cancellationToken)
     {
-        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(
+            repositoryName,
+            forceRefresh,
+            cancellationToken,
+            allowSharedLiveFetch: true);
         return await GetChecksStatusAsync(
             repositoryName,
             headSha,
@@ -2334,7 +2403,11 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         CancellationToken cancellationToken)
     {
-        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(
+            repositoryName,
+            forceRefresh,
+            cancellationToken,
+            allowSharedLiveFetch: true);
         return await GetPullRequestTimelineAsync(
             repositoryName,
             number,
@@ -2397,7 +2470,11 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         CancellationToken cancellationToken)
     {
-        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(
+            repositoryName,
+            forceRefresh,
+            cancellationToken,
+            allowSharedLiveFetch: true);
         return await GetPullRequestDetailsAsync(
             repositoryName,
             number,

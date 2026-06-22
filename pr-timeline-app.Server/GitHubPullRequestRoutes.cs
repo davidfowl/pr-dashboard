@@ -70,8 +70,8 @@ public static class GitHubPullRequestRoutes
 
             var forceRefresh = refresh == true;
             var stream = string.IsNullOrWhiteSpace(label)
-                ? pullRequests.StreamPullRequestsAsync(repositoryName, normalizedState, forceRefresh, cancellationToken)
-                : pullRequests.StreamPullRequestsByLabelAsync(repositoryName, normalizedState, label.Trim(), forceRefresh, cancellationToken);
+                ? pullRequests.StreamPullRequestEntriesAsync(repositoryName, normalizedState, forceRefresh, cancellationToken)
+                : pullRequests.StreamPullRequestEntriesByLabelAsync(repositoryName, normalizedState, label.Trim(), forceRefresh, cancellationToken);
 
             return JsonLines(
                 CreatePullRequestStreamItems(repositoryName.ToString(), stream, cancellationToken),
@@ -226,12 +226,14 @@ public static class GitHubPullRequestRoutes
 
     private static async IAsyncEnumerable<PullRequestStreamItem> CreatePullRequestStreamItems(
         string repository,
-        IAsyncEnumerable<PullRequestSummary> pullRequests,
+        IAsyncEnumerable<PullRequestStreamEntry> pullRequests,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        await foreach (var pullRequest in pullRequests.WithCancellation(cancellationToken))
+        await foreach (var entry in pullRequests.WithCancellation(cancellationToken))
         {
-            yield return new PullRequestStreamItem(repository, pullRequest);
+            yield return entry.IsComplete
+                ? new PullRequestStreamItem(repository, null, IsComplete: true)
+                : new PullRequestStreamItem(repository, entry.PullRequest, entry.IsStale);
         }
     }
 }

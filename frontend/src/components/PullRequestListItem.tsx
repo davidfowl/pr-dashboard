@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { CheckState, LinkedIssueSummary, PullRequestSummary } from '../types';
+import type { CheckState, LinkedIssueSummary, PullRequestSummary, VisiblePullRequestHandler } from '../types';
 import { formatRelative } from '../utils/format';
 import PullRequestSignalPills from './PullRequestSignalPills';
 import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
@@ -7,7 +7,8 @@ import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
 type PullRequestListItemProps = {
   pullRequest: PullRequestSummary;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
-  onVisiblePullRequest?: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest?: VisiblePullRequestHandler;
+  visibleChecksRefreshKey?: number;
   signalProps?: Omit<PullRequestSignalPillsProps, 'pullRequest'>;
   linkedIssues?: LinkedIssueSummary[];
 };
@@ -23,11 +24,16 @@ function PullRequestListItem({
   pullRequest,
   onSelectPullRequest,
   onVisiblePullRequest,
+  visibleChecksRefreshKey = 0,
   signalProps,
   linkedIssues = [],
 }: PullRequestListItemProps) {
   const itemRef = useRef<HTMLElement | null>(null);
+  const lastForcedVisibleChecksRefreshRef = useRef(0);
   const checksState = pullRequest.checks?.state;
+  const shouldForceVisibleChecksRefresh =
+    visibleChecksRefreshKey > 0
+    && lastForcedVisibleChecksRefreshRef.current !== visibleChecksRefreshKey;
   const badge = checksState && checksState !== 'none' ? checkBadgeGlyphs[checksState] : null;
   const badgeTitle = badge
     ? `${badge.label}${pullRequest.checks?.failingChecks?.length
@@ -40,14 +46,23 @@ function PullRequestListItem({
       !onVisiblePullRequest
       || pullRequest.state !== 'open'
       || !pullRequest.headSha
-      || checksState !== 'unknown'
+      || (checksState !== 'unknown' && !shouldForceVisibleChecksRefresh)
     ) {
       return;
     }
 
+    const reportVisible = () => {
+      const accepted = onVisiblePullRequest(pullRequest.repository, pullRequest, {
+        forceRefresh: shouldForceVisibleChecksRefresh,
+      });
+      if (accepted) {
+        lastForcedVisibleChecksRefreshRef.current = visibleChecksRefreshKey;
+      }
+    };
+
     const node = itemRef.current;
     if (!node || !('IntersectionObserver' in window)) {
-      onVisiblePullRequest(pullRequest.repository, pullRequest);
+      reportVisible();
       return;
     }
 
@@ -59,14 +74,14 @@ function PullRequestListItem({
         }
 
         reported = true;
-        onVisiblePullRequest(pullRequest.repository, pullRequest);
+        reportVisible();
         observer.disconnect();
       },
       { rootMargin: '160px' },
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [checksState, onVisiblePullRequest, pullRequest]);
+  }, [checksState, onVisiblePullRequest, pullRequest, shouldForceVisibleChecksRefresh, visibleChecksRefreshKey]);
 
   return (
     <article ref={itemRef} className="attention-pr-row">

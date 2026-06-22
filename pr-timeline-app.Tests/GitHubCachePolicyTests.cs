@@ -58,6 +58,27 @@ public sealed class GitHubCachePolicyTests
     public void IdentifiesPublicCacheKeys(string cacheKey, bool expected) =>
         Assert.Equal(expected, GitHubCachePolicy.IsPublicCacheKey(cacheKey));
 
+    [Theory]
+    [InlineData("pulls:public:example/repo:open", true, "example", "repo")]
+    [InlineData("last-good:commits:last:public:example/repo:1", true, "example", "repo")]
+    [InlineData("pulls:token:oauth:abcdef0123456789:0:example/repo:open", false, null, null)]
+    [InlineData("pulls:token:oauth:abcdef0123456789:0:example/repo:public:foo", false, null, null)]
+    public void ExtractsRepositoryFromPublicCacheKeys(
+        string cacheKey,
+        bool expected,
+        string? expectedOwner,
+        string? expectedName)
+    {
+        var actual = GitHubCachePolicy.TryGetPublicCacheRepositoryName(cacheKey, out var repositoryName);
+
+        Assert.Equal(expected, actual);
+        if (expected)
+        {
+            Assert.Equal(expectedOwner, repositoryName.Owner);
+            Assert.Equal(expectedName, repositoryName.Name);
+        }
+    }
+
     [Fact]
     public void UserScopeUsesTokenLaneAndNeverShares()
     {
