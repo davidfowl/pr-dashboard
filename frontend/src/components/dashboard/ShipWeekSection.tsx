@@ -7,6 +7,7 @@ import type {
   ShipWeekLoadingState,
   ShipWeekPullRequestSummary,
   ShipWeekResponse,
+  VisiblePullRequestHandler,
 } from '../../types';
 import { formatCount } from '../../utils/format';
 import { shouldHideFromSharedPullRequestLists } from '../../utils/models';
@@ -29,7 +30,7 @@ type ShipWeekSectionProps = {
   onCopySnapshotImage: () => void;
   onDownloadSnapshot: () => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
-  onVisiblePullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest: VisiblePullRequestHandler;
   visibleChecksRefreshKey: number;
 };
 
@@ -298,7 +299,7 @@ function ShipModePullRequestList({
   items: ShipModePullRequestItem[];
   emptyState: string;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
-  onVisiblePullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest: VisiblePullRequestHandler;
   visibleChecksRefreshKey: number;
 }) {
   return (

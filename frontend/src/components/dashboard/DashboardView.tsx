@@ -10,6 +10,7 @@ import type {
   ShipWeekIssueSummary,
   ShipWeekLoadingState,
   ShipWeekResponse,
+  VisiblePullRequestHandler,
 } from '../../types';
 import { formatDuration, formatRelative, formatTime } from '../../utils/format';
 import DashboardFilters from './DashboardFilters';
@@ -61,7 +62,7 @@ type DashboardViewProps = {
   onDownloadShipWeekSnapshot: () => void;
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
-  onVisiblePullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest: VisiblePullRequestHandler;
   visibleChecksRefreshKey: number;
 };
 

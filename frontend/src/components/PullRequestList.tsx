@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { dayMs } from '../constants';
-import type { LinkedIssueSummary, PullRequestSummary } from '../types';
+import type { LinkedIssueSummary, PullRequestSummary, VisiblePullRequestHandler } from '../types';
 import PullRequestListItem from './PullRequestListItem';
 import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
 
@@ -14,7 +14,7 @@ export type PullRequestListEntry = {
 type PullRequestListProps = {
   entries: PullRequestListEntry[];
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
-  onVisiblePullRequest?: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest?: VisiblePullRequestHandler;
   emptyState?: string;
   limit?: number;
   preserveOrder?: boolean;

@@ -98,6 +98,16 @@ export type PullRequestStreamItem = {
   isComplete?: boolean;
 };
 
+export type VisiblePullRequestOptions = {
+  forceRefresh?: boolean;
+};
+
+export type VisiblePullRequestHandler = (
+  repository: string,
+  pullRequest: PullRequestSummary,
+  options?: VisiblePullRequestOptions,
+) => boolean;
+
 export type IssueListResponse = {
   repository: string;
   issues: ShipWeekIssueSummary[];

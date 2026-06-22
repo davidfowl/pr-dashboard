@@ -28,6 +28,7 @@ import type {
   TimelineResponse,
   TimelineStats,
   TimelineStoryEntry,
+  VisiblePullRequestOptions,
 } from './types';
 import { colorForText } from './utils/format';
 import { readJson } from './utils/http';
@@ -66,6 +67,7 @@ type VisibleChecksRequestItem = {
   repository: string;
   number: number;
   headSha: string;
+  forceRefresh: boolean;
 };
 
 type LoadOptions = {
@@ -146,7 +148,6 @@ function App() {
   const pendingVisibleChecksRef = useRef(new Set<string>());
   const visibleChecksTimerRef = useRef<number | null>(null);
   const visibleChecksAbortControllerRef = useRef<AbortController | null>(null);
-  const forceVisibleChecksRefreshRef = useRef(false);
   const pullRequestsLoadVersionRef = useRef(0);
   const pullRequestsAbortControllerRef = useRef<AbortController | null>(null);
   const issuesLoadVersionRef = useRef(0);
@@ -691,7 +692,6 @@ function App() {
       return;
     }
 
-    forceVisibleChecksRefreshRef.current = true;
     setVisibleChecksRefreshKey((key) => key + 1);
   }
 
@@ -708,18 +708,29 @@ function App() {
     visibleChecksAbortControllerRef.current = null;
   }
 
-  function requestVisibleChecks(repository: string, pullRequest: PullRequestSummary) {
+  function requestVisibleChecks(
+    repository: string,
+    pullRequest: PullRequestSummary,
+    options: VisiblePullRequestOptions = {},
+  ) {
+    const forceRefresh = options.forceRefresh === true;
     if (
       pullRequest.state !== 'open'
       || !pullRequest.headSha
-      || (pullRequest.checks?.state !== 'unknown' && !forceVisibleChecksRefreshRef.current)
+      || (pullRequest.checks?.state !== 'unknown' && !forceRefresh)
     ) {
-      return;
+      return false;
     }
 
     const key = checksRequestKey(repository, pullRequest.number, pullRequest.headSha);
-    if (pendingVisibleChecksRef.current.has(key) || visibleChecksQueueRef.current.has(key)) {
-      return;
+    if (pendingVisibleChecksRef.current.has(key)) {
+      return false;
+    }
+
+    const queuedItem = visibleChecksQueueRef.current.get(key);
+    if (queuedItem) {
+      queuedItem.forceRefresh ||= forceRefresh;
+      return true;
     }
 
     pendingVisibleChecksRef.current.add(key);
@@ -727,6 +738,7 @@ function App() {
       repository,
       number: pullRequest.number,
       headSha: pullRequest.headSha,
+      forceRefresh,
     });
 
     if (visibleChecksTimerRef.current === null) {
@@ -735,6 +747,8 @@ function App() {
         void flushVisibleChecksQueue(requestVersion);
       }, 50);
     }
+
+    return true;
   }
 
   async function flushVisibleChecksQueue(requestVersion: number) {
@@ -747,10 +761,6 @@ function App() {
 
     const abortController = visibleChecksAbortControllerRef.current ?? new AbortController();
     visibleChecksAbortControllerRef.current = abortController;
-    const forceRefresh = forceVisibleChecksRefreshRef.current;
-    if (forceRefresh) {
-      forceVisibleChecksRefreshRef.current = false;
-    }
     const itemsByRepository = queuedItems.reduce((groups, item) => {
       const repositoryItems = groups.get(item.repository) ?? [];
       repositoryItems.push(item);
@@ -758,7 +768,12 @@ function App() {
       return groups;
     }, new Map<string, VisibleChecksRequestItem[]>());
     await Promise.all([...itemsByRepository].map(([repository, items]) =>
-      loadVisibleChecks(repository, items, requestVersion, abortController.signal, forceRefresh)));
+      loadVisibleChecks(
+        repository,
+        items,
+        requestVersion,
+        abortController.signal,
+        items.some((item) => item.forceRefresh))));
   }
 
   async function loadVisibleChecks(

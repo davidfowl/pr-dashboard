@@ -8,6 +8,7 @@ import type {
   AppInfoResponse,
   AuthStatus,
   CheckState,
+  PullRequestChecksRequest,
   PullRequestChecksResponse,
   PullRequestStreamItem,
   PullRequestSummary,
@@ -74,6 +75,43 @@ describe('App navigation', () => {
 
     await waitFor(() => {
       expect(checksRequestUrls(fetchMock).some((url) => url.searchParams.get('refresh') === 'true')).toBe(true);
+    });
+
+    await unmountApp(root);
+  });
+
+  it('force-refreshes rows that become visible after an earlier checks refresh flush', async () => {
+    window.history.replaceState(null, '', '/');
+    const observers = installIntersectionObserverMock();
+    const fetchMock = createDelayedVisibleChecksFetchMock();
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('First visible row');
+      expect(document.body.textContent).toContain('Late visible row');
+      expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    await clickButton('Refresh now');
+    await waitFor(() => {
+      expect(observers.length).toBeGreaterThan(1);
+    });
+
+    await act(async () => {
+      observers[0].trigger();
+    });
+    await waitFor(() => {
+      expect(refreshChecksRequestNumbers(fetchMock).length).toBeGreaterThan(0);
+    });
+
+    await act(async () => {
+      for (const observer of observers.slice(1)) {
+        observer.trigger();
+      }
+    });
+    await waitFor(() => {
+      expect(new Set(refreshChecksRequestNumbers(fetchMock))).toEqual(new Set([101, 102]));
     });
 
     await unmountApp(root);
@@ -353,6 +391,80 @@ function createHardRefreshFetchMock(liveRefresh: Promise<void>) {
   });
 }
 
+function createDelayedVisibleChecksFetchMock() {
+  const pullRequests = [
+    createPullRequest('success', { title: 'First visible row' }),
+    createPullRequest('success', {
+      number: 102,
+      title: 'Late visible row',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/102',
+      headSha: 'def456',
+    }),
+  ];
+
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/github/pulls/stream') {
+      if (url.searchParams.get('label')) {
+        return jsonLinesResponse([]);
+      }
+
+      return jsonLinesResponse(
+        url.searchParams.get('repo') === pullRequests[0].repository
+          ? pullRequests.map((pullRequest) => createStreamItem(pullRequest))
+          : [],
+      );
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: pullRequests[0].repository,
+        pullRequests: pullRequests.map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
 function createPullRequest(
   checksState: CheckState,
   overrides: Partial<PullRequestSummary> = {},
@@ -493,10 +605,28 @@ function getButton(name: string) {
   return button;
 }
 
-type AppFetchMock = ReturnType<typeof createFetchMock> | ReturnType<typeof createHardRefreshFetchMock>;
+type AppFetchMock =
+  | ReturnType<typeof createFetchMock>
+  | ReturnType<typeof createHardRefreshFetchMock>
+  | ReturnType<typeof createDelayedVisibleChecksFetchMock>;
 
 function checksRequestUrls(fetchMock: AppFetchMock) {
   return requestUrls(fetchMock, '/api/github/pulls/checks');
+}
+
+function refreshChecksRequestNumbers(fetchMock: AppFetchMock) {
+  const calls = fetchMock.mock.calls as [RequestInfo | URL, RequestInit?][];
+  return calls.flatMap(([input, init]) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname !== '/api/github/pulls/checks' || url.searchParams.get('refresh') !== 'true') {
+      return [];
+    }
+
+    const body = typeof init?.body === 'string'
+      ? JSON.parse(init.body) as PullRequestChecksRequest
+      : { pullRequests: [] };
+    return body.pullRequests.map((pullRequest) => pullRequest.number);
+  });
 }
 
 function streamRequestUrls(fetchMock: ReturnType<typeof createHardRefreshFetchMock>) {
@@ -533,4 +663,50 @@ async function waitFor(assertion: () => void, timeoutMs = 1_000) {
   }
 
   throw lastError;
+}
+
+function installIntersectionObserverMock() {
+  const observers: TestIntersectionObserver[] = [];
+
+  class TestIntersectionObserver {
+    private element: Element | null = null;
+    private readonly callback: IntersectionObserverCallback;
+
+    constructor(callback: IntersectionObserverCallback) {
+      this.callback = callback;
+      observers.push(this);
+    }
+
+    observe(element: Element) {
+      this.element = element;
+    }
+
+    unobserve() {
+      this.element = null;
+    }
+
+    disconnect() {
+      this.element = null;
+    }
+
+    takeRecords() {
+      return [];
+    }
+
+    trigger() {
+      if (!this.element) {
+        return;
+      }
+
+      this.callback([
+        {
+          isIntersecting: true,
+          target: this.element,
+        } as IntersectionObserverEntry,
+      ], this as unknown as IntersectionObserver);
+    }
+  }
+
+  vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
+  return observers;
 }

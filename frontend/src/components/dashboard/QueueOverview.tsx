@@ -7,6 +7,7 @@ import type {
   DeveloperPullRequestCount,
   PickItem,
   PullRequestSummary,
+  VisiblePullRequestHandler,
 } from '../../types';
 import { colorForText, formatCount, formatRelative, initials } from '../../utils/format';
 import LoadingBadge from '../LoadingBadge';
@@ -22,7 +23,7 @@ type QueueOverviewProps = {
   login?: string;
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
-  onVisiblePullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
+  onVisiblePullRequest: VisiblePullRequestHandler;
   visibleChecksRefreshKey: number;
 };
 
