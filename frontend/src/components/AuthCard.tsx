@@ -1,4 +1,5 @@
 import type { AuthStatus } from '../types';
+import GitHubAvatar from './GitHubAvatar';
 
 type AuthCardProps = {
   authStatus: AuthStatus | null;
@@ -12,6 +13,9 @@ function AuthCard({ authStatus, loginLoading, onLogin, onLogout }: AuthCardProps
     <div className={`auth-card ${authStatus?.authenticated ? 'ok' : 'warning'}`}>
       <div className="auth-summary">
         <span>{authStatus?.authenticated ? 'Signed in' : 'Auth'}</span>
+        {authStatus?.authenticated && authStatus.login && (
+          <GitHubAvatar login={authStatus.login} className="auth-avatar" size={48} />
+        )}
         <strong>{authStatus?.login ?? authStatus?.source ?? 'GitHub'}</strong>
       </div>
       <div className="auth-actions">

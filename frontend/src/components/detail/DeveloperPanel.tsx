@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import type { TriageParticipant } from '../../types';
-import { colorForText, initials } from '../../utils/format';
+import { colorForText } from '../../utils/format';
+import GitHubAvatar from '../GitHubAvatar';
 
 type DeveloperPanelProps = {
   participants: TriageParticipant[];
@@ -21,7 +22,7 @@ function DeveloperPanel({ participants }: DeveloperPanelProps) {
             style={{ '--developer-accent': colorForText(participant.actor) } as CSSProperties}
           >
             <div className="developer-card-header">
-              <span className="avatar-dot">{initials(participant.actor)}</span>
+              <GitHubAvatar login={participant.actor} />
               <span>
                 <strong>{participant.actor}</strong>
                 <em>{participant.role}</em>
