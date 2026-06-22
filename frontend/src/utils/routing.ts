@@ -108,6 +108,7 @@ export function createShipWeekUrl(params: ShipWeekRouteParams) {
 
 export function pushDashboardModeHistory(mode: DashboardMode, shipWeekParams?: ShipWeekRouteParams) {
   const url = new URL(window.location.href);
+  url.hash = '';
   applyDashboardModeSearchParams(url.searchParams, mode, shipWeekParams);
   const nextUrl = `${url.pathname}${url.search}${url.hash}`;
   if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextUrl) {

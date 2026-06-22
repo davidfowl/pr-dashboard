@@ -93,7 +93,9 @@ export type PullRequestListResponse = {
 
 export type PullRequestStreamItem = {
   repository: string;
-  pullRequest: Omit<PullRequestSummary, 'repository'>;
+  pullRequest?: Omit<PullRequestSummary, 'repository'> | null;
+  isStale?: boolean;
+  isComplete?: boolean;
 };
 
 export type IssueListResponse = {

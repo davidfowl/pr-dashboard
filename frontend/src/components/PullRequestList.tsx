@@ -18,6 +18,7 @@ type PullRequestListProps = {
   emptyState?: string;
   limit?: number;
   preserveOrder?: boolean;
+  visibleChecksRefreshKey?: number;
 };
 
 const recentlyUpdatedWindowMs = 2 * dayMs;
@@ -40,6 +41,7 @@ function PullRequestList({
   emptyState,
   limit,
   preserveOrder,
+  visibleChecksRefreshKey = 0,
 }: PullRequestListProps) {
   const visibleEntries = useMemo(() => {
     const orderedEntries = [...entries];
@@ -60,6 +62,7 @@ function PullRequestList({
           pullRequest={entry.pullRequest}
           onSelectPullRequest={onSelectPullRequest}
           onVisiblePullRequest={onVisiblePullRequest}
+          visibleChecksRefreshKey={visibleChecksRefreshKey}
           signalProps={entry.signalProps}
           linkedIssues={entry.linkedIssues}
         />

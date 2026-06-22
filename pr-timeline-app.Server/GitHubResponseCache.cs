@@ -70,6 +70,10 @@ sealed class GitHubResponseCache(IMemoryCache memoryCache, GitHubPublicCacheStor
         if (GitHubCachePolicy.IsPublicCacheKey(cacheKey))
         {
             await publicCacheStore.SetAsync(cacheKey, value, cacheDuration, cancellationToken);
+            if (GitHubCachePolicy.TryGetPublicCacheRepositoryName(cacheKey, out var repositoryName))
+            {
+                await publicCacheStore.TrackAsync(repositoryName, cacheKey, cancellationToken);
+            }
         }
     }
 
