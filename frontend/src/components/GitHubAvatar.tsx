@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { initials } from '../utils/format';
 
 type GitHubAvatarProps = {
-  login: string;
+  login: string | null | undefined;
   size?: number;
   className?: string;
   title?: string;
@@ -24,7 +24,7 @@ export default function GitHubAvatar({
 
   if (!login || errored) {
     return (
-      <span className={combinedClassName} aria-hidden="true" title={title ?? login}>
+      <span className={combinedClassName} aria-hidden="true" title={title ?? login ?? undefined}>
         {login ? initials(login) : ''}
       </span>
     );
@@ -39,6 +39,7 @@ export default function GitHubAvatar({
       aria-hidden="true"
       title={title ?? login}
       loading="lazy"
+      referrerPolicy="no-referrer"
       onError={() => setErrored(true)}
     />
   );
