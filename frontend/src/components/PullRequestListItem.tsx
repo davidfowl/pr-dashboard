@@ -93,7 +93,7 @@ function PullRequestListItem({
             aria-label={badgeTitle ?? badge.label}
             role="img"
           >
-            <span aria-hidden="true">{badge.glyph}</span>
+            {badge.glyph}
           </span>
         )}
         #{pullRequest.number}

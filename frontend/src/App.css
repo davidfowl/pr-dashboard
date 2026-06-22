@@ -1362,7 +1362,7 @@ select:focus-visible {
   gap: 0.35rem;
 }
 
-.attention-pr-check-badge {
+.attention-list .attention-pr-check-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
