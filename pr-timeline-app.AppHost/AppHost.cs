@@ -14,9 +14,17 @@ var githubCache = storage
     .AddBlobContainer("github-cache", blobContainerName: "github-cache")
     .WithClearCacheCommand();
 
+// Dedicated container for push notification data (subscriptions, preferences, dedupe state).
+// Kept separate from github-cache so the cache "clear" command and TTL eviction can never
+// delete a user's subscriptions.
+var notifications = storage
+    .AddBlobContainer("notifications", blobContainerName: "notifications");
+
 var server = builder.AddProject<Projects.pr_timeline_app_Server>("server")
     .WithReference(githubCache)
     .WaitFor(githubCache)
+    .WithReference(notifications)
+    .WaitFor(notifications)
     .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints()
     .PublishAsAzureContainerApp((_, app) =>

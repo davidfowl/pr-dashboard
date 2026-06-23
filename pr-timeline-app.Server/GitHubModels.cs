@@ -571,6 +571,7 @@ partial class GitHubJsonSerializerContext : JsonSerializerContext;
 
 sealed class GitHubActorDto
 {
+    public long? Id { get; init; }
     public string? Login { get; init; }
     public string? Name { get; init; }
     public DateTimeOffset? Date { get; init; }
