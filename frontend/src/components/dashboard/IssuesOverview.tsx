@@ -257,11 +257,11 @@ function createIssueBucketTiles(
     });
   }
 
-  return ['Regressions', 'Validation', 'Follow-up'].map((label) => ({
-    id: bucketRouteId(label),
-    label,
+  return Array.from({ length: 3 }, (_, index) => ({
+    id: `loading-issue-lane-${index + 1}`,
+    label: `Loading lane ${index + 1}`,
     count: 0,
-    summary: 'Loading lane',
+    summary: 'Waiting for data',
     loading,
     hasLoaded,
     placeholder: true,
