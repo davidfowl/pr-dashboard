@@ -1170,6 +1170,7 @@ sealed partial class GitHubClient(
             {
                 yield return new PullRequestStreamEntry(
                     CreateStalePreservingLiveBaseline(stalePullRequest, baseline),
+                    IsStale: true,
                     IsStaleRefreshOverlay: true);
             }
             else
