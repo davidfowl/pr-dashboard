@@ -86,3 +86,13 @@ jobs:
 
       - name: Test
         run: dotnet test pr-timeline-app.slnx --no-build --nologo --logger "console;verbosity=detailed"
+
+      - name: Collect Aspire diagnostics
+        if: failure()
+        run: |
+          set +e
+          echo "Aspire resources:"
+          aspire ps || true
+          echo
+          echo "Docker containers:"
+          docker ps -a --no-trunc || true

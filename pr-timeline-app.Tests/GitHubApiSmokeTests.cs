@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -114,6 +115,8 @@ public sealed class AppHostFixture : IAsyncLifetime
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(2);
     private readonly SemaphoreSlim startLock = new(1, 1);
+    private readonly CancellationTokenSource startupCts = new();
+    private Task? startupTask;
     private DistributedApplication? app;
     private HttpClient? client;
 
@@ -128,6 +131,7 @@ public sealed class AppHostFixture : IAsyncLifetime
             return;
         }
 
+        Task startup;
         await startLock.WaitAsync(cancellationToken);
         try
         {
@@ -136,38 +140,80 @@ public sealed class AppHostFixture : IAsyncLifetime
                 return;
             }
 
-            var appHost = await DistributedApplicationTestingBuilder
-                .CreateAsync<Projects.pr_timeline_app_AppHost>(["IncludeFrontend=false"], cancellationToken);
-
-            appHost.Services.AddLogging(logging => logging.AddSimpleConsole());
-
-            app = await appHost.BuildAsync(cancellationToken)
-                .WaitAsync(DefaultTimeout, cancellationToken);
-
-            // GitHub-hosted runners can be much slower to initialize the Aspire test host than a
-            // developer machine. Start the AppHost once per test class so startup cost and DCP
-            // initialization happen once, then give health checks a CI-sized timeout.
-            await app.StartAsync(cancellationToken)
-                .WaitAsync(DefaultTimeout, cancellationToken);
-            await app.ResourceNotifications.WaitForResourceHealthyAsync("server", cancellationToken)
-                .WaitAsync(DefaultTimeout, cancellationToken);
-
-            client = app.CreateHttpClient("server");
+            startup = startupTask ??= StartAppHostAsync(startupCts.Token);
         }
         finally
         {
             startLock.Release();
         }
+
+        await startup.WaitAsync(cancellationToken);
+    }
+
+    private async Task StartAppHostAsync(CancellationToken cancellationToken)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(DefaultTimeout);
+
+        try
+        {
+            var appHost = await DistributedApplicationTestingBuilder
+                .CreateAsync<Projects.pr_timeline_app_AppHost>(["IncludeFrontend=false"], timeout.Token);
+
+            appHost.Services.AddLogging(logging => logging.AddSimpleConsole());
+
+            app = await appHost.BuildAsync(timeout.Token);
+
+            await app.StartAsync(timeout.Token);
+            await app.ResourceNotifications.WaitForResourceHealthyAsync("server", timeout.Token);
+
+            client = app.CreateHttpClient("server");
+            Console.WriteLine($"Aspire AppHost smoke fixture started in {stopwatch.Elapsed}.");
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            await DisposeAppAsync();
+            throw new TimeoutException($"Aspire AppHost smoke fixture did not start within {DefaultTimeout}.", ex);
+        }
+        catch
+        {
+            await DisposeAppAsync();
+            throw;
+        }
     }
 
     public async ValueTask DisposeAsync()
     {
+        await startupCts.CancelAsync();
+        if (startupTask is not null)
+        {
+            try
+            {
+                await startupTask;
+            }
+            catch (OperationCanceledException) when (startupCts.IsCancellationRequested)
+            {
+                // Dispose requested cancellation while startup was still in flight.
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Console.WriteLine($"Ignoring Aspire AppHost startup failure during fixture disposal: {ex}");
+            }
+        }
+
         client?.Dispose();
         startLock.Dispose();
+        await DisposeAppAsync();
+        startupCts.Dispose();
+    }
 
+    private async Task DisposeAppAsync()
+    {
         if (app is not null)
         {
             await app.DisposeAsync().AsTask();
+            app = null;
         }
     }
 }
