@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { AttentionBucket, PullRequestSummary, VisiblePullRequestHandler } from '../../types';
 import { formatCount } from '../../utils/format';
 import { bucketRouteId, createBucketUrl } from '../../utils/routing';
+import HelpTooltip from '../HelpTooltip';
 import LoadingBadge from '../LoadingBadge';
 import LoadingCardPlaceholders from '../LoadingCardPlaceholders';
 import LoadingMetric from '../LoadingMetric';
@@ -26,6 +27,8 @@ type ReviewBucketTile = DrilldownTile & {
 };
 
 const bucketItemLimit = 10;
+const reviewSignalHelp = 'These lanes are signals, not mutually exclusive statuses. A PR can be both Needs review and Stalled; the top queue uses the highest-priority actionable lane while this board keeps every matching signal visible.';
+const stalledLaneHelp = 'Stalled means the PR has been quiet for at least 7 days. It is kept as a signal lane here, not a reason to remove the PR from Needs review, CI failing, Author response, or Ready to merge.';
 
 type CopyStatus = {
   bucketId: string;
@@ -83,6 +86,7 @@ function AttentionBoard({
         <p className="eyebrow">Team review board</p>
         <div className="section-title-heading">
           <h3>Review signal lanes</h3>
+          <HelpTooltip label={reviewSignalHelp} />
           {loading && <LoadingBadge label={hasLoaded ? 'Refreshing' : 'Loading'} />}
         </div>
         <p className="board-guidance">
@@ -117,11 +121,15 @@ function AttentionBoard({
           const visiblePullRequestCount = Math.min(pullRequestCount, bucketItemLimit);
           const hiddenPullRequestCount = pullRequestCount - visiblePullRequestCount;
           const currentCopyStatus = copyStatus?.bucketId === tile.id ? copyStatus : null;
+          const helpLabel = helpLabelForBucket(bucket.label);
 
           return (
             <section className={`drilldown-panel attention-card ${bucket.tone}`} aria-label={`${tile.label} review items`}>
               <div className="attention-card-header">
-                <span>{tile.label}</span>
+                <div className="attention-card-title">
+                  <span>{tile.label}</span>
+                  {helpLabel && <HelpTooltip label={helpLabel} />}
+                </div>
                 <div className="bucket-card-actions">
                   {tile.loading && <LoadingBadge label={tile.hasLoaded ? 'Refreshing' : 'Loading'} />}
                   <LoadingMetric
@@ -206,6 +214,10 @@ function createReviewBucketTiles(
     hasLoaded,
     placeholder: true,
   }));
+}
+
+function helpLabelForBucket(label: string) {
+  return label === 'Stalled' ? stalledLaneHelp : null;
 }
 
 export default AttentionBoard;

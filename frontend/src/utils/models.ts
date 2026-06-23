@@ -40,7 +40,7 @@ import { dedupeSignals } from './signals';
 
 const approvedAgingMs = 2 * dayMs;
 const communityWaitMs = 12 * hourMs;
-const needsReviewFreshMs = 2 * dayMs;
+const stalledPullRequestMs = 7 * dayMs;
 const quickWinLineThreshold = 80;
 const quickWinFileThreshold = 3;
 const approvedButAgingBucketLabel = 'Approved but aging';
@@ -369,7 +369,7 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
     },
     {
       label: 'Stalled',
-      summary: 'PRs that went quiet, including stale unreviewed work.',
+      summary: 'PRs that have been quiet for at least a week.',
       tone: 'warning',
       metric: 'idle ↓',
       items: [],
@@ -877,8 +877,7 @@ function needsReview(pullRequest: PullRequestSummary) {
   return pullRequest.review.state === 'waiting'
     && !hasCopilotFeedback(pullRequest)
     && !hasMergeConflicts(pullRequest)
-    && isCoreTeamAuthor(pullRequest.author)
-    && ageMs(pullRequest.updatedAt) < needsReviewFreshMs;
+    && isCoreTeamAuthor(pullRequest.author);
 }
 
 function reviewFootprint(pullRequest: PullRequestSummary) {
@@ -1766,7 +1765,7 @@ function developerRole(developer: DeveloperStats) {
 }
 
 function isIdle(pullRequest: PullRequestSummary) {
-  return Date.now() - new Date(pullRequest.updatedAt).getTime() >= 2 * dayMs;
+  return Date.now() - new Date(pullRequest.updatedAt).getTime() >= stalledPullRequestMs;
 }
 
 function isBotAuthor(author: string) {

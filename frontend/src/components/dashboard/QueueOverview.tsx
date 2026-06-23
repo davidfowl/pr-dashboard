@@ -11,6 +11,7 @@ import type {
 } from '../../types';
 import { colorForText, formatCount, formatRelative } from '../../utils/format';
 import GitHubAvatar from '../GitHubAvatar';
+import HelpTooltip from '../HelpTooltip';
 import LoadingBadge from '../LoadingBadge';
 import LoadingCardPlaceholders from '../LoadingCardPlaceholders';
 import LoadingMetric from '../LoadingMetric';
@@ -38,6 +39,8 @@ type FocusItem = AttentionItem & {
 
 const pullRequestListLimit = 10;
 const focusAgeLimitMs = 14 * dayMs;
+const queueOverviewHelp = 'Needs attention picks each PR from its highest-priority action lane, keeps only PRs opened in the last 14 days, and hides standalone non-review lanes like docs, automation, community, drafts, merge conflicts, Copilot feedback, and stalled.';
+const needsAttentionHelp = 'Stalled means quiet for 7+ days. It is not shown as a standalone top-queue lane, but a stalled PR still appears here when it also needs review, CI fixes, author response, or merge.';
 const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Copilot feedback', 'Merge conflicts']);
 const disqualifyingFocusBucketLabels = new Set(['Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Copilot feedback', 'Merge conflicts']);
 const focusBucketRanks = new Map([
@@ -158,16 +161,21 @@ function QueueOverview({
     <section className="queue-overview" aria-label="Queue overview">
       <div className="section-title-row">
         <p className="eyebrow">Queue overview</p>
-        <h3>One queue across repos: recent PRs first, bucket details one click away.</h3>
+        <div className="section-title-heading">
+          <h3>One queue across repos: recent PRs first, bucket details one click away.</h3>
+          <HelpTooltip label={queueOverviewHelp} />
+        </div>
         <p className="board-guidance">
-          Needs attention shows actionable PRs opened in the last 14 days, dedupes overlapping lanes,
-          and excludes automation/docs/community work.
+          Needs attention shows primary action lanes; hover the help icon for the exact include/exclude rules.
         </p>
       </div>
 
       <section className="focus-panel" aria-label="Focused attention queue">
         <div className="attention-card-header">
-          <span>Needs attention</span>
+          <div className="attention-card-title">
+            <span>Needs attention</span>
+            <HelpTooltip label={needsAttentionHelp} />
+          </div>
           <div className="section-loading-meta">
             {loading && <LoadingBadge label={loadingLabel} />}
             <LoadingMetric

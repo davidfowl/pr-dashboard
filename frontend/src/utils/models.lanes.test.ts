@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PullRequestSummary, ReviewStatus } from '../types';
 import { createAttentionBuckets } from './models';
 
@@ -64,6 +64,10 @@ function inBucket(buckets: ReturnType<typeof createAttentionBuckets>, label: str
 }
 
 describe('createAttentionBuckets lane routing', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('routes a clean approved PR to Ready to merge', () => {
     const buckets = createAttentionBuckets([pr({ number: 1, review: { state: 'approved', approvalCount: 1 } })]);
     expect(inBucket(buckets, 'Ready to merge', 1)).toBe(true);
@@ -97,5 +101,43 @@ describe('createAttentionBuckets lane routing', () => {
       pr({ number: 5, labels: ['NO-MERGE'], review: { state: 'approved', approvalCount: 1 } }),
     ]);
     expect(buckets.every((bucket) => bucket.items.every((item) => item.pullRequest.number !== 5))).toBe(true);
+  });
+
+  it('keeps quiet recent core-team PRs in Needs review instead of Stalled', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 18251,
+        author: 'DamianEdwards',
+        createdAt: '2026-06-16T20:28:55Z',
+        updatedAt: '2026-06-19T23:06:18Z',
+        commitCount: 12,
+        additions: 2059,
+        deletions: 40,
+        changedFiles: 15,
+      }),
+    ]);
+
+    expect(inBucket(buckets, 'Needs review', 18251)).toBe(true);
+    expect(inBucket(buckets, 'Stalled', 18251)).toBe(false);
+  });
+
+  it('keeps old unreviewed core-team PRs reviewable while also marking them stalled', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 6,
+        author: 'DamianEdwards',
+        createdAt: '2026-06-10T20:28:55Z',
+        updatedAt: '2026-06-15T23:06:18Z',
+      }),
+    ]);
+
+    expect(inBucket(buckets, 'Needs review', 6)).toBe(true);
+    expect(inBucket(buckets, 'Stalled', 6)).toBe(true);
   });
 });
