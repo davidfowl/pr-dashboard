@@ -3,6 +3,7 @@ import type { CSSProperties, FormEvent } from 'react';
 import './App.css';
 import AppInfo from './components/AppInfo';
 import AuthCard from './components/AuthCard';
+import NotificationSettings from './components/NotificationSettings';
 import DashboardView from './components/dashboard/DashboardView';
 import DetailView from './components/detail/DetailView';
 import {
@@ -1224,7 +1225,10 @@ function App() {
         )}
       </main>
 
-      <AppInfo />
+      <footer className="app-footer">
+        <NotificationSettings authStatus={authStatus} />
+        <AppInfo />
+      </footer>
     </div>
   );
 }
