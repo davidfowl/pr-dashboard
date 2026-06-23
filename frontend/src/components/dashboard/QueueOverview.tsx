@@ -12,6 +12,8 @@ import type {
 import { colorForText, formatCount, formatRelative } from '../../utils/format';
 import GitHubAvatar from '../GitHubAvatar';
 import LoadingBadge from '../LoadingBadge';
+import LoadingCardPlaceholders from '../LoadingCardPlaceholders';
+import LoadingMetric from '../LoadingMetric';
 import PullRequestList from '../PullRequestList';
 import AttentionBoard from './AttentionBoard';
 
@@ -20,6 +22,7 @@ type QueueOverviewProps = {
   attentionBuckets: AttentionBucket[];
   forMeItems: PickItem[];
   loading: boolean;
+  hasLoaded: boolean;
   selectedBucketId: string;
   login?: string;
   onSelectBucket: (bucketId: string) => void;
@@ -54,6 +57,7 @@ function QueueOverview({
   attentionBuckets,
   forMeItems,
   loading,
+  hasLoaded,
   selectedBucketId,
   login,
   onSelectBucket,
@@ -82,6 +86,8 @@ function QueueOverview({
   const coreOpenCount = counts.reduce((total, count) => total + count.openPullRequestCount, 0);
   const activeCoreCounts = counts.filter((count) => count.openPullRequestCount > 0);
   const visibleCoreCounts = showAllCoreMembers ? counts : activeCoreCounts;
+  const focusShownCount = Math.min(focusItems.length, pullRequestListLimit);
+  const loadingLabel = hasLoaded ? 'Refreshing' : 'Loading';
   const reviewBuckets = useMemo<AttentionBucket[]>(
     () => forMeItems.length === 0
       ? attentionBuckets
@@ -111,11 +117,19 @@ function QueueOverview({
         <div className="drilldown-header">
           <span>Core team</span>
           <button type="button" onClick={() => setShowAllCoreMembers((value) => !value)}>
-            {showAllCoreMembers ? 'Show active only' : `Show all ${counts.length}`}
+            {showAllCoreMembers ? 'Show active only' : loading && !hasLoaded ? 'Show all' : `Show all ${counts.length}`}
           </button>
         </div>
         {visibleCoreCounts.length === 0 ? (
-          <p className="empty-for-me">{loading ? 'Loading core team ownership...' : 'No loaded open PRs from core team members.'}</p>
+          loading && !hasLoaded ? (
+            <LoadingCardPlaceholders
+              className="core-member-loading-list"
+              count={3}
+              label="Loading core team ownership cards"
+            />
+          ) : (
+            <p className="empty-for-me">{loading ? 'Loading core team ownership...' : 'No loaded open PRs from core team members.'}</p>
+          )
         ) : (
           <div className="core-member-list">
             {visibleCoreCounts.map((count) => (
@@ -155,38 +169,70 @@ function QueueOverview({
         <div className="attention-card-header">
           <span>Needs attention</span>
           <div className="section-loading-meta">
-            {loading && <LoadingBadge />}
-            <strong>{formatCount(Math.min(focusItems.length, pullRequestListLimit), 'shown')}</strong>
+            {loading && <LoadingBadge label={loadingLabel} />}
+            <LoadingMetric
+              value={focusShownCount}
+              loading={loading}
+              hasLoaded={hasLoaded}
+              formatValue={(count) => formatCount(count, 'shown')}
+              pendingLabel="Needs attention count is loading"
+            />
           </div>
         </div>
         <p>Actionable PRs across the loaded repositories.</p>
 
-        <PullRequestList
-          entries={focusItems.map((item) => ({
-            pullRequest: item.pullRequest,
-            bucketLabel: item.bucketLabel,
-            signalProps: {
-              leadingSignals: [{ label: item.bucketLabel, tone: item.bucketTone }],
-              computedSignalLimit: 4,
-            },
-          }))}
-          limit={pullRequestListLimit}
-          emptyState={loading ? 'Loading review queue...' : 'No recent non-automation PRs need attention in the current results.'}
-          onSelectPullRequest={onSelectPullRequest}
-          onVisiblePullRequest={onVisiblePullRequest}
-          visibleChecksRefreshKey={visibleChecksRefreshKey}
-        />
+        {loading && !hasLoaded && focusItems.length === 0 ? (
+          <LoadingCardPlaceholders label="Loading review queue cards" />
+        ) : (
+          <PullRequestList
+            entries={focusItems.map((item) => ({
+              pullRequest: item.pullRequest,
+              bucketLabel: item.bucketLabel,
+              signalProps: {
+                leadingSignals: [{ label: item.bucketLabel, tone: item.bucketTone }],
+                computedSignalLimit: 4,
+              },
+            }))}
+            limit={pullRequestListLimit}
+            emptyState={loading ? 'Loading review queue...' : 'No recent non-automation PRs need attention in the current results.'}
+            onSelectPullRequest={onSelectPullRequest}
+            onVisiblePullRequest={onVisiblePullRequest}
+            visibleChecksRefreshKey={visibleChecksRefreshKey}
+          />
+        )}
       </section>
 
       <section className="owner-drilldown" aria-label="Core team ownership breakdown">
         <div className="attention-card-header">
           <span>Core team ownership</span>
           <div className="section-loading-meta">
-            {loading && <LoadingBadge />}
-            <strong>{formatCount(coreOpenCount, 'open PR')}</strong>
+            {loading && <LoadingBadge label={loadingLabel} />}
+            <LoadingMetric
+              value={coreOpenCount}
+              loading={loading}
+              hasLoaded={hasLoaded}
+              formatValue={(count) => formatCount(count, 'open PR')}
+              pendingLabel="Core team ownership count is loading"
+            />
           </div>
         </div>
-        <p className="board-guidance">{formatCount(activeCoreCounts.length, 'active author')} in the loaded queue.</p>
+        <p className="board-guidance">
+          {loading && !hasLoaded ? (
+            'Active authors will appear when the queue finishes loading.'
+          ) : (
+            <>
+              <LoadingMetric
+                value={activeCoreCounts.length}
+                loading={loading}
+                hasLoaded={hasLoaded}
+                formatValue={(count) => formatCount(count, 'active author')}
+                pendingLabel="Active author count is loading"
+              />
+              {' '}
+              in the loaded queue.
+            </>
+          )}
+        </p>
         {renderCoreOwnerDetails()}
       </section>
 
@@ -194,6 +240,7 @@ function QueueOverview({
         <AttentionBoard
           buckets={reviewBuckets}
           loading={loading}
+          hasLoaded={hasLoaded}
           selectedBucketId={selectedBucketId}
           onSelectBucket={onSelectBucket}
           onSelectPullRequest={onSelectPullRequest}

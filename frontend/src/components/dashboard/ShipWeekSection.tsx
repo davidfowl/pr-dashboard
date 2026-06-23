@@ -13,11 +13,14 @@ import { formatCount } from '../../utils/format';
 import { shouldHideFromSharedPullRequestLists } from '../../utils/models';
 import IssueListItem from '../IssueListItem';
 import LoadingBadge from '../LoadingBadge';
+import LoadingCardPlaceholders from '../LoadingCardPlaceholders';
+import LoadingMetric from '../LoadingMetric';
 import PullRequestList from '../PullRequestList';
 
 type ShipWeekSectionProps = {
   shipWeek: ShipWeekResponse | null;
   loading: boolean;
+  hasLoaded: boolean;
   sectionLoading: ShipWeekLoadingState;
   error: string | null;
   snapshotStatus: string | null;
@@ -43,6 +46,7 @@ type ShipModePullRequestItem = {
 function ShipWeekSection({
   shipWeek,
   loading,
+  hasLoaded,
   sectionLoading,
   error,
   snapshotStatus,
@@ -81,7 +85,13 @@ function ShipWeekSection({
           {error}
         </div>
       )}
-      {loading && !shipWeek && <p className="empty-for-me">Loading ship mode sections...</p>}
+      {loading && !shipWeek && <p className="empty-for-me">Preparing ship mode sections...</p>}
+      {loading && (
+        <ShipWeekLoadingProgress
+          sectionLoading={sectionLoading}
+          hasLoaded={hasLoaded}
+        />
+      )}
 
       {shipWeek && model && (
         <>
@@ -125,6 +135,7 @@ function ShipWeekSection({
                 detail={shipWeek.issues.length === 0 ? 'complete' : 'need PR/backport'}
                 tone={shipWeek.issues.length > 0 ? 'danger' : 'success'}
                 loading={sectionLoading.issues}
+                hasLoaded={hasLoaded}
               />
               <SummaryCard
                 label="Needs work"
@@ -132,6 +143,7 @@ function ShipWeekSection({
                 detail="CI or author response"
                 tone={model.needsWorkCount > 0 ? 'danger' : 'success'}
                 loading={sectionLoading.milestone || sectionLoading.baseBranch || sectionLoading.docs}
+                hasLoaded={hasLoaded}
               />
               <SummaryCard
                 label="Pending review"
@@ -139,6 +151,7 @@ function ShipWeekSection({
                 detail="needs review or re-review"
                 tone={model.pendingReviewCount > 0 ? 'warning' : 'success'}
                 loading={sectionLoading.milestone || sectionLoading.baseBranch || sectionLoading.docs}
+                hasLoaded={hasLoaded}
               />
               <SummaryCard
                 label="Ready"
@@ -146,6 +159,7 @@ function ShipWeekSection({
                 detail="approved and unblocked"
                 tone="success"
                 loading={sectionLoading.milestone || sectionLoading.baseBranch || sectionLoading.docs}
+                hasLoaded={hasLoaded}
               />
               <SummaryCard
                 label="Docs"
@@ -153,6 +167,7 @@ function ShipWeekSection({
                 detail="generated PRs"
                 tone={model.docsFromCodePullRequests.length > 0 ? 'accent' : 'success'}
                 loading={sectionLoading.docs}
+                hasLoaded={hasLoaded}
               />
             </div>
           </article>
@@ -162,12 +177,20 @@ function ShipWeekSection({
               <div className="attention-card-header">
                 <span>PRs in {shipWeek.milestone}</span>
                 <div className="section-loading-meta">
-                  {sectionLoading.milestone && <SectionLoadingIndicator />}
-                  <strong>{formatCount(model.milestonePullRequests.length, 'PR')}</strong>
+                  {sectionLoading.milestone && <SectionLoadingIndicator hasLoaded={hasLoaded} />}
+                  <LoadingMetric
+                    value={model.milestonePullRequests.length}
+                    loading={sectionLoading.milestone}
+                    hasLoaded={hasLoaded}
+                    formatValue={(count) => formatCount(count, 'PR')}
+                    pendingLabel="Milestone PR count is loading"
+                  />
                 </div>
               </div>
               <ShipModePullRequestList
                 items={model.milestonePullRequests}
+                loading={sectionLoading.milestone}
+                hasLoaded={hasLoaded}
                 emptyState={sectionLoading.milestone ? 'Loading milestone PRs...' : 'No open PRs are in or linked to this milestone.'}
                 onSelectPullRequest={onSelectPullRequest}
                 onVisiblePullRequest={onVisiblePullRequest}
@@ -179,12 +202,20 @@ function ShipWeekSection({
               <div className="attention-card-header">
                 <span>PRs targeting {shipWeek.releaseBranch}</span>
                 <div className="section-loading-meta">
-                  {sectionLoading.baseBranch && <SectionLoadingIndicator />}
-                  <strong>{formatCount(model.baseBranchPullRequests.length, 'PR')}</strong>
+                  {sectionLoading.baseBranch && <SectionLoadingIndicator hasLoaded={hasLoaded} />}
+                  <LoadingMetric
+                    value={model.baseBranchPullRequests.length}
+                    loading={sectionLoading.baseBranch}
+                    hasLoaded={hasLoaded}
+                    formatValue={(count) => formatCount(count, 'PR')}
+                    pendingLabel="Base-branch PR count is loading"
+                  />
                 </div>
               </div>
               <ShipModePullRequestList
                 items={model.baseBranchPullRequests}
+                loading={sectionLoading.baseBranch}
+                hasLoaded={hasLoaded}
                 emptyState={sectionLoading.baseBranch ? 'Loading base-branch PRs...' : 'No open PRs target the selected base branch.'}
                 onSelectPullRequest={onSelectPullRequest}
                 onVisiblePullRequest={onVisiblePullRequest}
@@ -197,12 +228,20 @@ function ShipWeekSection({
                 <div className="attention-card-header">
                   <span>Generated docs PRs</span>
                   <div className="section-loading-meta">
-                    {sectionLoading.docs && <SectionLoadingIndicator />}
-                    <strong>{formatCount(model.docsFromCodePullRequests.length, 'PR')}</strong>
+                    {sectionLoading.docs && <SectionLoadingIndicator hasLoaded={hasLoaded} />}
+                    <LoadingMetric
+                      value={model.docsFromCodePullRequests.length}
+                      loading={sectionLoading.docs}
+                      hasLoaded={hasLoaded}
+                      formatValue={(count) => formatCount(count, 'PR')}
+                      pendingLabel="Generated docs PR count is loading"
+                    />
                   </div>
                 </div>
                 <ShipModePullRequestList
                   items={model.docsFromCodePullRequests}
+                  loading={sectionLoading.docs}
+                  hasLoaded={hasLoaded}
                   emptyState={sectionLoading.docs ? 'Loading generated docs PRs...' : 'No open generated docs PRs are loaded.'}
                   onSelectPullRequest={onSelectPullRequest}
                   onVisiblePullRequest={onVisiblePullRequest}
@@ -216,12 +255,23 @@ function ShipWeekSection({
             <div className="attention-card-header">
               <span>Open issues TBD</span>
               <div className="section-loading-meta">
-                {sectionLoading.issues && <SectionLoadingIndicator />}
-                <strong>{formatCount(shipWeek.issues.length, 'issue')}</strong>
+                {sectionLoading.issues && <SectionLoadingIndicator hasLoaded={hasLoaded} />}
+                <LoadingMetric
+                  value={shipWeek.issues.length}
+                  loading={sectionLoading.issues}
+                  hasLoaded={hasLoaded}
+                  formatValue={(count) => formatCount(count, 'issue')}
+                  pendingLabel="Open issue count is loading"
+                />
               </div>
             </div>
             <p className="board-guidance">These are open milestone issues that are not PRs yet. Treat as TBD until there is a PR/backport path.</p>
-            <ShipWeekIssueList issues={shipWeek.issues} emptyState={sectionLoading.issues ? 'Loading milestone issues...' : 'No open non-PR issues in this milestone.'} />
+            <ShipWeekIssueList
+              issues={shipWeek.issues}
+              loading={sectionLoading.issues}
+              hasLoaded={hasLoaded}
+              emptyState={sectionLoading.issues ? 'Loading milestone issues...' : 'No open non-PR issues in this milestone.'}
+            />
           </section>
         </>
       )}
@@ -229,8 +279,45 @@ function ShipWeekSection({
   );
 }
 
-function SectionLoadingIndicator() {
-  return <LoadingBadge ariaLabel="Still loading" />;
+function SectionLoadingIndicator({ hasLoaded }: { hasLoaded: boolean }) {
+  return (
+    <LoadingBadge
+      label={hasLoaded ? 'Refreshing' : 'Loading'}
+      ariaLabel={hasLoaded ? 'Still refreshing' : 'Still loading'}
+    />
+  );
+}
+
+function ShipWeekLoadingProgress({
+  sectionLoading,
+  hasLoaded,
+}: {
+  sectionLoading: ShipWeekLoadingState;
+  hasLoaded: boolean;
+}) {
+  const sections = [
+    { label: 'milestone PRs', loading: sectionLoading.milestone },
+    { label: 'base-branch PRs', loading: sectionLoading.baseBranch },
+    { label: 'generated docs PRs', loading: sectionLoading.docs },
+    { label: 'open issues', loading: sectionLoading.issues },
+  ];
+  const loadingSections = sections.filter((section) => section.loading);
+
+  if (loadingSections.length === 0) {
+    return null;
+  }
+
+  const readyCount = sections.length - loadingSections.length;
+  const action = hasLoaded ? 'Refreshing' : 'Loading';
+  const resultTiming = hasLoaded ? 'Counts stay pinned until each section finishes.' : 'Counts appear as each section finishes.';
+
+  return (
+    <p className="ship-week-loading-progress" role="status">
+      {action} release scope: {readyCount} of {sections.length} data groups ready.
+      {' '}
+      Still loading {formatList(loadingSections.map((section) => section.label))}. {resultTiming}
+    </p>
+  );
 }
 
 function createShipModeModel(shipWeek: ShipWeekResponse) {
@@ -291,17 +378,25 @@ function createShipModePullRequestItem(item: ShipWeekPullRequestSummary): ShipMo
 
 function ShipModePullRequestList({
   items,
+  loading,
+  hasLoaded,
   emptyState,
   onSelectPullRequest,
   onVisiblePullRequest,
   visibleChecksRefreshKey,
 }: {
   items: ShipModePullRequestItem[];
+  loading: boolean;
+  hasLoaded: boolean;
   emptyState: string;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: VisiblePullRequestHandler;
   visibleChecksRefreshKey: number;
 }) {
+  if (loading && !hasLoaded && items.length === 0) {
+    return <LoadingCardPlaceholders label="Loading ship mode pull request cards" />;
+  }
+
   return (
     <PullRequestList
       entries={items.map((item) => ({
@@ -321,10 +416,22 @@ function ShipModePullRequestList({
   );
 }
 
-function ShipWeekIssueList({ issues, emptyState }: { issues: ShipWeekIssueSummary[]; emptyState: string }) {
+function ShipWeekIssueList({
+  issues,
+  loading,
+  hasLoaded,
+  emptyState,
+}: {
+  issues: ShipWeekIssueSummary[];
+  loading: boolean;
+  hasLoaded: boolean;
+  emptyState: string;
+}) {
   return (
     <div className="attention-list">
-      {issues.length === 0 && <p className="empty-for-me">{emptyState}</p>}
+      {loading && !hasLoaded && issues.length === 0 ? (
+        <LoadingCardPlaceholders label="Loading ship mode issue cards" />
+      ) : issues.length === 0 && <p className="empty-for-me">{emptyState}</p>}
       {issues.map((issue) => (
         <IssueListItem
           key={`${issue.repository}#${issue.number}`}
@@ -353,23 +460,44 @@ function SummaryCard({
   detail,
   tone = 'accent',
   loading = false,
+  hasLoaded,
 }: {
   label: string;
   value: number | string;
   detail: string;
   tone?: 'accent' | 'warning' | 'danger' | 'success';
   loading?: boolean;
+  hasLoaded: boolean;
 }) {
   return (
-    <article className={`ship-week-summary-card ${tone}`}>
+    <article className={`ship-week-summary-card ${loading ? 'loading' : tone}`}>
       <div className="ship-week-summary-card-header">
         <span className="ship-week-summary-card-label">{label}</span>
-        {loading && <SectionLoadingIndicator />}
+        {loading && <SectionLoadingIndicator hasLoaded={hasLoaded} />}
       </div>
-      <strong className="ship-week-summary-card-value">{value}</strong>
-      <p>{detail}</p>
+      <LoadingMetric
+        value={value}
+        loading={loading}
+        hasLoaded={hasLoaded}
+        formatValue={(nextValue) => typeof nextValue === 'number' ? nextValue.toLocaleString() : nextValue}
+        className="ship-week-summary-card-value"
+        pendingLabel={`${label} count is loading`}
+      />
+      <p>{loading ? (hasLoaded ? 'Refreshing...' : 'Calculating...') : detail}</p>
     </article>
   );
+}
+
+function formatList(items: string[]) {
+  if (items.length <= 1) {
+    return items[0] ?? '';
+  }
+
+  if (items.length === 2) {
+    return `${items[0]} and ${items[1]}`;
+  }
+
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
 }
 
 function countUniqueItems(items: ShipModePullRequestItem[], predicate: (item: ShipModePullRequestItem) => boolean) {

@@ -728,6 +728,10 @@ select:focus-visible {
   --ship-week-color: var(--danger);
 }
 
+.ship-week-summary-card.loading {
+  --ship-week-color: var(--border);
+}
+
 .ship-week-critical-panel.danger {
   --ship-week-color: var(--danger);
 }
@@ -763,6 +767,17 @@ select:focus-visible {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 800;
+}
+
+.ship-week-loading-progress {
+  border: 1px dashed var(--border);
+  border-radius: 0.85rem;
+  margin: 0 0 0.8rem;
+  padding: 0.65rem 0.8rem;
+  color: var(--muted);
+  background: var(--surface-sunken);
+  font-size: 0.74rem;
+  font-weight: 750;
 }
 
 .ship-week-scope-panel .attention-board {
@@ -802,6 +817,74 @@ select:focus-visible {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.loading-metric {
+  display: inline-block;
+  min-width: 2.6ch;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.loading-metric.pending,
+.loading-metric.refreshing {
+  color: var(--muted);
+}
+
+.loading-metric.pending {
+  letter-spacing: 0.02em;
+}
+
+.loading-card-list {
+  display: grid;
+  gap: 0;
+  margin-top: 0.65rem;
+}
+
+.loading-card-placeholder {
+  display: grid;
+  gap: 0.42rem;
+  border-top: 1px solid var(--hairline);
+  padding: 0.62rem 0.2rem;
+}
+
+.loading-card-line,
+.loading-card-pill-row span {
+  display: block;
+  border-radius: 999px;
+  background: var(--muted-wash);
+}
+
+.loading-card-line {
+  height: 0.72rem;
+  opacity: 0.7;
+}
+
+.loading-card-line.short {
+  width: min(38%, 8rem);
+}
+
+.loading-card-line.title {
+  width: min(82%, 24rem);
+  height: 0.85rem;
+  opacity: 0.86;
+}
+
+.loading-card-line.medium {
+  width: min(56%, 16rem);
+}
+
+.loading-card-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.loading-card-pill-row span {
+  width: 4.5rem;
+  height: 1.15rem;
+  opacity: 0.62;
 }
 
 .loading-badge span {
@@ -960,6 +1043,19 @@ select:focus-visible {
   background: transparent;
   text-align: left;
   cursor: pointer;
+}
+
+.drilldown-tiles button.placeholder {
+  border-style: dashed;
+  cursor: default;
+}
+
+.drilldown-tiles button.placeholder,
+.drilldown-tiles button.placeholder:hover,
+.drilldown-tiles button.placeholder.selected {
+  border-color: var(--border);
+  color: var(--muted);
+  background: transparent;
 }
 
 .drilldown-tiles button.success {

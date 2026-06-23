@@ -153,6 +153,7 @@ function DashboardView({
             <ShipWeekSection
               shipWeek={shipWeek}
               loading={shipWeekLoading}
+              hasLoaded={lastUpdatedAt !== null}
               sectionLoading={shipWeekSectionLoading}
               error={shipWeekError}
               snapshotStatus={shipWeekSnapshotStatus}
@@ -172,15 +173,17 @@ function DashboardView({
             <IssuesOverview
               issueBuckets={issueBuckets}
               loading={issuesLoading}
+              hasLoaded={lastUpdatedAt !== null}
               selectedBucketId={selectedBucketId}
               onSelectBucket={onSelectBucket}
             />
-          ) : pullRequests.length > 0 && (
+          ) : (pullsLoading || pullRequests.length > 0) && (
             <QueueOverview
               counts={developerPullRequestCounts}
               attentionBuckets={attentionBuckets}
               forMeItems={forMeItems}
               loading={pullsLoading}
+              hasLoaded={lastUpdatedAt !== null}
               selectedBucketId={selectedBucketId}
               login={login}
               onSelectBucket={onSelectBucket}
