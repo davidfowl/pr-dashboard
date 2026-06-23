@@ -64,6 +64,11 @@ jobs:
 
           if grep -q "PartiallyFailedToTrustTheCertificate" aspire-certs-trust.log; then
             echo "::warning::Aspire HTTPS certificate trust partially failed; continuing because hosted Linux runners can fail browser/user trust while the certificate is still usable for CLI diagnostics."
+            ssl_cert_dirs="/usr/lib/ssl/certs:$HOME/.aspnet/dev-certs/trust"
+            if [ -n "${SSL_CERT_DIR:-}" ]; then
+              ssl_cert_dirs="$SSL_CERT_DIR:$ssl_cert_dirs"
+            fi
+            echo "SSL_CERT_DIR=$ssl_cert_dirs" >> "$GITHUB_ENV"
             exit 0
           fi
 
@@ -86,3 +91,20 @@ jobs:
 
       - name: Test
         run: dotnet test pr-timeline-app.slnx --no-build --nologo --logger "console;verbosity=detailed"
+
+      - name: Collect Aspire diagnostics
+        if: failure()
+        run: |
+          set +e
+          echo "Docker containers:"
+          docker ps -a --no-trunc
+          echo
+          echo "Azurite logs:"
+          for container in $(docker ps -aq --filter ancestor=mcr.microsoft.com/azure-storage/azurite:3.35.0); do
+            echo "::group::docker logs $container"
+            docker logs "$container"
+            echo "::endgroup::"
+          done
+          echo
+          echo "DCP processes:"
+          ps -ef | grep '[d]cp' || true
