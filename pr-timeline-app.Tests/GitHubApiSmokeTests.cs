@@ -115,6 +115,7 @@ public sealed class AppHostFixture : IAsyncLifetime
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(2);
     private readonly SemaphoreSlim startLock = new(1, 1);
+    private readonly CancellationTokenSource startupCts = new();
     private Task? startupTask;
     private DistributedApplication? app;
     private HttpClient? client;
@@ -139,14 +140,14 @@ public sealed class AppHostFixture : IAsyncLifetime
                 return;
             }
 
-            startup = startupTask ??= StartAppHostAsync(cancellationToken);
+            startup = startupTask ??= StartAppHostAsync(startupCts.Token);
         }
         finally
         {
             startLock.Release();
         }
 
-        await startup;
+        await startup.WaitAsync(cancellationToken);
     }
 
     private async Task StartAppHostAsync(CancellationToken cancellationToken)
@@ -184,9 +185,23 @@ public sealed class AppHostFixture : IAsyncLifetime
 
     public async ValueTask DisposeAsync()
     {
+        await startupCts.CancelAsync();
+        if (startupTask is not null)
+        {
+            try
+            {
+                await startupTask;
+            }
+            catch (OperationCanceledException) when (startupCts.IsCancellationRequested)
+            {
+                // Dispose requested cancellation while startup was still in flight.
+            }
+        }
+
         client?.Dispose();
         startLock.Dispose();
         await DisposeAppAsync();
+        startupCts.Dispose();
     }
 
     private async Task DisposeAppAsync()
