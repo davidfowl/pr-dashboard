@@ -196,6 +196,10 @@ public sealed class AppHostFixture : IAsyncLifetime
             {
                 // Dispose requested cancellation while startup was still in flight.
             }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Console.WriteLine($"Ignoring Aspire AppHost startup failure during fixture disposal: {ex}");
+            }
         }
 
         client?.Dispose();

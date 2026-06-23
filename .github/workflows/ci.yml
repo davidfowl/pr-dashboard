@@ -95,4 +95,4 @@ jobs:
           aspire ps || true
           echo
           echo "Docker containers:"
-          docker ps -a --no-trunc
+          docker ps -a --no-trunc || true
