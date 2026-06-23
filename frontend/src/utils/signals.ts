@@ -5,6 +5,13 @@ import type { AttentionSignal } from '../types';
 // "no reviews", or "Ready to merge" / "merge". Rendering all of them produces redundant pills, so
 // signals are collapsed to one per concept. The first occurrence wins, which keeps the leading
 // bucket label (passed first) over the lower-value computed duplicates.
+//
+// The unresolved-feedback action verbs ("resolve feedback" / "address feedback") are deliberately
+// NOT grouped with the unresolved-thread count here. On the attention board the count reason pill
+// ("N unresolved threads") is passed first, so folding the action verb into the same concept would
+// drop the action pill entirely — but the count and the call-to-action carry different information
+// (and different tones), so both should survive. The two count phrasings still collapse via the
+// "unresolved" substring rule in signalConcept below.
 const synonymGroups: string[][] = [
   ['needs review', 'needs reviewer', 'no reviews'],
   ['ready to merge', 'merge'],
@@ -12,7 +19,6 @@ const synonymGroups: string[][] = [
   ['ci failing', 'fix ci'],
   ['wait for ci', 'ci running'],
   ['author response', 'author fix', 'changes requested'],
-  ['unresolved feedback', 'resolve feedback', 'address feedback', 'copilot feedback'],
   ['quick wins', 'quick win'],
   ['stalled', 'unstick'],
   ['docs', 'docs review'],

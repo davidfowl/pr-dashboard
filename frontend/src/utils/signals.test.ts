@@ -25,6 +25,20 @@ describe('dedupeSignals', () => {
     expect(dedupeSignals(signals)).toHaveLength(1);
   });
 
+  it('keeps the unresolved-feedback action pill alongside the count pill', () => {
+    // On the attention board the count reason is passed first; the action verb must survive
+    // so the card still shows what to do (and its tone), not just the count.
+    const signals: AttentionSignal[] = [
+      { label: '2 unresolved threads', tone: 'danger' },
+      { label: 'resolve feedback', tone: 'danger' },
+      { label: '2 unresolved', tone: 'danger' },
+    ];
+
+    const deduped = dedupeSignals(signals);
+
+    expect(deduped.map((signal) => signal.label)).toEqual(['2 unresolved threads', 'resolve feedback']);
+  });
+
   it('keeps distinct concepts separate', () => {
     const signals: AttentionSignal[] = [
       { label: '2 unresolved threads', tone: 'danger' },
