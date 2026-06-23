@@ -4,7 +4,7 @@ builder.AddServiceDefaults();
 
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
-builder.AddAzureBlobContainerClient(GitHubPublicCacheStore.ConnectionName);
+builder.AddKeyedAzureBlobContainerClient(GitHubPublicCacheStore.ConnectionName);
 builder.AddKeyedAzureBlobContainerClient(BlobNotificationStore.ConnectionName);
 builder.Services.Configure<GitHubCacheWarmupOptions>(
     builder.Configuration.GetSection(GitHubCacheWarmupOptions.SectionName));
