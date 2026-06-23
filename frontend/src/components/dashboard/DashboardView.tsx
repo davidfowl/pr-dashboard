@@ -116,6 +116,7 @@ function DashboardView({
   const shipModeActive = dashboardMode === 'ship';
   const issuesModeActive = dashboardMode === 'issues';
   const refreshing = shipModeActive ? shipWeekLoading : issuesModeActive ? issuesLoading : pullsLoading;
+  const hasLoadedData = lastUpdatedAt !== null;
   const autoRefreshCadence = formatDuration(autoRefreshIntervalMs);
   const dataTitle = shipModeActive
     ? 'Ship mode data'
@@ -143,7 +144,7 @@ function DashboardView({
           </p>
         </div>
         <button type="button" onClick={onRefresh} disabled={refreshing}>
-          {refreshing ? 'Refreshing...' : 'Refresh now'}
+          {refreshing ? (hasLoadedData ? 'Refreshing...' : 'Loading...') : 'Refresh now'}
         </button>
       </section>
 
@@ -153,7 +154,7 @@ function DashboardView({
             <ShipWeekSection
               shipWeek={shipWeek}
               loading={shipWeekLoading}
-              hasLoaded={lastUpdatedAt !== null}
+              hasLoaded={hasLoadedData}
               sectionLoading={shipWeekSectionLoading}
               error={shipWeekError}
               snapshotStatus={shipWeekSnapshotStatus}
@@ -173,7 +174,7 @@ function DashboardView({
             <IssuesOverview
               issueBuckets={issueBuckets}
               loading={issuesLoading}
-              hasLoaded={lastUpdatedAt !== null}
+              hasLoaded={hasLoadedData}
               selectedBucketId={selectedBucketId}
               onSelectBucket={onSelectBucket}
             />
@@ -183,7 +184,7 @@ function DashboardView({
               attentionBuckets={attentionBuckets}
               forMeItems={forMeItems}
               loading={pullsLoading}
-              hasLoaded={lastUpdatedAt !== null}
+              hasLoaded={hasLoadedData}
               selectedBucketId={selectedBucketId}
               login={login}
               onSelectBucket={onSelectBucket}
