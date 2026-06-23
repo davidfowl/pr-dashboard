@@ -124,6 +124,7 @@ function Switch({ on, disabled, label, onClick }: SwitchProps) {
 
 function NotificationSettings({ authStatus }: NotificationSettingsProps) {
   const authenticated = authStatus?.authenticated === true;
+  const login = authStatus?.login ?? '';
 
   const [supported] = useState(isPushSupported);
   const [iosNeedsInstall] = useState(() => isIos() && !isStandalone());
@@ -144,7 +145,9 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const popoverId = useId();
 
-  const canUsePush = authenticated && supported && !iosNeedsInstall;
+  // Require a real login before any push sync. Without it, syncSubscription(key, '') would look
+  // like a switch to an empty account and could tear down an existing, valid subscription.
+  const canUsePush = authenticated && supported && !iosNeedsInstall && login !== '';
 
   // A gentle nudge dot: push is available and configured but this device hasn't opted in yet.
   const showNudge =
@@ -177,7 +180,7 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
         // Reconcile this device's subscription with the signed-in account. Returns false when
         // there's no subscription or when a different account previously owned this device (in
         // which case the stale subscription is torn down and an explicit opt-in is required).
-        const synced = await syncSubscription(key, authStatus?.login ?? '');
+        const synced = await syncSubscription(key, login);
         if (cancelled) {
           return;
         }
@@ -206,7 +209,7 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
     return () => {
       cancelled = true;
     };
-  }, [canUsePush, authStatus?.login]);
+  }, [canUsePush, login]);
 
   // Position the portal popover under the bell and keep it anchored on scroll/resize.
   useEffect(() => {
@@ -273,7 +276,7 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
         return;
       }
 
-      await subscribeToPush(serverKey, authStatus?.login ?? '');
+      await subscribeToPush(serverKey, login);
       setSubscribed(true);
       try {
         const prefs = await getPreferences();
@@ -287,7 +290,7 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
     } finally {
       setBusy(false);
     }
-  }, [serverKey, authStatus?.login]);
+  }, [serverKey, login]);
 
   const disable = useCallback(async () => {
     setBusy(true);

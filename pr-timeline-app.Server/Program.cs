@@ -10,6 +10,8 @@ builder.Services.Configure<GitHubCacheWarmupOptions>(
     builder.Configuration.GetSection(GitHubCacheWarmupOptions.SectionName));
 builder.Services.Configure<WebPushOptions>(
     builder.Configuration.GetSection(WebPushOptions.SectionName));
+builder.Services.Configure<GitHubReviewPolicyOptions>(
+    builder.Configuration.GetSection(GitHubReviewPolicyOptions.SectionName));
 builder.Services.AddGitHubApiServices(builder.Environment);
 builder.Services.AddNotificationServices();
 

@@ -35,6 +35,18 @@ You can replace that list in the dashboard with any comma-separated `owner/repo`
 
 In development, the server can use an OAuth session, `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`. Outside development, configure `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`; the callback path is `/signin-github`. The OAuth flow requests no GitHub scopes, so it supports public repository API reads without requesting repository or organization permissions.
 
+## Conversation-resolution policy
+
+Some repositories require all review conversations to be resolved before an approved PR can merge (GitHub's "require conversation resolution" branch protection). For repositories listed in `GitHubReviewPolicy:RequireConversationResolution` (`owner/repo`, case-insensitive), the dashboard fetches unresolved review-thread counts for approved PRs and surfaces them: an approved PR with open threads shows a `resolve feedback` action and a `N unresolved` pill, moves to an **Unresolved feedback** bucket, and is kept out of **Ready to merge**.
+
+This is opt-in per repo because the branch-protection setting is only readable through GitHub's admin-scoped branch-protection API, which this app's tokens do not have. Repositories not in the list are unaffected, and no extra GitHub calls are made for them.
+
+## Copilot review feedback
+
+The Copilot review bot's reviews are filtered out of a PR's human review state, so a PR that only Copilot has commented on otherwise looks like it still "needs a reviewer". To avoid surfacing those as actionable review work, the dashboard also fetches unresolved review-thread counts for **waiting** PRs that the Copilot reviewer has reviewed (this is independent of the conversation-resolution policy above, since it is a triage signal rather than a merge gate).
+
+A waiting PR with unresolved threads is treated as waiting on the author: it shows an `address feedback` action, moves to a **Copilot feedback** bucket, and is kept out of the **Needs attention** focus queue. The extra GraphQL call is bounded to waiting PRs the bot actually reviewed.
+
 ## Production public cache
 
 Logged-out users read pull request data only from the shared public cache for repositories in `GitHubCacheWarmup:Repositories`. Configure `GITHUB_PUBLIC_CACHE_TOKEN` or `GitHubCacheWarmup:PublicCacheToken` with a server-owned fine-grained PAT or GitHub App token so the backend can verify allowlisted public visibility and refresh that cache without using anonymous quota or user tokens. Public cache entries and last-good snapshots are persisted in the Aspire-managed `github-cache` Blob container, which runs as Azurite locally and Azure Blob Storage when published. Local Azurite uses an Aspire data volume so cache snapshots survive container recreation; use the `clear-cache` resource command when you need to reset the local public cache.

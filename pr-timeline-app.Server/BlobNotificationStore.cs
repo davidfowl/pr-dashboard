@@ -95,6 +95,12 @@ sealed class BlobNotificationStore : INotificationStore
         // subscriptionId is a deterministic hash of the endpoint, so the same endpoint stored
         // under a different user has the blob name subscriptions/{otherUserId}/{id}.json. Scan
         // the subscriptions prefix and delete any matching blob that isn't the keep user's.
+        //
+        // This is O(total subscriptions) per subscribe. That's an intentional v1 tradeoff: this
+        // path only runs when a device is claimed by a new account, the server is pinned to a
+        // single replica, and the audience is a small team, so the scan stays cheap. If the
+        // container grows large, add an endpoint->owner index (e.g. subscriptions-by-endpoint/
+        // {subscriptionId}.json or blob tags) to make this O(1) instead of enumerating the prefix.
         var subscriptionId = PushSubscriptionRecord.CreateId(endpoint);
         var suffix = $"/{subscriptionId}.json";
         var keepPrefix = $"subscriptions/{keepUserId}/";

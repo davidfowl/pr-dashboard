@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import LoadingBadge from '../LoadingBadge';
+import LoadingMetric from '../LoadingMetric';
 
 export type DrilldownTileTone = 'success' | 'warning' | 'danger' | 'accent';
 
@@ -10,6 +11,8 @@ export type DrilldownTile<TId extends string = string> = {
   summary: string;
   tone?: DrilldownTileTone;
   loading?: boolean;
+  hasLoaded?: boolean;
+  placeholder?: boolean;
 };
 
 type TileDrilldownProps<TId extends string, TTile extends DrilldownTile<TId>> = {
@@ -52,17 +55,26 @@ function TileDrilldown<TId extends string, TTile extends DrilldownTile<TId>>({
             className={[
               activeId === tile.id ? 'selected' : undefined,
               tile.tone,
+              tile.placeholder ? 'placeholder' : undefined,
             ].filter(Boolean).join(' ')}
             onClick={() => onSelect(tile.id)}
+            disabled={tile.placeholder}
             role="tab"
+            aria-disabled={tile.placeholder || undefined}
             aria-controls={panelId(idPrefix, tile.id)}
             aria-selected={activeId === tile.id}
           >
             <div className="drilldown-tile-title">
               <span className="drilldown-tile-label">{tile.label}</span>
-              {tile.loading && <LoadingBadge />}
+              {tile.loading && <LoadingBadge label={tile.hasLoaded ? 'Refreshing' : 'Loading'} />}
             </div>
-            <strong>{tile.count}</strong>
+            <LoadingMetric
+              value={tile.count}
+              loading={tile.loading === true}
+              hasLoaded={tile.hasLoaded === true}
+              formatValue={(count) => count.toLocaleString()}
+              pendingLabel={`${tile.label} count is loading`}
+            />
             <em>{tile.summary}</em>
           </button>
         ))}

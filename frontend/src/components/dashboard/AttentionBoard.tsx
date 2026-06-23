@@ -3,6 +3,8 @@ import type { AttentionBucket, PullRequestSummary, VisiblePullRequestHandler } f
 import { formatCount } from '../../utils/format';
 import { bucketRouteId, createBucketUrl } from '../../utils/routing';
 import LoadingBadge from '../LoadingBadge';
+import LoadingCardPlaceholders from '../LoadingCardPlaceholders';
+import LoadingMetric from '../LoadingMetric';
 import PullRequestList from '../PullRequestList';
 import TileDrilldown from './TileDrilldown';
 import type { DrilldownTile } from './TileDrilldown';
@@ -10,6 +12,7 @@ import type { DrilldownTile } from './TileDrilldown';
 type AttentionBoardProps = {
   buckets: AttentionBucket[];
   loading: boolean;
+  hasLoaded: boolean;
   selectedBucketId: string;
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
@@ -18,8 +21,8 @@ type AttentionBoardProps = {
 };
 
 type ReviewBucketTile = DrilldownTile & {
-  bucket: AttentionBucket;
-  url: string;
+  bucket?: AttentionBucket;
+  url?: string;
 };
 
 const bucketItemLimit = 10;
@@ -33,6 +36,7 @@ type CopyStatus = {
 function AttentionBoard({
   buckets,
   loading,
+  hasLoaded,
   selectedBucketId,
   onSelectBucket,
   onSelectPullRequest,
@@ -40,19 +44,13 @@ function AttentionBoard({
   visibleChecksRefreshKey,
 }: AttentionBoardProps) {
   const [copyStatus, setCopyStatus] = useState<CopyStatus | null>(null);
-  const bucketTiles: ReviewBucketTile[] = buckets.map((bucket) => ({
-    id: bucketRouteId(bucket.label),
-    label: bucket.label,
-    count: bucket.items.length,
-    summary: bucket.metric,
-    tone: bucket.tone,
-    loading,
-    bucket,
-    url: createBucketUrl(bucketRouteId(bucket.label)),
-  }));
+  const bucketTiles = createReviewBucketTiles(buckets, loading, hasLoaded);
 
   async function copyBucketLink(tile: ReviewBucketTile) {
     onSelectBucket(tile.id);
+    if (!tile.url) {
+      return;
+    }
 
     if (!navigator.clipboard) {
       setCopyStatus({
@@ -85,7 +83,7 @@ function AttentionBoard({
         <p className="eyebrow">Team review board</p>
         <div className="section-title-heading">
           <h3>Review signal lanes</h3>
-          {loading && <LoadingBadge />}
+          {loading && <LoadingBadge label={hasLoaded ? 'Refreshing' : 'Loading'} />}
         </div>
         <p className="board-guidance">
           Lanes can overlap: automation, docs, stale, and review-state signals stay visible without hiding each other.
@@ -102,6 +100,19 @@ function AttentionBoard({
         onSelect={onSelectBucket}
         renderDetails={(tile) => {
           const { bucket } = tile;
+          if (!bucket) {
+            return (
+              <section className="drilldown-panel attention-card loading-card-panel" aria-label="Loading review signal cards">
+                <div className="attention-card-header">
+                  <span>{tile.label}</span>
+                  <LoadingBadge label="Loading" />
+                </div>
+                <p>Review cards will appear when this lane finishes loading.</p>
+                <LoadingCardPlaceholders count={3} label="Loading review signal cards" />
+              </section>
+            );
+          }
+
           const pullRequestCount = bucket.items.length;
           const visiblePullRequestCount = Math.min(pullRequestCount, bucketItemLimit);
           const hiddenPullRequestCount = pullRequestCount - visiblePullRequestCount;
@@ -112,8 +123,14 @@ function AttentionBoard({
               <div className="attention-card-header">
                 <span>{tile.label}</span>
                 <div className="bucket-card-actions">
-                  {tile.loading && <LoadingBadge />}
-                  <strong>{formatCount(pullRequestCount, 'open PR')}</strong>
+                  {tile.loading && <LoadingBadge label={tile.hasLoaded ? 'Refreshing' : 'Loading'} />}
+                  <LoadingMetric
+                    value={pullRequestCount}
+                    loading={tile.loading === true}
+                    hasLoaded={tile.hasLoaded === true}
+                    formatValue={(count) => formatCount(count, 'open PR')}
+                    pendingLabel={`${tile.label} count is loading`}
+                  />
                   <button
                     type="button"
                     className="bucket-link-button"
@@ -132,7 +149,7 @@ function AttentionBoard({
                   {currentCopyStatus.message}
                 </p>
               )}
-              {hiddenPullRequestCount > 0 && (
+              {!tile.loading && hiddenPullRequestCount > 0 && (
                 <p className="bucket-limit-note">
                   Showing top {visiblePullRequestCount} of {pullRequestCount}. Resolve these and the next ranked PRs will surface on refresh.
                 </p>
@@ -159,6 +176,36 @@ function AttentionBoard({
       />
     </section>
   );
+}
+
+function createReviewBucketTiles(
+  buckets: AttentionBucket[],
+  loading: boolean,
+  hasLoaded: boolean,
+): ReviewBucketTile[] {
+  if (buckets.length > 0 || hasLoaded || !loading) {
+    return buckets.map((bucket) => ({
+      id: bucketRouteId(bucket.label),
+      label: bucket.label,
+      count: bucket.items.length,
+      summary: bucket.metric,
+      tone: bucket.tone,
+      loading,
+      hasLoaded,
+      bucket,
+      url: createBucketUrl(bucketRouteId(bucket.label)),
+    }));
+  }
+
+  return Array.from({ length: 3 }, (_, index) => ({
+    id: `loading-review-lane-${index + 1}`,
+    label: `Loading lane ${index + 1}`,
+    count: 0,
+    summary: 'Waiting for data',
+    loading,
+    hasLoaded,
+    placeholder: true,
+  }));
 }
 
 export default AttentionBoard;

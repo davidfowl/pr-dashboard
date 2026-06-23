@@ -22,8 +22,18 @@ internal sealed class InMemoryNotificationStore : INotificationStore
     public Task<IReadOnlyList<PushSubscriptionRecord>> GetSubscriptionsAsync(long userId, CancellationToken cancellationToken)
     {
         var map = subscriptions.GetValueOrDefault(userId);
-        IReadOnlyList<PushSubscriptionRecord> result = map is null ? [] : [.. map.Values];
-        return Task.FromResult(result);
+        if (map is null)
+        {
+            return Task.FromResult<IReadOnlyList<PushSubscriptionRecord>>([]);
+        }
+
+        // Copy under the same lock Upsert/Remove take so enumerating Values can't race a
+        // concurrent write (which would throw InvalidOperationException and flake the tests).
+        lock (map)
+        {
+            IReadOnlyList<PushSubscriptionRecord> result = [.. map.Values];
+            return Task.FromResult(result);
+        }
     }
 
     public Task UpsertSubscriptionAsync(long userId, PushSubscriptionRecord subscription, CancellationToken cancellationToken)

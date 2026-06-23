@@ -4,19 +4,22 @@ import { formatCount } from '../../utils/format';
 import { bucketRouteId, createBucketUrl } from '../../utils/routing';
 import IssueListItem from '../IssueListItem';
 import LoadingBadge from '../LoadingBadge';
+import LoadingCardPlaceholders from '../LoadingCardPlaceholders';
+import LoadingMetric from '../LoadingMetric';
 import TileDrilldown from './TileDrilldown';
 import type { DrilldownTile } from './TileDrilldown';
 
 type IssuesOverviewProps = {
   issueBuckets: AttentionIssueBucket[];
   loading: boolean;
+  hasLoaded: boolean;
   selectedBucketId: string;
   onSelectBucket: (bucketId: string) => void;
 };
 
 type IssueBucketTile = DrilldownTile & {
-  issueBucket: AttentionIssueBucket;
-  url: string;
+  issueBucket?: AttentionIssueBucket;
+  url?: string;
 };
 
 type IssueFocusItem = {
@@ -38,6 +41,7 @@ const issueBucketItemLimit = 10;
 function IssuesOverview({
   issueBuckets,
   loading,
+  hasLoaded,
   selectedBucketId,
   onSelectBucket,
 }: IssuesOverviewProps) {
@@ -52,22 +56,15 @@ function IssuesOverview({
       })))),
     [issueBuckets],
   );
-  const bucketTiles: IssueBucketTile[] = issueBuckets.map((issueBucket) => {
-    const id = bucketRouteId(issueBucket.label);
-    return {
-      id,
-      label: issueBucket.label,
-      count: issueBucket.issues.length,
-      summary: issueBucket.metric,
-      tone: issueBucket.tone,
-      loading,
-      issueBucket,
-      url: createBucketUrl(id),
-    };
-  });
+  const bucketTiles = createIssueBucketTiles(issueBuckets, loading, hasLoaded);
+  const issueFocusShownCount = Math.min(issueFocusItems.length, issueFocusLimit);
+  const loadingLabel = hasLoaded ? 'Refreshing' : 'Loading';
 
   async function copyBucketLink(tile: IssueBucketTile) {
     onSelectBucket(tile.id);
+    if (!tile.url) {
+      return;
+    }
 
     if (!navigator.clipboard) {
       setCopyStatus({
@@ -108,14 +105,22 @@ function IssuesOverview({
         <div className="attention-card-header">
           <span>Needs attention</span>
           <div className="section-loading-meta">
-            {loading && <LoadingBadge />}
-            <strong>{formatCount(Math.min(issueFocusItems.length, issueFocusLimit), 'shown')}</strong>
+            {loading && <LoadingBadge label={loadingLabel} />}
+            <LoadingMetric
+              value={issueFocusShownCount}
+              loading={loading}
+              hasLoaded={hasLoaded}
+              formatValue={(count) => formatCount(count, 'shown')}
+              pendingLabel="Issue focus count is loading"
+            />
           </div>
         </div>
         <p>Actionable issues across the loaded repositories.</p>
 
         <div className="attention-list">
-          {issueFocusItems.length === 0 ? (
+          {loading && !hasLoaded && issueFocusItems.length === 0 ? (
+            <LoadingCardPlaceholders label="Loading issue focus cards" />
+          ) : issueFocusItems.length === 0 ? (
             <p className="empty-for-me">{loading ? 'Loading issue focus...' : 'No focused issues in the current results.'}</p>
           ) : issueFocusItems.slice(0, issueFocusLimit).map((item) => (
             <IssueListItem
@@ -137,7 +142,7 @@ function IssuesOverview({
             <p className="eyebrow">Issue buckets</p>
             <div className="section-title-heading">
               <h3>Issue focus lanes</h3>
-              {loading && <LoadingBadge />}
+              {loading && <LoadingBadge label={loadingLabel} />}
             </div>
             <p className="board-guidance">
               Buckets can overlap; the focused list dedupes issues while details preserve each signal lane.
@@ -154,6 +159,19 @@ function IssuesOverview({
             onSelect={onSelectBucket}
             renderDetails={(tile) => {
               const issueBucket = tile.issueBucket;
+              if (!issueBucket) {
+                return (
+                  <section className="drilldown-panel attention-card loading-card-panel" aria-label="Loading issue focus cards">
+                    <div className="attention-card-header">
+                      <span>{tile.label}</span>
+                      <LoadingBadge label="Loading" />
+                    </div>
+                    <p>Issue cards will appear when this lane finishes loading.</p>
+                    <LoadingCardPlaceholders count={3} label="Loading issue focus cards" />
+                  </section>
+                );
+              }
+
               const visibleIssueCount = Math.min(issueBucket.issues.length, issueBucketItemLimit);
               const hiddenIssueCount = issueBucket.issues.length - visibleIssueCount;
               const currentCopyStatus = copyStatus?.bucketId === tile.id ? copyStatus : null;
@@ -163,8 +181,14 @@ function IssuesOverview({
                   <div className="attention-card-header">
                     <span>{tile.label}</span>
                     <div className="bucket-card-actions">
-                      {tile.loading && <LoadingBadge />}
-                      <strong>{formatCount(issueBucket.issues.length, 'open issue')}</strong>
+                      {tile.loading && <LoadingBadge label={tile.hasLoaded ? 'Refreshing' : 'Loading'} />}
+                      <LoadingMetric
+                        value={issueBucket.issues.length}
+                        loading={tile.loading === true}
+                        hasLoaded={tile.hasLoaded === true}
+                        formatValue={(count) => formatCount(count, 'open issue')}
+                        pendingLabel={`${tile.label} count is loading`}
+                      />
                       <button
                         type="button"
                         className="bucket-link-button"
@@ -183,7 +207,7 @@ function IssuesOverview({
                       {currentCopyStatus.message}
                     </p>
                   )}
-                  {hiddenIssueCount > 0 && (
+                  {!tile.loading && hiddenIssueCount > 0 && (
                     <p className="bucket-limit-note">
                       Showing top {visibleIssueCount} of {issueBucket.issues.length} open issues.
                     </p>
@@ -209,6 +233,39 @@ function IssuesOverview({
       )}
     </section>
   );
+}
+
+function createIssueBucketTiles(
+  issueBuckets: AttentionIssueBucket[],
+  loading: boolean,
+  hasLoaded: boolean,
+): IssueBucketTile[] {
+  if (issueBuckets.length > 0 || hasLoaded || !loading) {
+    return issueBuckets.map((issueBucket) => {
+      const id = bucketRouteId(issueBucket.label);
+      return {
+        id,
+        label: issueBucket.label,
+        count: issueBucket.issues.length,
+        summary: issueBucket.metric,
+        tone: issueBucket.tone,
+        loading,
+        hasLoaded,
+        issueBucket,
+        url: createBucketUrl(id),
+      };
+    });
+  }
+
+  return Array.from({ length: 3 }, (_, index) => ({
+    id: `loading-issue-lane-${index + 1}`,
+    label: `Loading lane ${index + 1}`,
+    count: 0,
+    summary: 'Waiting for data',
+    loading,
+    hasLoaded,
+    placeholder: true,
+  }));
 }
 
 function dedupeIssueFocusItems(items: IssueFocusItem[]) {
