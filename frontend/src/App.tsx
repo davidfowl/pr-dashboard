@@ -1152,12 +1152,15 @@ function App() {
           </p>
         </div>
 
-        <AuthCard
-          authStatus={authStatus}
-          loginLoading={loginLoading}
-          onLogin={() => void startGitHubLogin()}
-          onLogout={() => void logoutGitHub()}
-        />
+        <div className="hero-actions">
+          <NotificationSettings authStatus={authStatus} />
+          <AuthCard
+            authStatus={authStatus}
+            loginLoading={loginLoading}
+            onLogin={() => void startGitHubLogin()}
+            onLogout={() => void logoutGitHub()}
+          />
+        </div>
       </header>
 
       <main className={`workspace ${viewMode}`}>
@@ -1232,7 +1235,6 @@ function App() {
       </main>
 
       <footer className="app-footer">
-        <NotificationSettings authStatus={authStatus} />
         <AppInfo />
       </footer>
     </div>

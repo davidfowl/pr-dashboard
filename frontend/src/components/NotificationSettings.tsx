@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 import type { AuthStatus } from '../types';
 import {
@@ -22,6 +23,105 @@ type Status = { kind: 'idle' | 'success' | 'error'; text: string };
 
 const idleStatus: Status = { kind: 'idle', text: '' };
 
+function BellIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M8 16a2 2 0 0 0 1.985-1.75h-3.97A2 2 0 0 0 8 16Zm5.5-5.06V7a5.5 5.5 0 0 0-4.5-5.41V1a1 1 0 0 0-2 0v.59A5.5 5.5 0 0 0 2.5 7v3.94l-1.2 1.2a.75.75 0 0 0 .53 1.28h12.34a.75.75 0 0 0 .53-1.28l-1.2-1.2Z"
+      />
+    </svg>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M8 3C4.5 3 1.73 5.11 1 8c.73 2.89 3.5 5 7 5s6.27-2.11 7-5c-.73-2.89-3.5-5-7-5Zm0 8a3 3 0 1 1 0-6 3 3 0 0 1 0 6Zm0-1.5A1.5 1.5 0 1 0 8 6.5a1.5 1.5 0 0 0 0 3Z"
+      />
+    </svg>
+  );
+}
+
+function AtIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M8 1a7 7 0 1 0 3.94 12.78.75.75 0 1 0-.84-1.24A5.5 5.5 0 1 1 13.5 8v.6a1 1 0 0 1-2 0V8a3.5 3.5 0 1 0-1.03 2.48A2.5 2.5 0 0 0 15 8.6V8a7 7 0 0 0-7-7Zm0 9a2 2 0 1 1 0-4 2 2 0 0 1 0 4Z"
+      />
+    </svg>
+  );
+}
+
+function CheckXIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm2.78 8.72a.75.75 0 1 1-1.06 1.06L8 9.06l-1.72 1.72a.75.75 0 0 1-1.06-1.06L6.94 8 5.22 6.28a.75.75 0 0 1 1.06-1.06L8 6.94l1.72-1.72a.75.75 0 1 1 1.06 1.06L9.06 8l1.72 1.72Z"
+      />
+    </svg>
+  );
+}
+
+// The catalog of notification types. Only `reviewRequested` is wired today; the
+// rest are placeholders so the UI advertises what's coming and gives us a single
+// place to add new types as the server learns to detect them.
+type NotificationType = {
+  id: string;
+  title: string;
+  description: string;
+  icon: ReactNode;
+  comingSoon?: boolean;
+};
+
+const NOTIFICATION_TYPES: NotificationType[] = [
+  {
+    id: 'reviewRequested',
+    title: 'Review requested',
+    description: 'When you’re added as a requested reviewer on an open PR.',
+    icon: <EyeIcon />,
+  },
+  {
+    id: 'mentioned',
+    title: 'Mentioned',
+    description: 'When someone @mentions you in a PR or review.',
+    icon: <AtIcon />,
+    comingSoon: true,
+  },
+  {
+    id: 'checksFailed',
+    title: 'Checks failed',
+    description: 'When required checks fail on a PR you own.',
+    icon: <CheckXIcon />,
+    comingSoon: true,
+  },
+];
+
+type SwitchProps = {
+  on: boolean;
+  disabled?: boolean;
+  label: string;
+  onClick?: () => void;
+};
+
+function Switch({ on, disabled, label, onClick }: SwitchProps) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      className={`notif-switch${on ? ' on' : ''}`}
+      disabled={disabled}
+      onClick={onClick}
+    />
+  );
+}
+
 function NotificationSettings({ authStatus }: NotificationSettingsProps) {
   const authenticated = authStatus?.authenticated === true;
 
@@ -38,7 +138,17 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<Status>(idleStatus);
 
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const bellRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const popoverId = useId();
+
   const canUsePush = authenticated && supported && !iosNeedsInstall;
+
+  // A gentle nudge dot: push is available and configured but this device hasn't opted in yet.
+  const showNudge =
+    canUsePush && serverChecked && serverEnabled && !subscribed && permission !== 'denied';
 
   // Discover server config + current subscription state once the user is signed in.
   useEffect(() => {
@@ -97,6 +207,56 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
       cancelled = true;
     };
   }, [canUsePush, authStatus?.login]);
+
+  // Position the portal popover under the bell and keep it anchored on scroll/resize.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const reposition = () => {
+      const el = bellRef.current;
+      if (!el) {
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      setPos({ top: rect.bottom + 8, right: Math.max(8, window.innerWidth - rect.right) });
+    };
+
+    reposition();
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpen(false);
+        bellRef.current?.focus();
+      }
+    };
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (popoverRef.current?.contains(target) || bellRef.current?.contains(target)) {
+        return;
+      }
+      setOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('mousedown', onPointerDown);
+
+    return () => {
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('mousedown', onPointerDown);
+    };
+  }, [open]);
+
+  // Clear transient status when the popover closes so it doesn't flash stale text on reopen.
+  useEffect(() => {
+    if (!open) {
+      setStatus(idleStatus);
+    }
+  }, [open]);
 
   const enable = useCallback(async () => {
     if (!serverKey) {
@@ -176,6 +336,20 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
     }
   }, []);
 
+  const toggleMaster = useCallback(() => {
+    if (subscribed) {
+      void disable();
+    } else {
+      void enable();
+    }
+  }, [subscribed, disable, enable]);
+
+  // The live preference wiring, keyed by notification-type id. Adding a future type means
+  // adding an entry here and to NOTIFICATION_TYPES — no other UI changes required.
+  const liveControls: Record<string, { checked: boolean; toggle: () => void }> = {
+    reviewRequested: { checked: reviewRequested, toggle: () => void toggleReviewRequested() },
+  };
+
   let body: ReactNode;
   if (!authenticated) {
     body = <p className="notif-hint">Sign in to get notified when a pull request needs your review.</p>;
@@ -196,50 +370,103 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
         Notifications are blocked for this site. Allow them in your browser settings, then reload.
       </p>
     );
-  } else if (!subscribed) {
-    body = (
-      <div className="notif-actions">
-        <button type="button" onClick={() => void enable()} disabled={busy || !serverKey}>
-          {busy ? 'Enabling…' : 'Enable notifications'}
-        </button>
-      </div>
-    );
   } else {
     body = (
-      <div className="notif-controls">
-        <label className="notif-toggle">
-          <input
-            type="checkbox"
-            checked={reviewRequested}
-            onChange={() => void toggleReviewRequested()}
-            disabled={busy}
+      <>
+        <div className="notif-master">
+          <span className="notif-master-label">
+            <span className="notif-master-title">Enabled on this device</span>
+            <span className="notif-master-sub">Push is delivered to this browser.</span>
+          </span>
+          <Switch
+            on={subscribed}
+            disabled={busy || !serverKey}
+            label="Enable notifications on this device"
+            onClick={toggleMaster}
           />
-          <span>Review requested</span>
-        </label>
-        <div className="notif-actions">
-          <button type="button" onClick={() => void test()} disabled={busy}>
-            Send test
-          </button>
-          <button type="button" className="notif-secondary" onClick={() => void disable()} disabled={busy}>
-            Turn off on this device
-          </button>
         </div>
-      </div>
+
+        <ul className="notif-types">
+          {NOTIFICATION_TYPES.map((type) => {
+            const live = type.comingSoon ? undefined : liveControls[type.id];
+            const checked = live ? live.checked : false;
+            return (
+              <li key={type.id} className={`notif-type${type.comingSoon ? ' soon' : ''}`}>
+                <span className="notif-type-icon">{type.icon}</span>
+                <span className="notif-type-body">
+                  <span className="notif-type-title">
+                    {type.title}
+                    {type.comingSoon && <span className="notif-type-badge">Soon</span>}
+                  </span>
+                  <span className="notif-type-desc">{type.description}</span>
+                </span>
+                <Switch
+                  on={checked}
+                  disabled={type.comingSoon || !live || !subscribed || busy}
+                  label={`${type.title} notifications`}
+                  onClick={live ? live.toggle : undefined}
+                />
+              </li>
+            );
+          })}
+        </ul>
+
+        {subscribed && (
+          <div className="notif-actions">
+            <button type="button" onClick={() => void test()} disabled={busy}>
+              Send test
+            </button>
+          </div>
+        )}
+
+        <p className="notif-footnote">Preferences follow your account · on/off is per device.</p>
+      </>
     );
   }
 
   return (
-    <section className="notif-panel" aria-label="Notification settings">
-      <div className="notif-header">
-        <span className="notif-title">Notifications</span>
-      </div>
-      {body}
-      {status.kind !== 'idle' && (
-        <p className={`notif-status ${status.kind}`} role={status.kind === 'error' ? 'alert' : 'status'}>
-          {status.text}
-        </p>
-      )}
-    </section>
+    <div className="notif-bell-wrap">
+      <button
+        ref={bellRef}
+        type="button"
+        className={`notif-bell${open ? ' active' : ''}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-controls={open ? popoverId : undefined}
+        aria-label="Notifications"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <BellIcon />
+        {showNudge && <span className="notif-bell-dot" aria-hidden="true" />}
+      </button>
+
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={popoverRef}
+            id={popoverId}
+            className="notif-popover"
+            role="dialog"
+            aria-label="Notification settings"
+            style={{ top: pos.top, right: pos.right }}
+          >
+            <div className="notif-pop-header">
+              <span className="notif-pop-title">Notifications</span>
+              {authenticated && authStatus?.login && (
+                <span className="notif-pop-meta">{authStatus.login}</span>
+              )}
+            </div>
+            {body}
+            {status.kind !== 'idle' && (
+              <p className={`notif-status ${status.kind}`} role={status.kind === 'error' ? 'alert' : 'status'}>
+                {status.text}
+              </p>
+            )}
+          </div>,
+          document.body,
+        )}
+    </div>
   );
 }
 
