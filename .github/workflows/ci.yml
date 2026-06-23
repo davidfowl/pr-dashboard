@@ -91,6 +91,9 @@ jobs:
         if: failure()
         run: |
           set +e
+          echo "Aspire resources:"
+          aspire ps || true
+          echo
           echo "Docker containers:"
           docker ps -a --no-trunc
           echo
