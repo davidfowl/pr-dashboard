@@ -2443,8 +2443,9 @@ sealed partial class GitHubClient(
         "pullRequest(number:$number){" +
         "reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}nodes{isResolved}}}}}";
 
-    // Upper bound on review-thread pages (100 threads each) to keep this best-effort
-    // enrichment bounded even if GitHub reports hasNextPage without advancing the cursor.
+    // Hard upper bound on review-thread pages (100 threads each) so this best-effort
+    // enrichment stays bounded for pathological PRs. The loop normally stops earlier
+    // once GitHub reports no further pages.
     private const int MaxReviewThreadPages = 20;
 
     private async Task<int> GetUnresolvedReviewThreadCountAsync(
@@ -2465,15 +2466,15 @@ sealed partial class GitHubClient(
             return 0;
         }
 
+        // Paginate so PRs with more than one page of review threads are counted
+        // accurately. reviewThreads has no isResolved server-side filter and no
+        // guaranteed ordering, so capping at the first 100 could undercount to zero
+        // and wrongly mark an approved PR "Ready to merge".
+        var unresolvedCount = 0;
+        string? afterCursor = null;
+
         try
         {
-            // Paginate so PRs with more than one page of review threads are counted
-            // accurately. reviewThreads has no isResolved server-side filter and no
-            // guaranteed ordering, so capping at the first 100 could undercount to zero
-            // and wrongly mark an approved PR "Ready to merge".
-            var unresolvedCount = 0;
-            string? afterCursor = null;
-
             for (var page = 0; page < MaxReviewThreadPages; page++)
             {
                 var requestBody = new GitHubGraphQlRequestDto
@@ -2491,7 +2492,9 @@ sealed partial class GitHubClient(
                 var threads = await SendReviewThreadsPageAsync(requestBody, token, cancellationToken);
                 if (threads is null)
                 {
-                    return 0;
+                    // A mid-pagination page failed; return what we counted so far rather
+                    // than 0, so a PR with already-seen unresolved threads stays blocked.
+                    break;
                 }
 
                 if (threads.Nodes is not null)
@@ -2499,8 +2502,13 @@ sealed partial class GitHubClient(
                     unresolvedCount += threads.Nodes.Count(node => !node.IsResolved);
                 }
 
+                // Stop unless there is a genuinely new page: a missing/empty cursor, or one
+                // that does not advance, would otherwise re-count the same page and inflate
+                // the total up to MaxReviewThreadPages times.
                 var pageInfo = threads.PageInfo;
-                if (pageInfo?.HasNextPage == true && !string.IsNullOrEmpty(pageInfo.EndCursor))
+                if (pageInfo?.HasNextPage == true
+                    && !string.IsNullOrEmpty(pageInfo.EndCursor)
+                    && pageInfo.EndCursor != afterCursor)
                 {
                     afterCursor = pageInfo.EndCursor;
                 }
@@ -2514,7 +2522,7 @@ sealed partial class GitHubClient(
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsBestEffortReviewThreadFailure(ex))
         {
-            return 0;
+            return unresolvedCount;
         }
     }
 

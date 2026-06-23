@@ -1,0 +1,101 @@
+import { describe, expect, it } from 'vitest';
+import type { PullRequestSummary, ReviewStatus } from '../types';
+import { createAttentionBuckets } from './models';
+
+type PrOverrides = Partial<Omit<PullRequestSummary, 'review' | 'checks'>> & {
+  number: number;
+  review?: Partial<ReviewStatus>;
+  checks?: Partial<PullRequestSummary['checks']>;
+};
+
+function pr(overrides: PrOverrides): PullRequestSummary {
+  const { number, review: reviewOverride, checks: checksOverride, ...rest } = overrides;
+
+  const review: ReviewStatus = {
+    state: 'waiting',
+    reviewerCount: 0,
+    approvalCount: 0,
+    changesRequestedCount: 0,
+    commentedReviewCount: 0,
+    unresolvedThreadCount: 0,
+    ...reviewOverride,
+  };
+
+  return {
+    repository: 'example/repo',
+    number,
+    title: `PR ${number}`,
+    state: 'open',
+    draft: false,
+    author: 'octocat',
+    htmlUrl: `https://github.com/example/repo/pull/${number}`,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    fetchedAt: '2026-01-01T00:00:00Z',
+    labels: [],
+    requestedReviewers: [],
+    linkedIssues: [],
+    commitCount: 1,
+    additions: 10,
+    deletions: 2,
+    changedFiles: 1,
+    mergeableState: null,
+    ...rest,
+    review,
+    checks: {
+      state: 'success',
+      totalCount: 1,
+      successCount: 1,
+      failureCount: 0,
+      pendingCount: 0,
+      neutralCount: 0,
+      skippedCount: 0,
+      completedAt: '2026-01-01T00:30:00Z',
+      failingChecks: [],
+      ...checksOverride,
+    },
+  };
+}
+
+function inBucket(buckets: ReturnType<typeof createAttentionBuckets>, label: string, number: number) {
+  return buckets.some(
+    (bucket) => bucket.label === label && bucket.items.some((item) => item.pullRequest.number === number),
+  );
+}
+
+describe('createAttentionBuckets lane routing', () => {
+  it('routes a clean approved PR to Ready to merge', () => {
+    const buckets = createAttentionBuckets([pr({ number: 1, review: { state: 'approved', approvalCount: 1 } })]);
+    expect(inBucket(buckets, 'Ready to merge', 1)).toBe(true);
+  });
+
+  it('keeps an approved PR with unresolved threads out of Ready to merge', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 2, review: { state: 'approved', approvalCount: 1, unresolvedThreadCount: 2 } }),
+    ]);
+    expect(inBucket(buckets, 'Ready to merge', 2)).toBe(false);
+    expect(inBucket(buckets, 'Unresolved feedback', 2)).toBe(true);
+  });
+
+  it('keeps a conflicted approved PR out of Ready to merge and in Merge conflicts', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 3, mergeableState: 'dirty', review: { state: 'approved', approvalCount: 1 } }),
+    ]);
+    expect(inBucket(buckets, 'Ready to merge', 3)).toBe(false);
+    expect(inBucket(buckets, 'Merge conflicts', 3)).toBe(true);
+  });
+
+  it('routes a waiting PR with Copilot threads to Copilot feedback', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 4, review: { state: 'waiting', unresolvedThreadCount: 1 } }),
+    ]);
+    expect(inBucket(buckets, 'Copilot feedback', 4)).toBe(true);
+  });
+
+  it('hides a NO-MERGE-labelled PR from every lane', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 5, labels: ['NO-MERGE'], review: { state: 'approved', approvalCount: 1 } }),
+    ]);
+    expect(buckets.every((bucket) => bucket.items.every((item) => item.pullRequest.number !== 5))).toBe(true);
+  });
+});

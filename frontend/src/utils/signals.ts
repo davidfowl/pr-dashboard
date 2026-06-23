@@ -31,6 +31,13 @@ function signalConcept(label: string): string {
     return 'ci failing';
   }
 
+  // Unresolved-thread pills carry a variable count and come in two phrasings — the lane-leading
+  // "N unresolved threads" reason and the shorter computed "N unresolved" pill. Fold both (and the
+  // bare "unresolved feedback" label) together so only one survives.
+  if (normalized.includes('unresolved')) {
+    return 'unresolved feedback';
+  }
+
   return conceptByLabel.get(normalized) ?? normalized;
 }
 
