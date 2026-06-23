@@ -96,13 +96,3 @@ jobs:
           echo
           echo "Docker containers:"
           docker ps -a --no-trunc
-          echo
-          echo "Azurite logs:"
-          for container in $(docker ps -aq --filter ancestor=mcr.microsoft.com/azure-storage/azurite:3.35.0); do
-            echo "::group::docker logs $container"
-            docker logs "$container"
-            echo "::endgroup::"
-          done
-          echo
-          echo "DCP processes:"
-          ps -ef | grep '[d]cp' || true
