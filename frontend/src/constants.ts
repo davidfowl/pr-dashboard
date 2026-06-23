@@ -1,4 +1,10 @@
-export const defaultRepos = ['microsoft/aspire', 'microsoft/aspire.dev', 'microsoft/dcp', 'CommunityToolkit/Aspire'];
+export const defaultRepos = [
+  'microsoft/aspire',
+  'microsoft/aspire.dev',
+  'microsoft/aspire-skills',
+  'microsoft/dcp',
+  'CommunityToolkit/Aspire',
+];
 export const defaultRepoInput = defaultRepos.join(', ');
 export const defaultShipWeekRepos = ['microsoft/aspire', 'microsoft/aspire.dev'];
 export const defaultShipWeekRepoInput = defaultShipWeekRepos.join(', ');
