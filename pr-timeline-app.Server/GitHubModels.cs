@@ -37,7 +37,13 @@ record PullRequestListResponse(string Repository, IReadOnlyList<PullRequestSumma
 
 record IssueListResponse(string Repository, IReadOnlyList<ShipWeekIssueSummary> Issues);
 
-record PullRequestStreamItem(string Repository, PullRequestSummary PullRequest);
+record PullRequestStreamItem(string Repository, PullRequestSummary? PullRequest, bool IsStale = false, bool IsComplete = false);
+
+readonly record struct PullRequestStreamEntry(
+    PullRequestSummary? PullRequest = null,
+    bool IsStale = false,
+    bool IsComplete = false,
+    bool IsStaleRefreshOverlay = false);
 
 record PullRequestChecksRequest(IReadOnlyList<PullRequestChecksRequestItem>? PullRequests);
 

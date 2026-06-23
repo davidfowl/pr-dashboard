@@ -4,7 +4,19 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 builder.AddAzureContainerAppEnvironment("aca");
 
+var storage = builder.AddAzureStorage("storage");
+storage = storage.RunAsEmulator(azurite =>
+{
+    azurite.WithDataVolume();
+});
+
+var githubCache = storage
+    .AddBlobContainer("github-cache", blobContainerName: "github-cache")
+    .WithClearCacheCommand();
+
 var server = builder.AddProject<Projects.pr_timeline_app_Server>("server")
+    .WithReference(githubCache)
+    .WaitFor(githubCache)
     .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints()
     .PublishAsAzureContainerApp((_, app) =>

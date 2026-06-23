@@ -8,7 +8,6 @@ enum GitHubPublicCacheRepositoryEligibility
 {
     Public,
     NotAllowlisted,
-    MissingPublicCacheIdentity,
     NotPublic,
     Unverified
 }
@@ -41,11 +40,11 @@ sealed class GitHubCacheScopeResolver(
 
             if (eligibility == GitHubPublicCacheRepositoryEligibility.NotPublic)
             {
-                publicCacheStore.RemoveRepository(repositoryName);
+                await publicCacheStore.RemoveRepositoryAsync(repositoryName, cancellationToken);
             }
 
             if (eligibility == GitHubPublicCacheRepositoryEligibility.Unverified
-                && publicCacheStore.HasTrackedSnapshot(repositoryName))
+                && await publicCacheStore.HasTrackedSnapshotAsync(repositoryName, cancellationToken))
             {
                 return GitHubCachePolicy.CreatePublicRepositoryScope();
             }
@@ -104,11 +103,6 @@ sealed class GitHubCacheScopeResolver(
             return GitHubPublicCacheRepositoryEligibility.NotAllowlisted;
         }
 
-        if (publicCacheIdentity.GetToken() is null)
-        {
-            return GitHubPublicCacheRepositoryEligibility.MissingPublicCacheIdentity;
-        }
-
         var result = await GetRepositoryVisibilityResultAsync(repositoryName, forceRefresh, cancellationToken);
         return result.Visibility switch
         {
@@ -147,14 +141,15 @@ sealed class GitHubCacheScopeResolver(
         try
         {
             var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}";
-            var token = publicCacheIdentity.GetToken()
-                ?? throw new GitHubApiException(
-                    HttpStatusCode.ServiceUnavailable,
-                    "GitHub public cache refresh is not configured with a server token.");
+            var token = publicCacheIdentity.GetToken();
             for (var redirectCount = 0; redirectCount <= GitHubHttpRedirects.MaxRedirects; redirectCount++)
             {
                 using var request = new HttpRequestMessage(HttpMethod.Get, url);
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Value);
+                if (token is not null)
+                {
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token.Value);
+                }
+
                 using var response = await httpClient.SendAsync(
                     request,
                     HttpCompletionOption.ResponseHeadersRead,

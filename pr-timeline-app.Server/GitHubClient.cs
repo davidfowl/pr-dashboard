@@ -4,7 +4,6 @@ using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization.Metadata;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 
 sealed partial class GitHubClient(
@@ -13,13 +12,12 @@ sealed partial class GitHubClient(
     GitHubPublicCacheIdentity publicCacheIdentity,
     GitHubPublicCacheStore publicCacheStore,
     GitHubCacheScopeResolver cacheScopeResolver,
-    IMemoryCache cache,
+    GitHubResponseCache cache,
     IHostEnvironment environment,
     IOptions<GitHubReviewPolicyOptions> reviewPolicyOptions)
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
     internal static readonly TimeSpan PublicCacheDuration = TimeSpan.FromHours(1);
-    private static readonly TimeSpan ForceRefreshCooldown = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan LastGoodCacheDuration = TimeSpan.FromHours(24);
     private const int PullRequestPageSize = 100;
     private const int PullRequestStreamBatchSize = 20;
@@ -46,7 +44,8 @@ sealed partial class GitHubClient(
     private async Task<RepositoryCacheScopeSelection> GetRepositoryCacheScopeSelectionAsync(
         RepositoryName repositoryName,
         bool forceRefresh,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowSharedLiveFetch = false)
     {
         var scope = await GetRepositoryCacheScopeAsync(repositoryName, cancellationToken);
         if (scope.IsShared)
@@ -54,15 +53,30 @@ sealed partial class GitHubClient(
             return new RepositoryCacheScopeSelection(
                 scope,
                 SharedFallbackScope: null,
-                Refresh: false,
-                CacheOnly: true);
+                Refresh: allowSharedLiveFetch && forceRefresh,
+                CacheOnly: !allowSharedLiveFetch);
         }
 
+        var sharedFallbackScope = await GetSharedFallbackScopeAsync(repositoryName, cancellationToken);
         return new RepositoryCacheScopeSelection(
             scope,
-            SharedFallbackScope: null,
+            SharedFallbackScope: sharedFallbackScope,
             Refresh: forceRefresh,
             CacheOnly: false);
+    }
+
+    private async Task<GitHubCacheScope?> GetSharedFallbackScopeAsync(
+        RepositoryName repositoryName,
+        CancellationToken cancellationToken)
+    {
+        if (!cacheScopeResolver.IsPublicCacheAllowlisted(repositoryName))
+        {
+            return null;
+        }
+
+        return await publicCacheStore.HasTrackedSnapshotAsync(repositoryName, cancellationToken)
+            ? GitHubCachePolicy.CreatePublicRepositoryScope()
+            : null;
     }
 
     private static string CreateRepositoryCacheKey(
@@ -85,80 +99,105 @@ sealed partial class GitHubClient(
             ? CreateRepositoryCacheKey(scope, repositoryName, resourceName, parts)
             : null;
 
-    private bool TryBeginCacheRefresh(string cacheKey, bool forceRefresh)
+    private static async IAsyncEnumerable<PullRequestSummary> SelectPullRequestsAsync(
+        IAsyncEnumerable<PullRequestStreamEntry> entries,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        if (!forceRefresh)
+        await foreach (var entry in entries.WithCancellation(cancellationToken))
         {
-            return false;
+            if (entry.PullRequest is not null && !entry.IsStaleRefreshOverlay)
+            {
+                yield return entry.PullRequest;
+            }
         }
-
-        var refreshCacheKey = $"force-refresh:{cacheKey}";
-        if (cache.TryGetValue(refreshCacheKey, out _))
-        {
-            return false;
-        }
-
-        cache.Set(refreshCacheKey, true, ForceRefreshCooldown);
-        return true;
     }
 
     private static TimeSpan CacheDurationForScope(GitHubCacheScope scope) =>
         scope.IsShared ? PublicCacheDuration : CacheDuration;
 
-    private void SetCacheEntry<T>(string cacheKey, T value, TimeSpan cacheDuration) =>
-        cache.Set(cacheKey, value, CreateCacheEntryOptions(cacheDuration));
-
-    private static MemoryCacheEntryOptions CreateCacheEntryOptions(TimeSpan cacheDuration)
-    {
-        var options = new MemoryCacheEntryOptions();
-        if (cacheDuration == Timeout.InfiniteTimeSpan)
-        {
-            options.Priority = CacheItemPriority.NeverRemove;
-        }
-        else
-        {
-            options.AbsoluteExpirationRelativeToNow = cacheDuration;
-        }
-
-        return options;
-    }
+    private async Task SetCacheEntryAsync<T>(
+        string cacheKey,
+        T value,
+        TimeSpan cacheDuration,
+        CancellationToken cancellationToken) =>
+        await cache.SetAsync(cacheKey, value, cacheDuration, cancellationToken);
 
     private static string GetLastGoodCacheKey(string cacheKey) => $"last-good:{cacheKey}";
 
-    private void SetLastGood<T>(string cacheKey, T value) =>
-        cache.Set(GetLastGoodCacheKey(cacheKey), value, LastGoodCacheDuration);
-
-    private bool TryGetLastGood<T>(string cacheKey, out T? value) =>
-        cache.TryGetValue(GetLastGoodCacheKey(cacheKey), out value) && value is not null;
-
-    private bool TryGetCachedFallback<T>(string? cacheKey, out T? value)
-    {
-        value = default;
-        return cacheKey is not null
-            && cache.TryGetValue(cacheKey, out value)
-            && value is not null;
-    }
-
-    private bool TryUseLastGoodFallback<T>(
+    private async Task SetLastGoodAsync<T>(
         string cacheKey,
-        Exception exception,
-        CancellationToken cancellationToken,
-        out T? value)
+        T value,
+        CancellationToken cancellationToken) =>
+        await cache.SetAsync(GetLastGoodCacheKey(cacheKey), value, LastGoodCacheDuration, cancellationToken);
+
+    private async Task<GitHubCacheLookup<T>> GetLastGoodAsync<T>(
+        string cacheKey,
+        CancellationToken cancellationToken)
     {
-        value = default;
-        return IsTransientGitHubFailure(exception, cancellationToken)
-            && TryGetLastGood(cacheKey, out value);
+        var lookup = await cache.GetAsync<T>(GetLastGoodCacheKey(cacheKey), cancellationToken);
+        return lookup.Found && lookup.Value is not null ? lookup : default;
     }
 
-    private bool TryUseCachedFallback<T>(
+    private async Task RemoveLastGoodAsync(string cacheKey, CancellationToken cancellationToken) =>
+        await cache.RemoveAsync(GetLastGoodCacheKey(cacheKey), cancellationToken);
+
+    private async Task<GitHubCacheLookup<T>> GetCachedFallbackAsync<T>(
         string? cacheKey,
-        Exception exception,
-        CancellationToken cancellationToken,
-        out T? value)
+        CancellationToken cancellationToken)
     {
-        value = default;
-        return IsTransientGitHubFailure(exception, cancellationToken)
-            && TryGetCachedFallback(cacheKey, out value);
+        if (cacheKey is null)
+        {
+            return default;
+        }
+
+        var lookup = await cache.GetAsync<T>(cacheKey, cancellationToken);
+        return lookup.Found && lookup.Value is not null ? lookup : default;
+    }
+
+    private async Task<GitHubCacheLookup<T>> GetTransientFallbackAsync<T>(
+        string cacheKey,
+        string? transientFallbackCacheKey,
+        CancellationToken cancellationToken)
+    {
+        var cachedFallback = await GetCachedFallbackAsync<T>(transientFallbackCacheKey, cancellationToken);
+        if (cachedFallback.Found)
+        {
+            return cachedFallback;
+        }
+
+        if (transientFallbackCacheKey is not null)
+        {
+            var fallbackLastGood = await GetLastGoodAsync<T>(transientFallbackCacheKey, cancellationToken);
+            if (fallbackLastGood.Found)
+            {
+                return fallbackLastGood;
+            }
+        }
+
+        return await GetLastGoodAsync<T>(cacheKey, cancellationToken);
+    }
+
+    private async Task<GitHubCacheLookup<T>> GetStaleSnapshotAsync<T>(
+        string cacheKey,
+        string? transientFallbackCacheKey,
+        CancellationToken cancellationToken)
+    {
+        var cached = await cache.GetAsync<T>(cacheKey, cancellationToken);
+        if (cached.Found && cached.Value is not null)
+        {
+            return cached;
+        }
+
+        var lastGood = await GetLastGoodAsync<T>(cacheKey, cancellationToken);
+        if (lastGood.Found)
+        {
+            return lastGood;
+        }
+
+        return await GetTransientFallbackAsync<T>(
+            cacheKey,
+            transientFallbackCacheKey,
+            cancellationToken);
     }
 
     private async Task<T> GetOrCreateWithLastGoodFallbackAsync<T>(
@@ -173,28 +212,34 @@ sealed partial class GitHubClient(
         string? transientFallbackCacheKey = null)
         where T : class
     {
-        var hasCachedValue = cache.TryGetValue(cacheKey, out T? cachedValue) && cachedValue is not null;
+        var cachedLookup = await cache.GetAsync<T>(cacheKey, cancellationToken);
+        var hasCachedValue = cachedLookup.Found && cachedLookup.Value is not null;
         if (!refresh && hasCachedValue)
         {
-            return cachedValue!;
+            return cachedLookup.Value!;
         }
 
         if (cacheOnly)
         {
-            if (TryGetLastGood(cacheKey, out T? lastGood))
+            var lastGood = await GetLastGoodAsync<T>(cacheKey, cancellationToken);
+            if (lastGood.Found)
             {
-                return lastGood!;
+                return lastGood.Value!;
             }
 
-            if (TryGetCachedFallback(transientFallbackCacheKey, out T? cachedFallback))
+            var cachedFallback = await GetCachedFallbackAsync<T>(transientFallbackCacheKey, cancellationToken);
+            if (cachedFallback.Found)
             {
-                return cachedFallback!;
+                return cachedFallback.Value!;
             }
 
-            if (transientFallbackCacheKey is not null
-                && TryGetLastGood(transientFallbackCacheKey, out T? fallbackLastGood))
+            if (transientFallbackCacheKey is not null)
             {
-                return fallbackLastGood!;
+                var fallbackLastGood = await GetLastGoodAsync<T>(transientFallbackCacheKey, cancellationToken);
+                if (fallbackLastGood.Found)
+                {
+                    return fallbackLastGood.Value!;
+                }
             }
 
             throw CreatePublicCacheUnavailableException();
@@ -205,32 +250,30 @@ sealed partial class GitHubClient(
             var value = await factory();
             if (storeLastGood?.Invoke(value) ?? true)
             {
-                SetLastGood(cacheKey, value);
+                await SetLastGoodAsync(cacheKey, value, cancellationToken);
             }
             else
             {
-                cache.Remove(GetLastGoodCacheKey(cacheKey));
+                await RemoveLastGoodAsync(cacheKey, cancellationToken);
             }
 
-            SetCacheEntry(cacheKey, value, cacheDurationSelector?.Invoke(value) ?? cacheDuration);
+            await SetCacheEntryAsync(cacheKey, value, cacheDurationSelector?.Invoke(value) ?? cacheDuration, cancellationToken);
             return value;
         }
-        catch (Exception ex) when (hasCachedValue && IsTransientGitHubFailure(ex, cancellationToken))
+        catch (Exception ex) when (IsTransientGitHubFailure(ex, cancellationToken))
         {
-            return cachedValue!;
-        }
-        catch (Exception ex) when (TryUseCachedFallback(transientFallbackCacheKey, ex, cancellationToken, out T? fallback))
-        {
-            return fallback!;
-        }
-        catch (Exception ex) when (transientFallbackCacheKey is not null
-            && TryUseLastGoodFallback(transientFallbackCacheKey, ex, cancellationToken, out T? fallbackLastGood))
-        {
-            return fallbackLastGood!;
-        }
-        catch (Exception ex) when (TryUseLastGoodFallback(cacheKey, ex, cancellationToken, out T? lastGood))
-        {
-            return lastGood!;
+            if (hasCachedValue)
+            {
+                return cachedLookup.Value!;
+            }
+
+            var fallback = await GetTransientFallbackAsync<T>(cacheKey, transientFallbackCacheKey, cancellationToken);
+            if (fallback.Found)
+            {
+                return fallback.Value!;
+            }
+
+            throw;
         }
     }
 
@@ -245,28 +288,33 @@ sealed partial class GitHubClient(
         Func<T?, bool>? storeValue = null,
         string? transientFallbackCacheKey = null)
     {
-        var hasCachedValue = cache.TryGetValue(cacheKey, out T? cachedValue);
-        if (!refresh && hasCachedValue)
+        var cachedLookup = await cache.GetAsync<T>(cacheKey, cancellationToken);
+        if (!refresh && cachedLookup.Found)
         {
-            return cachedValue;
+            return cachedLookup.Value;
         }
 
         if (cacheOnly)
         {
-            if (TryGetLastGood(cacheKey, out T? lastGood))
+            var lastGood = await GetLastGoodAsync<T>(cacheKey, cancellationToken);
+            if (lastGood.Found)
             {
-                return lastGood;
+                return lastGood.Value;
             }
 
-            if (TryGetCachedFallback(transientFallbackCacheKey, out T? cachedFallback))
+            var cachedFallback = await GetCachedFallbackAsync<T>(transientFallbackCacheKey, cancellationToken);
+            if (cachedFallback.Found)
             {
-                return cachedFallback;
+                return cachedFallback.Value;
             }
 
-            if (transientFallbackCacheKey is not null
-                && TryGetLastGood(transientFallbackCacheKey, out T? fallbackLastGood))
+            if (transientFallbackCacheKey is not null)
             {
-                return fallbackLastGood;
+                var fallbackLastGood = await GetLastGoodAsync<T>(transientFallbackCacheKey, cancellationToken);
+                if (fallbackLastGood.Found)
+                {
+                    return fallbackLastGood.Value;
+                }
             }
 
             throw CreatePublicCacheUnavailableException();
@@ -280,41 +328,39 @@ sealed partial class GitHubClient(
             {
                 if (value is not null)
                 {
-                    SetLastGood(cacheKey, value);
+                    await SetLastGoodAsync(cacheKey, value, cancellationToken);
                 }
                 else
                 {
-                    cache.Remove(GetLastGoodCacheKey(cacheKey));
+                    await RemoveLastGoodAsync(cacheKey, cancellationToken);
                 }
 
                 var resolvedCacheDuration = value is not null && cacheDurationSelector is not null
                     ? cacheDurationSelector(value)
                     : cacheDuration;
-                SetCacheEntry(cacheKey, value, resolvedCacheDuration);
+                await SetCacheEntryAsync(cacheKey, value, resolvedCacheDuration, cancellationToken);
             }
             else
             {
-                cache.Remove(GetLastGoodCacheKey(cacheKey));
+                await RemoveLastGoodAsync(cacheKey, cancellationToken);
             }
 
             return value;
         }
-        catch (Exception ex) when (hasCachedValue && IsTransientGitHubFailure(ex, cancellationToken))
+        catch (Exception ex) when (IsTransientGitHubFailure(ex, cancellationToken))
         {
-            return cachedValue;
-        }
-        catch (Exception ex) when (TryUseCachedFallback(transientFallbackCacheKey, ex, cancellationToken, out T? fallback))
-        {
-            return fallback;
-        }
-        catch (Exception ex) when (transientFallbackCacheKey is not null
-            && TryUseLastGoodFallback(transientFallbackCacheKey, ex, cancellationToken, out T? fallbackLastGood))
-        {
-            return fallbackLastGood;
-        }
-        catch (Exception ex) when (TryUseLastGoodFallback(cacheKey, ex, cancellationToken, out T? lastGood))
-        {
-            return lastGood;
+            if (cachedLookup.Found)
+            {
+                return cachedLookup.Value;
+            }
+
+            var fallback = await GetTransientFallbackAsync<T>(cacheKey, transientFallbackCacheKey, cancellationToken);
+            if (fallback.Found)
+            {
+                return fallback.Value;
+            }
+
+            throw;
         }
     }
 
@@ -367,16 +413,23 @@ sealed partial class GitHubClient(
         var cacheKey = GitHubCachePolicy.CreateUserCacheKey(
             GitHubCachePolicy.CreateUserScope(authCacheKey),
             "current-user");
-        return await cache.GetOrCreateAsync(cacheKey, async entry =>
+        var cachedLogin = await cache.GetAsync<string>(cacheKey, cancellationToken);
+        if (cachedLogin.Found)
         {
-            entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5);
-            var user = await SendGitHubRequestAsync(
-                "user",
-                GitHubJsonSerializerContext.Default.GitHubActorDto,
-                GitHubRequestAuthorization.Token,
-                cancellationToken);
-            return user.Login;
-        });
+            return cachedLogin.Value;
+        }
+
+        var user = await SendGitHubRequestAsync(
+            "user",
+            GitHubJsonSerializerContext.Default.GitHubActorDto,
+            GitHubRequestAuthorization.Token,
+            cancellationToken);
+        if (!string.IsNullOrWhiteSpace(user.Login))
+        {
+            await SetCacheEntryAsync(cacheKey, user.Login, TimeSpan.FromMinutes(5), cancellationToken);
+        }
+
+        return user.Login;
     }
 
     public async Task<IReadOnlyList<PullRequestSummary>> GetPullRequestsAsync(
@@ -401,6 +454,11 @@ sealed partial class GitHubClient(
         string state,
         CancellationToken cancellationToken)
     {
+        if (publicCacheIdentity.GetToken() is null)
+        {
+            return false;
+        }
+
         var eligibility = await cacheScopeResolver.GetPublicCacheRepositoryEligibilityAsync(
             repositoryName,
             forceRefresh: true,
@@ -410,7 +468,7 @@ sealed partial class GitHubClient(
             if (eligibility is GitHubPublicCacheRepositoryEligibility.NotAllowlisted
                 or GitHubPublicCacheRepositoryEligibility.NotPublic)
             {
-                publicCacheStore.RemoveRepository(repositoryName);
+                await publicCacheStore.RemoveRepositoryAsync(repositoryName, cancellationToken);
             }
 
             return false;
@@ -430,7 +488,7 @@ sealed partial class GitHubClient(
             cacheOnly: false,
             transientFallbackCacheKey: null,
             cancellationToken);
-        publicCacheStore.Track(repositoryName, cacheKey);
+        await publicCacheStore.TrackAsync(repositoryName, cacheKey, cancellationToken);
         return true;
     }
 
@@ -448,7 +506,7 @@ sealed partial class GitHubClient(
             repositoryName,
             "pulls",
             state);
-        var refreshCache = TryBeginCacheRefresh(cacheKey, forceRefresh);
+        var refreshCache = forceRefresh;
         return await GetOrCreateWithLastGoodFallbackAsync(
             cacheKey,
             CacheDurationForScope(scope),
@@ -488,7 +546,16 @@ sealed partial class GitHubClient(
             transientFallbackCacheKey: transientFallbackCacheKey);
     }
 
-    public async IAsyncEnumerable<PullRequestSummary> StreamPullRequestsAsync(
+    public IAsyncEnumerable<PullRequestSummary> StreamPullRequestsAsync(
+        RepositoryName repositoryName,
+        string state,
+        bool forceRefresh,
+        CancellationToken cancellationToken) =>
+        SelectPullRequestsAsync(
+            StreamPullRequestEntriesAsync(repositoryName, state, forceRefresh, cancellationToken),
+            cancellationToken);
+
+    public async IAsyncEnumerable<PullRequestStreamEntry> StreamPullRequestEntriesAsync(
         RepositoryName repositoryName,
         string state,
         bool forceRefresh,
@@ -501,83 +568,95 @@ sealed partial class GitHubClient(
             repositoryName,
             "pulls",
             state);
-        var transientFallbackCacheKey = CreateSharedFallbackCacheKey(
-            scopeSelection.SharedFallbackScope,
-            repositoryName,
-            "pulls",
-            state);
-        var refreshCache = TryBeginCacheRefresh(cacheKey, scopeSelection.Refresh);
+        var transientFallbackCacheKey = cacheScopeResolver.IsPublicCacheAllowlisted(repositoryName)
+            ? CreateRepositoryCacheKey(
+                GitHubCachePolicy.CreatePublicRepositoryScope(),
+                repositoryName,
+                "pulls",
+                state)
+            : null;
+        var refreshCache = scopeSelection.Refresh;
 
-        if (!refreshCache && cache.TryGetValue(cacheKey, out IReadOnlyList<PullRequestSummary>? cachedPullRequests) && cachedPullRequests is not null)
+        var cachedPullRequests = await cache.GetAsync<IReadOnlyList<PullRequestSummary>>(cacheKey, cancellationToken);
+        if (!refreshCache && cachedPullRequests is { Found: true, Value: not null })
         {
-            foreach (var pullRequest in cachedPullRequests)
+            foreach (var pullRequest in cachedPullRequests.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                yield return pullRequest;
+                yield return new PullRequestStreamEntry(pullRequest);
             }
 
             yield break;
+        }
+
+        var stalePullRequests = refreshCache
+            ? await GetStaleSnapshotAsync<IReadOnlyList<PullRequestSummary>>(
+                cacheKey,
+                transientFallbackCacheKey,
+                cancellationToken)
+            : await GetCachedFallbackAsync<IReadOnlyList<PullRequestSummary>>(
+                transientFallbackCacheKey,
+                cancellationToken);
+        if (!stalePullRequests.Found)
+        {
+            stalePullRequests = await GetStaleSnapshotAsync<IReadOnlyList<PullRequestSummary>>(
+                cacheKey,
+                transientFallbackCacheKey,
+                cancellationToken);
+        }
+        var emittedStaleSnapshot = false;
+        Dictionary<int, PullRequestSummary>? stalePullRequestsByNumber = null;
+        if (stalePullRequests is { Found: true, Value: not null })
+        {
+            stalePullRequestsByNumber = new Dictionary<int, PullRequestSummary>();
+            var staleRowsAreOverlay = !scopeSelection.CacheOnly;
+            foreach (var stalePullRequest in stalePullRequests.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                stalePullRequestsByNumber[stalePullRequest.Number] = stalePullRequest;
+                yield return new PullRequestStreamEntry(stalePullRequest, staleRowsAreOverlay);
+            }
+
+            emittedStaleSnapshot = true;
         }
 
         if (scopeSelection.CacheOnly)
         {
-            if (!TryGetLastGood(cacheKey, out IReadOnlyList<PullRequestSummary>? cacheOnlyPullRequests)
-                && !TryGetCachedFallback(transientFallbackCacheKey, out cacheOnlyPullRequests)
-                && (transientFallbackCacheKey is null || !TryGetLastGood(transientFallbackCacheKey, out cacheOnlyPullRequests)))
+            if (!emittedStaleSnapshot)
             {
                 throw CreatePublicCacheUnavailableException();
-            }
-
-            foreach (var stalePullRequest in cacheOnlyPullRequests!)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return stalePullRequest;
             }
 
             yield break;
         }
 
-        IReadOnlyList<PullRequestSummary>? stalePullRequests = null;
-        var streamedPullRequests = new List<PullRequestSummary>();
-        await using var enumerator = CreatePullRequestSummariesInBatchesAsync(
+        var completedPullRequestsByNumber = new Dictionary<int, PullRequestSummary>();
+        var publicBaselinePullRequestsByNumber = new Dictionary<int, PullRequestSummary>();
+        await using var livePullRequests = StreamPullRequestSummariesWithBaselineAsync(
             repositoryName,
             StreamPullRequestDtosAsync(repositoryName, state, scope, cancellationToken),
-            true,
+            enrichMergeableStateFromDetails: true,
             refreshCache,
             scope,
+            stalePullRequestsByNumber,
+            publicBaselinePullRequestsByNumber,
             cancellationToken).GetAsyncEnumerator(cancellationToken);
-
         while (true)
         {
+            PullRequestStreamEntry livePullRequestEntry = default;
             PullRequestSummary? pullRequest = null;
             bool hasPullRequest;
             try
             {
-                hasPullRequest = await enumerator.MoveNextAsync();
+                hasPullRequest = await livePullRequests.MoveNextAsync();
                 if (hasPullRequest)
                 {
-                    pullRequest = enumerator.Current;
+                    livePullRequestEntry = livePullRequests.Current;
+                    pullRequest = livePullRequestEntry.PullRequest;
                 }
             }
-            catch (Exception ex) when (streamedPullRequests.Count == 0
-                && TryUseCachedFallback(transientFallbackCacheKey, ex, cancellationToken, out stalePullRequests))
+            catch (Exception ex) when (emittedStaleSnapshot && IsTransientGitHubFailure(ex, cancellationToken))
             {
-                hasPullRequest = false;
-            }
-            catch (Exception ex) when (streamedPullRequests.Count == 0
-                && TryUseLastGoodFallback(cacheKey, ex, cancellationToken, out stalePullRequests))
-            {
-                hasPullRequest = false;
-            }
-
-            if (stalePullRequests is not null)
-            {
-                foreach (var stalePullRequest in stalePullRequests)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    yield return stalePullRequest;
-                }
-
                 yield break;
             }
 
@@ -588,14 +667,24 @@ sealed partial class GitHubClient(
 
             if (pullRequest is not null)
             {
-                streamedPullRequests.Add(pullRequest);
-                yield return pullRequest;
+                completedPullRequestsByNumber[pullRequest.Number] = pullRequest;
+                yield return livePullRequestEntry;
             }
         }
 
-        var completedPullRequests = streamedPullRequests.ToArray();
-        SetLastGood(cacheKey, completedPullRequests);
-        SetCacheEntry(cacheKey, completedPullRequests, CacheDurationForScope(scope));
+        var completedPullRequests = completedPullRequestsByNumber.Values.ToArray();
+        await SetLastGoodAsync(cacheKey, completedPullRequests, cancellationToken);
+        await SetCacheEntryAsync(cacheKey, completedPullRequests, CacheDurationForScope(scope), cancellationToken);
+        if (!scope.IsShared)
+        {
+            await TrySetPublicPullRequestBaselineAsync(
+                repositoryName,
+                state,
+                publicBaselinePullRequestsByNumber.Values.ToArray(),
+                cancellationToken);
+        }
+
+        yield return new PullRequestStreamEntry(IsComplete: true);
     }
 
     public async Task<IReadOnlyList<PullRequestSummary>> GetPullRequestsByLabelAsync(
@@ -627,7 +716,7 @@ sealed partial class GitHubClient(
             state,
             "label",
             normalizedLabel);
-        var refreshCache = TryBeginCacheRefresh(cacheKey, scopeSelection.Refresh);
+        var refreshCache = scopeSelection.Refresh;
         return await GetOrCreateWithLastGoodFallbackAsync(
             cacheKey,
             CacheDurationForScope(scope),
@@ -682,7 +771,17 @@ sealed partial class GitHubClient(
             transientFallbackCacheKey: transientFallbackCacheKey);
     }
 
-    public async IAsyncEnumerable<PullRequestSummary> StreamPullRequestsByLabelAsync(
+    public IAsyncEnumerable<PullRequestSummary> StreamPullRequestsByLabelAsync(
+        RepositoryName repositoryName,
+        string state,
+        string label,
+        bool forceRefresh,
+        CancellationToken cancellationToken) =>
+        SelectPullRequestsAsync(
+            StreamPullRequestEntriesByLabelAsync(repositoryName, state, label, forceRefresh, cancellationToken),
+            cancellationToken);
+
+    public async IAsyncEnumerable<PullRequestStreamEntry> StreamPullRequestEntriesByLabelAsync(
         RepositoryName repositoryName,
         string state,
         string label,
@@ -692,9 +791,9 @@ sealed partial class GitHubClient(
         var normalizedLabel = label.Trim();
         if (string.IsNullOrWhiteSpace(normalizedLabel))
         {
-            await foreach (var pullRequest in StreamPullRequestsAsync(repositoryName, state, forceRefresh, cancellationToken))
+            await foreach (var entry in StreamPullRequestEntriesAsync(repositoryName, state, forceRefresh, cancellationToken))
             {
-                yield return pullRequest;
+                yield return entry;
             }
 
             yield break;
@@ -716,78 +815,77 @@ sealed partial class GitHubClient(
             state,
             "label",
             normalizedLabel);
-        var refreshCache = TryBeginCacheRefresh(cacheKey, scopeSelection.Refresh);
+        var refreshCache = scopeSelection.Refresh;
 
-        if (!refreshCache && cache.TryGetValue(cacheKey, out IReadOnlyList<PullRequestSummary>? cachedPullRequests) && cachedPullRequests is not null)
+        var cachedPullRequests = await cache.GetAsync<IReadOnlyList<PullRequestSummary>>(cacheKey, cancellationToken);
+        if (!refreshCache && cachedPullRequests is { Found: true, Value: not null })
         {
-            foreach (var pullRequest in cachedPullRequests)
+            foreach (var pullRequest in cachedPullRequests.Value)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                yield return pullRequest;
+                yield return new PullRequestStreamEntry(pullRequest);
             }
 
             yield break;
+        }
+
+        var stalePullRequests = await GetStaleSnapshotAsync<IReadOnlyList<PullRequestSummary>>(
+            cacheKey,
+            transientFallbackCacheKey,
+            cancellationToken);
+        var emittedStaleSnapshot = false;
+        Dictionary<int, PullRequestSummary>? stalePullRequestsByNumber = null;
+        if (stalePullRequests is { Found: true, Value: not null })
+        {
+            stalePullRequestsByNumber = new Dictionary<int, PullRequestSummary>();
+            var staleRowsAreOverlay = !scopeSelection.CacheOnly;
+            foreach (var stalePullRequest in stalePullRequests.Value)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                stalePullRequestsByNumber[stalePullRequest.Number] = stalePullRequest;
+                yield return new PullRequestStreamEntry(stalePullRequest, staleRowsAreOverlay);
+            }
+
+            emittedStaleSnapshot = true;
         }
 
         if (scopeSelection.CacheOnly)
         {
-            if (!TryGetLastGood(cacheKey, out IReadOnlyList<PullRequestSummary>? cacheOnlyPullRequests)
-                && !TryGetCachedFallback(transientFallbackCacheKey, out cacheOnlyPullRequests)
-                && (transientFallbackCacheKey is null || !TryGetLastGood(transientFallbackCacheKey, out cacheOnlyPullRequests)))
+            if (!emittedStaleSnapshot)
             {
                 throw CreatePublicCacheUnavailableException();
-            }
-
-            foreach (var stalePullRequest in cacheOnlyPullRequests!)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return stalePullRequest;
             }
 
             yield break;
         }
 
-        IReadOnlyList<PullRequestSummary>? stalePullRequests = null;
-        var streamedPullRequests = new List<PullRequestSummary>();
-        await using var enumerator = CreatePullRequestSummariesInBatchesAsync(
+        var completedPullRequestsByNumber = new Dictionary<int, PullRequestSummary>();
+        var publicBaselinePullRequestsByNumber = new Dictionary<int, PullRequestSummary>();
+        await using var livePullRequests = StreamPullRequestSummariesWithBaselineAsync(
             repositoryName,
             StreamPullRequestDtosByLabelAsync(repositoryName, state, normalizedLabel, scope, cancellationToken),
-            false,
+            enrichMergeableStateFromDetails: false,
             refreshCache,
             scope,
+            stalePullRequestsByNumber,
+            publicBaselinePullRequestsByNumber,
             cancellationToken).GetAsyncEnumerator(cancellationToken);
-
         while (true)
         {
+            PullRequestStreamEntry livePullRequestEntry = default;
             PullRequestSummary? pullRequest = null;
             bool hasPullRequest;
             try
             {
-                hasPullRequest = await enumerator.MoveNextAsync();
+                hasPullRequest = await livePullRequests.MoveNextAsync();
                 if (hasPullRequest)
                 {
-                    pullRequest = enumerator.Current;
+                    livePullRequestEntry = livePullRequests.Current;
+                    pullRequest = livePullRequestEntry.PullRequest;
                 }
             }
-            catch (Exception ex) when (streamedPullRequests.Count == 0
-                && TryUseCachedFallback(transientFallbackCacheKey, ex, cancellationToken, out stalePullRequests))
+            catch (Exception ex) when (emittedStaleSnapshot && IsTransientGitHubFailure(ex, cancellationToken))
             {
-                hasPullRequest = false;
-            }
-            catch (Exception ex) when (streamedPullRequests.Count == 0
-                && TryUseLastGoodFallback(cacheKey, ex, cancellationToken, out stalePullRequests))
-            {
-                hasPullRequest = false;
-            }
-
-            if (stalePullRequests is not null)
-            {
-                foreach (var stalePullRequest in stalePullRequests)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    yield return stalePullRequest;
-                }
-
                 yield break;
             }
 
@@ -798,14 +896,16 @@ sealed partial class GitHubClient(
 
             if (pullRequest is not null)
             {
-                streamedPullRequests.Add(pullRequest);
-                yield return pullRequest;
+                completedPullRequestsByNumber[pullRequest.Number] = pullRequest;
+                yield return livePullRequestEntry;
             }
         }
 
-        var completedPullRequests = streamedPullRequests.ToArray();
-        SetLastGood(cacheKey, completedPullRequests);
-        SetCacheEntry(cacheKey, completedPullRequests, CacheDurationForScope(scope));
+        var completedPullRequests = completedPullRequestsByNumber.Values.ToArray();
+        await SetLastGoodAsync(cacheKey, completedPullRequests, cancellationToken);
+        await SetCacheEntryAsync(cacheKey, completedPullRequests, CacheDurationForScope(scope), cancellationToken);
+
+        yield return new PullRequestStreamEntry(IsComplete: true);
     }
 
     public async Task<IReadOnlyList<ShipWeekIssueSummary>> GetFocusIssuesAsync(
@@ -826,7 +926,7 @@ sealed partial class GitHubClient(
             repositoryName,
             "focus-issues",
             state);
-        var refreshCache = TryBeginCacheRefresh(cacheKey, scopeSelection.Refresh);
+        var refreshCache = scopeSelection.Refresh;
         return await GetOrCreateWithLastGoodFallbackAsync(
             cacheKey,
             CacheDurationForScope(scope),
@@ -896,7 +996,7 @@ sealed partial class GitHubClient(
             "ship-week",
             normalizedMilestoneTitle,
             requestedReleaseBranch ?? "latest-release");
-        var refreshCache = TryBeginCacheRefresh(cacheKey, scopeSelection.Refresh);
+        var refreshCache = scopeSelection.Refresh;
         return await GetOrCreateWithLastGoodFallbackAsync(
             cacheKey,
             CacheDurationForScope(scope),
@@ -1044,12 +1144,14 @@ sealed partial class GitHubClient(
             transientFallbackCacheKey: transientFallbackCacheKey);
     }
 
-    private async IAsyncEnumerable<PullRequestSummary> CreatePullRequestSummariesInBatchesAsync(
+    private async IAsyncEnumerable<PullRequestStreamEntry> StreamPullRequestSummariesWithBaselineAsync(
         RepositoryName repositoryName,
         IAsyncEnumerable<GitHubPullRequestDto> pullRequestDtos,
         bool enrichMergeableStateFromDetails,
         bool forceRefresh,
         GitHubCacheScope scope,
+        IReadOnlyDictionary<int, PullRequestSummary>? stalePullRequestsByNumber,
+        IDictionary<int, PullRequestSummary> publicBaselinePullRequestsByNumber,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var seenPullRequests = new HashSet<int>();
@@ -1060,6 +1162,19 @@ sealed partial class GitHubClient(
             if (!seenPullRequests.Add(pullRequestDto.Number))
             {
                 continue;
+            }
+
+            var baseline = CreatePullRequestBaselineSummary(pullRequestDto);
+            publicBaselinePullRequestsByNumber[baseline.Number] = baseline;
+            if (stalePullRequestsByNumber?.TryGetValue(baseline.Number, out var stalePullRequest) == true)
+            {
+                yield return new PullRequestStreamEntry(
+                    CreateStalePreservingLiveBaseline(stalePullRequest, baseline),
+                    IsStaleRefreshOverlay: true);
+            }
+            else
+            {
+                yield return new PullRequestStreamEntry(baseline);
             }
 
             batch.Add(pullRequestDto);
@@ -1076,7 +1191,7 @@ sealed partial class GitHubClient(
                 scope,
                 cancellationToken))
             {
-                yield return pullRequest;
+                yield return new PullRequestStreamEntry(pullRequest);
             }
 
             batch.Clear();
@@ -1095,8 +1210,44 @@ sealed partial class GitHubClient(
             scope,
             cancellationToken))
         {
-            yield return pullRequest;
+            yield return new PullRequestStreamEntry(pullRequest);
         }
+    }
+
+    private async Task TrySetPublicPullRequestBaselineAsync(
+        RepositoryName repositoryName,
+        string state,
+        IReadOnlyList<PullRequestSummary> pullRequests,
+        CancellationToken cancellationToken)
+    {
+        if (pullRequests.Count == 0
+            || !cacheScopeResolver.IsPublicCacheAllowlisted(repositoryName))
+        {
+            return;
+        }
+
+        var eligibility = await cacheScopeResolver.GetPublicCacheRepositoryEligibilityOrUnverifiedAsync(
+            repositoryName,
+            cancellationToken);
+        if (eligibility != GitHubPublicCacheRepositoryEligibility.Public)
+        {
+            if (eligibility == GitHubPublicCacheRepositoryEligibility.NotPublic)
+            {
+                await publicCacheStore.RemoveRepositoryAsync(repositoryName, cancellationToken);
+            }
+
+            return;
+        }
+
+        var publicScope = GitHubCachePolicy.CreatePublicRepositoryScope();
+        var publicCacheKey = CreateRepositoryCacheKey(
+            publicScope,
+            repositoryName,
+            "pulls",
+            state);
+        await SetLastGoodAsync(publicCacheKey, pullRequests, cancellationToken);
+        await SetCacheEntryAsync(publicCacheKey, pullRequests, CacheDurationForScope(publicScope), cancellationToken);
+        await publicCacheStore.TrackAsync(repositoryName, publicCacheKey, cancellationToken);
     }
 
     private async IAsyncEnumerable<GitHubPullRequestDto> StreamPullRequestDtosAsync(
@@ -1296,17 +1447,33 @@ sealed partial class GitHubClient(
 
     private static IReadOnlyList<PullRequestSummary> CreatePullRequestBaselineSummaries(
         IReadOnlyList<GitHubPullRequestDto> pullRequestDtos)
-    {
-        var fetchedAt = DateTimeOffset.UtcNow;
-        return pullRequestDtos
+        => pullRequestDtos
             .GroupBy(pullRequest => pullRequest.Number)
-            .Select(group => PullRequestSummary.FromDto(group.First()) with
-            {
-                FetchedAt = fetchedAt,
-                Checks = ChecksStatus.None
-            })
+            .Select(group => CreatePullRequestBaselineSummary(group.First()))
             .ToArray();
-    }
+
+    private static PullRequestSummary CreatePullRequestBaselineSummary(GitHubPullRequestDto pullRequest) =>
+        PullRequestSummary.FromDto(pullRequest) with
+        {
+            FetchedAt = DateTimeOffset.UtcNow,
+            Checks = ChecksStatus.None
+        };
+
+    private static PullRequestSummary CreateStalePreservingLiveBaseline(
+        PullRequestSummary stalePullRequest,
+        PullRequestSummary liveBaseline) =>
+        liveBaseline with
+        {
+            LinkedIssues = stalePullRequest.LinkedIssues,
+            CommitCount = stalePullRequest.CommitCount,
+            Additions = stalePullRequest.Additions,
+            Deletions = stalePullRequest.Deletions,
+            ChangedFiles = stalePullRequest.ChangedFiles,
+            LastCommitAt = stalePullRequest.LastCommitAt,
+            MergeableState = liveBaseline.MergeableState ?? stalePullRequest.MergeableState,
+            Review = stalePullRequest.Review,
+            Checks = stalePullRequest.Checks
+        };
 
     private static IReadOnlySet<int>? MergeableStateEnrichmentNumbers(
         IReadOnlyList<GitHubPullRequestDto> pullRequests,
@@ -1476,7 +1643,7 @@ sealed partial class GitHubClient(
             repositoryName,
             "matching-labels",
             labelMarker);
-        var refreshCache = TryBeginCacheRefresh(cacheKey, forceRefresh);
+        var refreshCache = forceRefresh;
         return await GetOrRefreshCacheAsync<IReadOnlyList<string>>(
             cacheKey,
             TimeSpan.FromMinutes(5),
@@ -1768,7 +1935,11 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         CancellationToken cancellationToken)
     {
-        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(
+            repositoryName,
+            forceRefresh,
+            cancellationToken,
+            allowSharedLiveFetch: true);
         return await GetChecksStatusAsync(
             repositoryName,
             headSha,
@@ -1800,14 +1971,15 @@ sealed partial class GitHubClient(
             repositoryName,
             "checks",
             headSha);
-        var refreshCache = TryBeginCacheRefresh(cacheKey, forceRefresh);
-        var hasCachedStatus = cache.TryGetValue(cacheKey, out ChecksStatus? cachedStatus) && cachedStatus is not null;
-        var hasLastGoodStatus = TryGetLastGood(cacheKey, out ChecksStatus? _);
-        var hasTransientFallbackStatus = transientFallbackCacheKey is not null
-            && cache.TryGetValue(transientFallbackCacheKey, out ChecksStatus? fallbackStatus)
-            && fallbackStatus is not null;
+        var refreshCache = forceRefresh;
+        var cachedStatus = await cache.GetAsync<ChecksStatus>(cacheKey, cancellationToken);
+        var hasCachedStatus = cachedStatus is { Found: true, Value: not null };
+        var hasLastGoodStatus = (await GetLastGoodAsync<ChecksStatus>(cacheKey, cancellationToken)).Found;
+        var hasTransientFallbackStatus = (await GetCachedFallbackAsync<ChecksStatus>(
+            transientFallbackCacheKey,
+            cancellationToken)).Found;
         var hasTransientFallbackLastGoodStatus = transientFallbackCacheKey is not null
-            && TryGetLastGood(transientFallbackCacheKey, out ChecksStatus? _);
+            && (await GetLastGoodAsync<ChecksStatus>(transientFallbackCacheKey, cancellationToken)).Found;
         var preserveCachedStatusOnTransientFailure = hasCachedStatus
             || hasLastGoodStatus
             || hasTransientFallbackStatus
@@ -2176,7 +2348,7 @@ sealed partial class GitHubClient(
             repositoryName,
             "reviews",
             number.ToString());
-        var refreshCache = TryBeginCacheRefresh(cacheKey, forceRefresh);
+        var refreshCache = forceRefresh;
         return await GetOrRefreshCacheAsync(
             cacheKey,
             CacheDurationForScope(scope),
@@ -2342,7 +2514,11 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         CancellationToken cancellationToken)
     {
-        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(
+            repositoryName,
+            forceRefresh,
+            cancellationToken,
+            allowSharedLiveFetch: true);
         return await GetPullRequestTimelineAsync(
             repositoryName,
             number,
@@ -2365,7 +2541,7 @@ sealed partial class GitHubClient(
             repositoryName,
             "timeline",
             number.ToString());
-        var refreshCache = TryBeginCacheRefresh(cacheKey, forceRefresh);
+        var refreshCache = forceRefresh;
         return await GetOrRefreshCacheAsync<IReadOnlyList<TimelineItem>>(
             cacheKey,
             CacheDurationForScope(scope),
@@ -2405,7 +2581,11 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         CancellationToken cancellationToken)
     {
-        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(
+            repositoryName,
+            forceRefresh,
+            cancellationToken,
+            allowSharedLiveFetch: true);
         return await GetPullRequestDetailsAsync(
             repositoryName,
             number,
@@ -2430,7 +2610,7 @@ sealed partial class GitHubClient(
             repositoryName,
             "pull",
             number.ToString());
-        var refreshCache = TryBeginCacheRefresh(cacheKey, forceRefresh);
+        var refreshCache = forceRefresh;
         return await GetOrRefreshCacheAsync(
             cacheKey,
             CacheDurationForScope(scope),
@@ -2487,7 +2667,7 @@ sealed partial class GitHubClient(
             repositoryName,
             "commits:last",
             number.ToString());
-        var refreshCache = TryBeginCacheRefresh(cacheKey, forceRefresh);
+        var refreshCache = forceRefresh;
         return await GetOrRefreshCacheAsync<DateTimeOffset?>(
             cacheKey,
             CacheDurationForScope(scope),
@@ -2605,7 +2785,7 @@ sealed partial class GitHubClient(
             repositoryName,
             "issue",
             number.ToString());
-        var refreshCache = TryBeginCacheRefresh(cacheKey, forceRefresh);
+        var refreshCache = forceRefresh;
         return await GetOrRefreshCacheAsync(
             cacheKey,
             CacheDurationForScope(scope),

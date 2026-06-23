@@ -28,11 +28,17 @@ import type {
   TimelineResponse,
   TimelineStats,
   TimelineStoryEntry,
+  VisiblePullRequestOptions,
 } from './types';
 import { colorForText } from './utils/format';
 import { readJson } from './utils/http';
 import { beginAbortableLoad } from './utils/loadLifecycle';
-import { streamPullRequests, upsertByUpdatedAt, upsertManyByUpdatedAt } from './utils/pullRequests';
+import {
+  streamPullRequests,
+  replacePullRequestsByUpdatedAt,
+  upsertManyByUpdatedAt,
+  upsertPullRequestByUpdatedAt,
+} from './utils/pullRequests';
 import {
   createActivityModel,
   createAttentionBuckets,
@@ -61,6 +67,7 @@ type VisibleChecksRequestItem = {
   repository: string;
   number: number;
   headSha: string;
+  forceRefresh: boolean;
 };
 
 type LoadOptions = {
@@ -118,6 +125,7 @@ function App() {
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [shipWeekLoading, setShipWeekLoading] = useState(false);
   const [shipWeekSectionLoading, setShipWeekSectionLoading] = useState<ShipWeekLoadingState>(emptyShipWeekLoadingState);
+  const [visibleChecksRefreshKey, setVisibleChecksRefreshKey] = useState(0);
   const [loginLoading, setLoginLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issuesError, setIssuesError] = useState<string | null>(null);
@@ -140,7 +148,6 @@ function App() {
   const pendingVisibleChecksRef = useRef(new Set<string>());
   const visibleChecksTimerRef = useRef<number | null>(null);
   const visibleChecksAbortControllerRef = useRef<AbortController | null>(null);
-  const forceVisibleChecksRefreshRef = useRef(false);
   const pullRequestsLoadVersionRef = useRef(0);
   const pullRequestsAbortControllerRef = useRef<AbortController | null>(null);
   const issuesLoadVersionRef = useRef(0);
@@ -406,6 +413,7 @@ function App() {
       setShipWeek(null);
       setShipWeekLastUpdatedAt(null);
       setShipWeekError(null);
+      resetShipWeekSnapshotState();
       currentSelectionRef.current = null;
       setSelectedPullRequest(null);
       setTimelineItems([]);
@@ -426,7 +434,7 @@ function App() {
     setPullsLoading(true);
     setError(null);
     beginVisibleChecksRequestScope();
-    forceVisibleChecksRefreshRef.current = options.forceRefresh ?? false;
+    beginForceVisibleChecksRefresh(options);
     if (!options.preserveResults) {
       currentSelectionRef.current = null;
       setSelectedPullRequest(null);
@@ -458,16 +466,16 @@ function App() {
               return;
             }
 
-            setPullRequests((currentPullRequests) => upsertByUpdatedAt(currentPullRequests, pullRequest));
+            setPullRequests((currentPullRequests) => upsertPullRequestByUpdatedAt(currentPullRequests, pullRequest));
           },
         });
       });
 
-      const pullRequestGroups = await Promise.all(pullRequestTasks);
+      const pullRequestResults = await Promise.all(pullRequestTasks);
       if (isCurrentLoad()) {
-        const nextPullRequests = upsertManyByUpdatedAt([], pullRequestGroups.flat());
-        setPullRequests(nextPullRequests);
-        setReviewLastUpdatedAt(getReviewLastUpdatedAt(nextPullRequests));
+        const streamedPullRequests = pullRequestResults.flatMap((result) => result.pullRequests);
+        setPullRequests((currentPullRequests) => replacePullRequestsByUpdatedAt(currentPullRequests, streamedPullRequests));
+        setReviewLastUpdatedAt(getReviewLastUpdatedAt(replacePullRequestsByUpdatedAt([], streamedPullRequests)));
       }
     } catch (err) {
       if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
@@ -566,7 +574,7 @@ function App() {
     setShipWeekSnapshotError(null);
     setShowShipWeekSnapshotDownload(false);
     beginVisibleChecksRequestScope();
-    forceVisibleChecksRefreshRef.current = options.forceRefresh ?? false;
+    beginForceVisibleChecksRefresh(options);
 
     try {
       const shipWeekParams = normalizeShipWeekRouteParams({ repositoryInput, milestoneInput, releaseBranchInput });
@@ -614,11 +622,11 @@ function App() {
         releaseResponses = [...releaseResponses, response];
         publishShipWeek();
       });
-      const docsTasks = docsRepositories.map((repository) =>
-        loadDocsFromCodePullRequests(repository, options, abortController.signal, (pullRequest) => {
-          docsPullRequests = upsertByUpdatedAt(docsPullRequests, pullRequest);
+      const docsTasks = docsRepositories.map(async (repository) =>
+        (await loadDocsFromCodePullRequests(repository, options, abortController.signal, (pullRequest) => {
+          docsPullRequests = upsertPullRequestByUpdatedAt(docsPullRequests, pullRequest);
           publishShipWeek();
-        }));
+        })).pullRequests);
       const releaseDoneTask = Promise.all(releaseTasks).finally(() => {
         if (isCurrentLoad()) {
           setShipWeekSectionLoading((current) => ({
@@ -629,7 +637,10 @@ function App() {
           }));
         }
       });
-      const docsDoneTask = Promise.all(docsTasks).finally(() => {
+      const docsDoneTask = Promise.all(docsTasks).then((docsPullRequestGroups) => {
+        docsPullRequests = replacePullRequestsByUpdatedAt(docsPullRequests, docsPullRequestGroups.flat());
+        publishShipWeek();
+      }).finally(() => {
         if (isCurrentLoad()) {
           setShipWeekSectionLoading((current) => ({
             ...current,
@@ -676,6 +687,14 @@ function App() {
     visibleChecksAbortControllerRef.current = new AbortController();
   }
 
+  function beginForceVisibleChecksRefresh(options: LoadOptions) {
+    if (!options.forceRefresh) {
+      return;
+    }
+
+    setVisibleChecksRefreshKey((key) => key + 1);
+  }
+
   function cancelVisibleChecksRequests() {
     checksRequestVersionRef.current += 1;
     visibleChecksQueueRef.current.clear();
@@ -689,18 +708,29 @@ function App() {
     visibleChecksAbortControllerRef.current = null;
   }
 
-  function requestVisibleChecks(repository: string, pullRequest: PullRequestSummary) {
+  function requestVisibleChecks(
+    repository: string,
+    pullRequest: PullRequestSummary,
+    options: VisiblePullRequestOptions = {},
+  ) {
+    const forceRefresh = options.forceRefresh === true;
     if (
       pullRequest.state !== 'open'
       || !pullRequest.headSha
-      || pullRequest.checks?.state !== 'unknown'
+      || (pullRequest.checks?.state !== 'unknown' && !forceRefresh)
     ) {
-      return;
+      return false;
     }
 
     const key = checksRequestKey(repository, pullRequest.number, pullRequest.headSha);
-    if (pendingVisibleChecksRef.current.has(key) || visibleChecksQueueRef.current.has(key)) {
-      return;
+    if (pendingVisibleChecksRef.current.has(key)) {
+      return false;
+    }
+
+    const queuedItem = visibleChecksQueueRef.current.get(key);
+    if (queuedItem) {
+      queuedItem.forceRefresh ||= forceRefresh;
+      return true;
     }
 
     pendingVisibleChecksRef.current.add(key);
@@ -708,6 +738,7 @@ function App() {
       repository,
       number: pullRequest.number,
       headSha: pullRequest.headSha,
+      forceRefresh,
     });
 
     if (visibleChecksTimerRef.current === null) {
@@ -716,6 +747,8 @@ function App() {
         void flushVisibleChecksQueue(requestVersion);
       }, 50);
     }
+
+    return true;
   }
 
   async function flushVisibleChecksQueue(requestVersion: number) {
@@ -728,10 +761,6 @@ function App() {
 
     const abortController = visibleChecksAbortControllerRef.current ?? new AbortController();
     visibleChecksAbortControllerRef.current = abortController;
-    const forceRefresh = forceVisibleChecksRefreshRef.current;
-    if (forceRefresh) {
-      forceVisibleChecksRefreshRef.current = false;
-    }
     const itemsByRepository = queuedItems.reduce((groups, item) => {
       const repositoryItems = groups.get(item.repository) ?? [];
       repositoryItems.push(item);
@@ -739,7 +768,12 @@ function App() {
       return groups;
     }, new Map<string, VisibleChecksRequestItem[]>());
     await Promise.all([...itemsByRepository].map(([repository, items]) =>
-      loadVisibleChecks(repository, items, requestVersion, abortController.signal, forceRefresh)));
+      loadVisibleChecks(
+        repository,
+        items,
+        requestVersion,
+        abortController.signal,
+        items.some((item) => item.forceRefresh))));
   }
 
   async function loadVisibleChecks(
@@ -905,6 +939,9 @@ function App() {
     setShipWeekMilestone(shipWeekParams.milestoneInput);
     setShipWeekReleaseBranch(shipWeekParams.releaseBranchInput);
     pushDashboardModeHistory('ship', shipWeekParams);
+    setLocationHash(window.location.hash);
+    setSelectedBucketId('');
+    setViewMode('dashboard');
     setDashboardMode('ship');
     void loadShipWeek(shipWeekParams.repositoryInput, shipWeekParams.milestoneInput, shipWeekParams.releaseBranchInput);
   }
@@ -932,6 +969,9 @@ function App() {
 
   function switchDashboardMode(mode: DashboardMode) {
     pushDashboardModeHistory(mode, shipWeekShareParams);
+    setLocationHash(window.location.hash);
+    setSelectedBucketId('');
+    setViewMode('dashboard');
     setDashboardMode(mode);
     if (mode === 'ship' && !shipWeek && !shipWeekLoading) {
       const params = shipWeekRefreshParamsRef.current;
@@ -945,9 +985,7 @@ function App() {
   }
 
   async function copyShipWeekShareLink() {
-    setShipWeekSnapshotStatus(null);
-    setShipWeekSnapshotError(null);
-    setShowShipWeekSnapshotDownload(false);
+    clearShipWeekSnapshotMessage();
 
     if (!navigator.clipboard?.writeText) {
       setShipWeekSnapshotError('Clipboard unavailable. Copy the address bar URL instead.');
@@ -969,10 +1007,8 @@ function App() {
       return;
     }
 
+    clearShipWeekSnapshotMessage();
     setIsShipWeekSnapshotExporting(true);
-    setShipWeekSnapshotStatus(null);
-    setShipWeekSnapshotError(null);
-    setShowShipWeekSnapshotDownload(false);
 
     try {
       const blob = await createShipWeekSnapshotBlob(element);
@@ -1013,10 +1049,8 @@ function App() {
           'image/png': createShipWeekSnapshotBlob(element),
         }),
       ]);
+      clearShipWeekSnapshotMessage();
       setIsShipWeekSnapshotCopying(true);
-      setShipWeekSnapshotStatus(null);
-      setShipWeekSnapshotError(null);
-      setShowShipWeekSnapshotDownload(false);
       await withTimeout(
         writePromise,
         clipboardWriteTimeoutMs,
@@ -1029,6 +1063,18 @@ function App() {
     } finally {
       setIsShipWeekSnapshotCopying(false);
     }
+  }
+
+  function resetShipWeekSnapshotState() {
+    clearShipWeekSnapshotMessage();
+    setIsShipWeekSnapshotExporting(false);
+    setIsShipWeekSnapshotCopying(false);
+  }
+
+  function clearShipWeekSnapshotMessage() {
+    setShipWeekSnapshotStatus(null);
+    setShipWeekSnapshotError(null);
+    setShowShipWeekSnapshotDownload(false);
   }
 
   function showDashboard(updateHistory = true) {
@@ -1158,6 +1204,7 @@ function App() {
             onSelectBucket={selectBucket}
             onSelectPullRequest={(repository, pullRequest) => void loadTimeline(repository, pullRequest)}
             onVisiblePullRequest={requestVisibleChecks}
+            visibleChecksRefreshKey={visibleChecksRefreshKey}
           />
         )}
 

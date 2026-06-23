@@ -8,6 +8,7 @@ It helps the team prioritize GitHub pull request work, focus on urgent reviews, 
 
 - .NET 10 SDK
 - Aspire CLI from the dev channel
+- Docker or another Aspire-supported container runtime for the local Azurite storage emulator
 - Node.js `20.19+`, `22.12+`, or newer
 - Optional: GitHub CLI (`gh`) for local development auth
 - Optional: Azure CLI for manual Azure Container Apps deployment
@@ -24,6 +25,7 @@ By default, the dashboard watches:
 
 - `microsoft/aspire`
 - `microsoft/aspire.dev`
+- `microsoft/aspire-skills`
 - `microsoft/dcp`
 - `CommunityToolkit/Aspire`
 
@@ -47,7 +49,7 @@ A waiting PR with unresolved threads is treated as waiting on the author: it sho
 
 ## Production public cache
 
-Logged-out users read pull request data only from the shared public cache for repositories in `GitHubCacheWarmup:Repositories`. Configure `GITHUB_PUBLIC_CACHE_TOKEN` or `GitHubCacheWarmup:PublicCacheToken` with a server-owned fine-grained PAT or GitHub App token so the backend can verify allowlisted public visibility and refresh that cache without using anonymous quota or user tokens. Visibility verification uses the server token and is cached separately from PR data. The current last-good fallback uses the server memory cache; replace it with durable storage before relying on cache continuity across restarts or multiple backend instances.
+Logged-out users read pull request data only from the shared public cache for repositories in `GitHubCacheWarmup:Repositories`. Configure `GITHUB_PUBLIC_CACHE_TOKEN` or `GitHubCacheWarmup:PublicCacheToken` with a server-owned fine-grained PAT or GitHub App token so the backend can verify allowlisted public visibility and refresh that cache without using anonymous quota or user tokens. Public cache entries and last-good snapshots are persisted in the Aspire-managed `github-cache` Blob container, which runs as Azurite locally and Azure Blob Storage when published. Local Azurite uses an Aspire data volume so cache snapshots survive container recreation; use the `clear-cache` resource command when you need to reset the local public cache.
 
 ## Build and lint
 
