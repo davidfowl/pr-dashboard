@@ -246,7 +246,8 @@ record ReviewStatus(
     int ChangesRequestedCount,
     int CommentedReviewCount,
     DateTimeOffset? LastApprovedAt,
-    DateTimeOffset? LastReviewedAt)
+    DateTimeOffset? LastReviewedAt,
+    int UnresolvedThreadCount = 0)
 {
     public static ReviewStatus Waiting { get; } = new(
         State: "waiting",
@@ -565,6 +566,8 @@ record TimelineItem(
 [JsonSerializable(typeof(GitHubPullRequestDto))]
 [JsonSerializable(typeof(GitHubPullRequestDto[]))]
 [JsonSerializable(typeof(GitHubReviewDto[]))]
+[JsonSerializable(typeof(GitHubGraphQlRequestDto))]
+[JsonSerializable(typeof(GitHubReviewThreadsResponseDto))]
 [JsonSerializable(typeof(GitHubRepositoryDto))]
 [JsonSerializable(typeof(GitHubTimelineItemDto[]))]
 partial class GitHubJsonSerializerContext : JsonSerializerContext;
@@ -721,6 +724,81 @@ sealed class GitHubReviewDto
     public GitHubActorDto? User { get; init; }
     public string? State { get; init; }
     public DateTimeOffset SubmittedAt { get; init; }
+}
+
+// GitHub's GraphQL API returns camelCase fields, so these DTOs use explicit
+// [JsonPropertyName] attributes rather than the snake_case policy applied to
+// the REST DTOs in this serializer context.
+sealed class GitHubGraphQlRequestDto
+{
+    [JsonPropertyName("query")]
+    public string? Query { get; init; }
+
+    [JsonPropertyName("variables")]
+    public GitHubReviewThreadsVariablesDto? Variables { get; init; }
+}
+
+sealed class GitHubReviewThreadsVariablesDto
+{
+    [JsonPropertyName("owner")]
+    public string? Owner { get; init; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("number")]
+    public int Number { get; init; }
+
+    [JsonPropertyName("after")]
+    public string? After { get; init; }
+}
+
+sealed class GitHubReviewThreadsResponseDto
+{
+    [JsonPropertyName("data")]
+    public GitHubReviewThreadsDataDto? Data { get; init; }
+}
+
+sealed class GitHubReviewThreadsDataDto
+{
+    [JsonPropertyName("repository")]
+    public GitHubReviewThreadsRepositoryDto? Repository { get; init; }
+}
+
+sealed class GitHubReviewThreadsRepositoryDto
+{
+    [JsonPropertyName("pullRequest")]
+    public GitHubReviewThreadsPullRequestDto? PullRequest { get; init; }
+}
+
+sealed class GitHubReviewThreadsPullRequestDto
+{
+    [JsonPropertyName("reviewThreads")]
+    public GitHubReviewThreadsConnectionDto? ReviewThreads { get; init; }
+}
+
+sealed class GitHubReviewThreadsConnectionDto
+{
+    [JsonPropertyName("pageInfo")]
+    public GitHubReviewThreadsPageInfoDto? PageInfo { get; init; }
+
+    [JsonPropertyName("nodes")]
+    public IReadOnlyList<GitHubReviewThreadNodeDto>? Nodes { get; init; }
+}
+
+sealed class GitHubReviewThreadsPageInfoDto
+{
+    [JsonPropertyName("hasNextPage")]
+    public bool HasNextPage { get; init; }
+
+    [JsonPropertyName("endCursor")]
+    public string? EndCursor { get; init; }
+}
+
+sealed class GitHubReviewThreadNodeDto
+{
+    [JsonPropertyName("isResolved")]
+    public bool IsResolved { get; init; }
 }
 
 sealed class GitHubTimelineItemDto

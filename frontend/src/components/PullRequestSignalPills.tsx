@@ -21,13 +21,13 @@ function PullRequestSignalPills({
   excludeComputedLabels = [],
   showActionSignal = true,
 }: PullRequestSignalPillsProps) {
-  const excludedComputedLabels = new Set(excludeComputedLabels);
+  const excludedComputedLabels = new Set(excludeComputedLabels.map((label) => label.toLowerCase()));
   const [actionSignal, ...stateSignals] = createAttentionSignals({ pullRequest, reason: '' });
   let computedSignals = showActionSignal && actionSignal
     ? [actionSignal, ...stateSignals]
     : stateSignals;
 
-  computedSignals = computedSignals.filter((signal) => !excludedComputedLabels.has(signal.label));
+  computedSignals = computedSignals.filter((signal) => !excludedComputedLabels.has(signal.label.toLowerCase()));
 
   if (computedSignalLimit !== undefined) {
     computedSignals = computedSignals.slice(0, computedSignalLimit);

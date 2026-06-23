@@ -623,6 +623,7 @@ function createPullRequest(
       approvalCount: 0,
       changesRequestedCount: 0,
       commentedReviewCount: 0,
+      unresolvedThreadCount: 0,
     },
     checks: checksStatus(checksState),
     ...overrides,

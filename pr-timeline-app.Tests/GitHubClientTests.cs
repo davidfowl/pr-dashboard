@@ -2221,6 +2221,479 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListCountsUnresolvedReviewThreadsForApprovedPullRequests()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                PullRequestsJson([PullRequestJson(1, title: "Approved work")])),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                """
+                [
+                  {
+                    "user": { "login": "reviewer" },
+                    "state": "APPROVED",
+                    "submitted_at": "2026-01-02T00:00:00Z"
+                  }
+                ]
+                """),
+            "graphql" => Json(
+                """
+                {
+                  "data": {
+                    "repository": {
+                      "pullRequest": {
+                        "reviewThreads": {
+                          "nodes": [
+                            { "isResolved": false },
+                            { "isResolved": true },
+                            { "isResolved": false }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+                """),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("approved", pullRequest.Review.State);
+        Assert.Equal(2, pullRequest.Review.UnresolvedThreadCount);
+    }
+
+    [Fact]
+    public async Task PullListSkipsUnresolvedThreadFetchForUnapprovedPullRequests()
+    {
+        var graphqlRequested = false;
+        var client = CreateClient(path =>
+        {
+            if (path == "graphql")
+            {
+                graphqlRequested = true;
+                return Json("{}");
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    PullRequestsJson([PullRequestJson(1)])),
+                "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                    """
+                    [
+                      {
+                        "user": { "login": "reviewer" },
+                        "state": "COMMENTED",
+                        "submitted_at": "2026-01-02T00:00:00Z"
+                      }
+                    ]
+                    """),
+                "repos/example/repo/pulls/1/commits?per_page=100" => Json("[]"),
+                "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("reviewed", pullRequest.Review.State);
+        Assert.Equal(0, pullRequest.Review.UnresolvedThreadCount);
+        Assert.False(graphqlRequested);
+    }
+
+    [Fact]
+    public async Task PullListTreatsUnresolvedThreadFetchFailureAsZero()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                PullRequestsJson([PullRequestJson(1, title: "Approved work")])),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                """
+                [
+                  {
+                    "user": { "login": "reviewer" },
+                    "state": "APPROVED",
+                    "submitted_at": "2026-01-02T00:00:00Z"
+                  }
+                ]
+                """),
+            "graphql" => Json("""{ "message": "Server error" }""", HttpStatusCode.InternalServerError),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("approved", pullRequest.Review.State);
+        Assert.Equal(0, pullRequest.Review.UnresolvedThreadCount);
+    }
+
+    [Fact]
+    public async Task PullListPaginatesUnresolvedReviewThreadCountAcrossPages()
+    {
+        var graphqlBodies = new List<string>();
+        var client = CreateClientCapturingRequests(async (request, path, cancellationToken) =>
+        {
+            switch (path)
+            {
+                case "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100":
+                    return Json(PullRequestsJson([PullRequestJson(1, title: "Approved work")]));
+                case "repos/example/repo/pulls/1/reviews?per_page=100":
+                    return Json(
+                        """
+                        [
+                          {
+                            "user": { "login": "reviewer" },
+                            "state": "APPROVED",
+                            "submitted_at": "2026-01-02T00:00:00Z"
+                          }
+                        ]
+                        """);
+                case "graphql":
+                    graphqlBodies.Add(await request.Content!.ReadAsStringAsync(cancellationToken));
+                    return graphqlBodies.Count == 1
+                        ? Json(
+                            """
+                            {
+                              "data": {
+                                "repository": {
+                                  "pullRequest": {
+                                    "reviewThreads": {
+                                      "pageInfo": { "hasNextPage": true, "endCursor": "CURSOR1" },
+                                      "nodes": [
+                                        { "isResolved": false },
+                                        { "isResolved": true },
+                                        { "isResolved": false }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                            """)
+                        : Json(
+                            """
+                            {
+                              "data": {
+                                "repository": {
+                                  "pullRequest": {
+                                    "reviewThreads": {
+                                      "pageInfo": { "hasNextPage": false, "endCursor": null },
+                                      "nodes": [
+                                        { "isResolved": false },
+                                        { "isResolved": false }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                            """);
+                case "repos/example/repo/pulls/1":
+                    return Json(PullRequestDetailsJson(1));
+                default:
+                    throw new InvalidOperationException($"Unexpected GitHub request: {path}");
+            }
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("approved", pullRequest.Review.State);
+        Assert.Equal(2, graphqlBodies.Count);
+        Assert.Equal(4, pullRequest.Review.UnresolvedThreadCount);
+        // The second page must be fetched with the cursor the first page returned; otherwise the
+        // loop would re-request page 1 and the count would be wrong.
+        Assert.DoesNotContain("CURSOR1", graphqlBodies[0]);
+        Assert.Contains("\"after\":\"CURSOR1\"", graphqlBodies[1]);
+    }
+
+    [Fact]
+    public async Task PullListKeepsAlreadyCountedThreadsWhenLaterPageFails()
+    {
+        var graphqlCalls = 0;
+        var client = CreateClient(path =>
+        {
+            switch (path)
+            {
+                case "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100":
+                    return Json(PullRequestsJson([PullRequestJson(1, title: "Approved work")]));
+                case "repos/example/repo/pulls/1/reviews?per_page=100":
+                    return Json(
+                        """
+                        [
+                          {
+                            "user": { "login": "reviewer" },
+                            "state": "APPROVED",
+                            "submitted_at": "2026-01-02T00:00:00Z"
+                          }
+                        ]
+                        """);
+                case "graphql":
+                    graphqlCalls++;
+                    return graphqlCalls == 1
+                        ? Json(
+                            """
+                            {
+                              "data": {
+                                "repository": {
+                                  "pullRequest": {
+                                    "reviewThreads": {
+                                      "pageInfo": { "hasNextPage": true, "endCursor": "CURSOR1" },
+                                      "nodes": [
+                                        { "isResolved": false },
+                                        { "isResolved": false }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                            """)
+                        : Json("""{ "message": "Server error" }""", HttpStatusCode.InternalServerError);
+                case "repos/example/repo/pulls/1":
+                    return Json(PullRequestDetailsJson(1));
+                default:
+                    throw new InvalidOperationException($"Unexpected GitHub request: {path}");
+            }
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("approved", pullRequest.Review.State);
+        // Page 1 already saw 2 unresolved threads; a page-2 failure must not reset that to 0 and
+        // wrongly let the PR look "Ready to merge".
+        Assert.Equal(2, pullRequest.Review.UnresolvedThreadCount);
+    }
+
+    [Fact]
+    public async Task PullListTreatsMalformedUnresolvedThreadPayloadAsZero()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                PullRequestsJson([PullRequestJson(1, title: "Approved work")])),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                """
+                [
+                  {
+                    "user": { "login": "reviewer" },
+                    "state": "APPROVED",
+                    "submitted_at": "2026-01-02T00:00:00Z"
+                  }
+                ]
+                """),
+            "graphql" => Json("not valid json", HttpStatusCode.OK),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("approved", pullRequest.Review.State);
+        Assert.Equal(0, pullRequest.Review.UnresolvedThreadCount);
+    }
+
+    [Fact]
+    public async Task PullListTreatsTransientThreadFetchExceptionAsZero()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                PullRequestsJson([PullRequestJson(1, title: "Approved work")])),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                """
+                [
+                  {
+                    "user": { "login": "reviewer" },
+                    "state": "APPROVED",
+                    "submitted_at": "2026-01-02T00:00:00Z"
+                  }
+                ]
+                """),
+            "graphql" => throw new HttpRequestException("transient network failure"),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        // A transient transport exception during thread enrichment must be swallowed (best-effort),
+        // leaving the review status intact rather than failing the whole PR list.
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("approved", pullRequest.Review.State);
+        Assert.Equal(0, pullRequest.Review.UnresolvedThreadCount);
+    }
+
+    [Fact]
+    public async Task PullListSkipsUnresolvedThreadFetchWhenRepositoryNotEnrolled()
+    {
+        var graphqlRequested = false;
+        var client = CreateClient(
+            path =>
+            {
+                if (path == "graphql")
+                {
+                    graphqlRequested = true;
+                    return Json("{}");
+                }
+
+                return path switch
+                {
+                    "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                        PullRequestsJson([PullRequestJson(1, title: "Approved work")])),
+                    "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                        """
+                        [
+                          {
+                            "user": { "login": "reviewer" },
+                            "state": "APPROVED",
+                            "submitted_at": "2026-01-02T00:00:00Z"
+                          }
+                        ]
+                        """),
+                    "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+                    _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+                };
+            },
+            CreateReviewPolicyOptions());
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("approved", pullRequest.Review.State);
+        Assert.Equal(0, pullRequest.Review.UnresolvedThreadCount);
+        Assert.False(graphqlRequested);
+    }
+
+    [Fact]
+    public async Task PullListCountsUnresolvedCopilotThreadsForWaitingPullRequests()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                PullRequestsJson([PullRequestJson(1, title: "Copilot reviewed work")])),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                """
+                [
+                  {
+                    "user": { "login": "copilot-pull-request-reviewer[bot]" },
+                    "state": "COMMENTED",
+                    "submitted_at": "2026-01-02T00:00:00Z"
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/commits?per_page=100" => Json("[]"),
+            "graphql" => Json(
+                """
+                {
+                  "data": {
+                    "repository": {
+                      "pullRequest": {
+                        "reviewThreads": {
+                          "nodes": [
+                            { "isResolved": false },
+                            { "isResolved": true },
+                            { "isResolved": false }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+                """),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("waiting", pullRequest.Review.State);
+        Assert.Equal(2, pullRequest.Review.UnresolvedThreadCount);
+    }
+
+    [Fact]
+    public async Task PullListSkipsUnresolvedThreadFetchForWaitingPullRequestsWithoutCopilotReview()
+    {
+        var graphqlRequested = false;
+        var client = CreateClient(path =>
+        {
+            if (path == "graphql")
+            {
+                graphqlRequested = true;
+                return Json("{}");
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    PullRequestsJson([PullRequestJson(1)])),
+                "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+                "repos/example/repo/pulls/1/commits?per_page=100" => Json("[]"),
+                "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("waiting", pullRequest.Review.State);
+        Assert.Equal(0, pullRequest.Review.UnresolvedThreadCount);
+        Assert.False(graphqlRequested);
+    }
+
+    [Fact]
     public async Task PullListIncludesMergeableStateFromDetailsForOpenPullRequests()
     {
         var client = CreateClient(path => path switch
@@ -2255,6 +2728,7 @@ public sealed class GitHubClientTests
                 ]
                 """),
             "repos/example/repo/pulls/1" => Json(PullRequestJson(1, mergeableState: "dirty")),
+            "graphql" => Json("""{ "data": { "repository": { "pullRequest": { "reviewThreads": { "nodes": [] } } } } }"""),
             _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
         });
 
@@ -2308,6 +2782,7 @@ public sealed class GitHubClientTests
                       }
                     ]
                     """),
+                "graphql" => Json("""{ "data": { "repository": { "pullRequest": { "reviewThreads": { "nodes": [] } } } } }"""),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
             };
         });
@@ -3294,10 +3769,14 @@ public sealed class GitHubClientTests
         Assert.True(result.ValidationErrors.ContainsKey("releaseBranch"));
     }
 
-    private static GitHubClient CreateClient(Func<string, HttpResponseMessage> route)
-        => CreateClient((path, _) => Task.FromResult(route(path)));
+    private static GitHubClient CreateClient(
+        Func<string, HttpResponseMessage> route,
+        IOptions<GitHubReviewPolicyOptions>? reviewPolicyOptions = null)
+        => CreateClient((path, _) => Task.FromResult(route(path)), reviewPolicyOptions);
 
-    private static GitHubClient CreateClient(Func<string, CancellationToken, Task<HttpResponseMessage>> route)
+    private static GitHubClient CreateClient(
+        Func<string, CancellationToken, Task<HttpResponseMessage>> route,
+        IOptions<GitHubReviewPolicyOptions>? reviewPolicyOptions = null)
     {
         var httpClient = new HttpClient(new StubGitHubHandler(route))
         {
@@ -3313,7 +3792,35 @@ public sealed class GitHubClientTests
         var responseCache = new GitHubResponseCache(cache, publicCacheStore);
         var cacheScopeResolver = new GitHubCacheScopeResolver(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, options, cache);
 
-        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment());
+        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment(), reviewPolicyOptions ?? CreateReviewPolicyOptions("example/repo"));
+    }
+
+    private static IOptions<GitHubReviewPolicyOptions> CreateReviewPolicyOptions(params string[] repositories) =>
+        Options.Create(new GitHubReviewPolicyOptions { RequireConversationResolution = repositories });
+
+    private static GitHubClient CreateClientCapturingRequests(
+        Func<HttpRequestMessage, string, CancellationToken, Task<HttpResponseMessage>> route,
+        IOptions<GitHubReviewPolicyOptions>? reviewPolicyOptions = null)
+    {
+        var httpClient = new HttpClient(new RequestStubGitHubHandler((request, cancellationToken) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            return route(request, path, cancellationToken);
+        }))
+        {
+            BaseAddress = new Uri("https://api.github.com/")
+        };
+        var tokenProvider = new GitHubTokenProvider(
+            new HttpContextAccessor { HttpContext = CreateHttpContextWithGitHubToken() },
+            new TestHostEnvironment());
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var options = CreateWarmupOptions();
+        var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
+        var publicCacheStore = new GitHubPublicCacheStore(cache);
+        var responseCache = new GitHubResponseCache(cache, publicCacheStore);
+        var cacheScopeResolver = new GitHubCacheScopeResolver(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, options, cache);
+
+        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment(), reviewPolicyOptions ?? CreateReviewPolicyOptions("example/repo"));
     }
 
     private static async Task<WebApplication> CreatePullRequestTestAppAsync(
@@ -3357,7 +3864,8 @@ public sealed class GitHubClientTests
             sp.GetRequiredService<GitHubPublicCacheStore>(),
             sp.GetRequiredService<GitHubCacheScopeResolver>(),
             sp.GetRequiredService<GitHubResponseCache>(),
-            sp.GetRequiredService<IHostEnvironment>()));
+            sp.GetRequiredService<IHostEnvironment>(),
+            CreateReviewPolicyOptions()));
         builder.Services.AddSingleton<GitHubPullRequestService>();
 
         var app = builder.Build();
@@ -3422,7 +3930,7 @@ public sealed class GitHubClientTests
         var responseCache = new GitHubResponseCache(cache, publicCacheStore);
         var cacheScopeResolver = new GitHubCacheScopeResolver(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, options, cache);
 
-        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment());
+        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment(), CreateReviewPolicyOptions("example/repo"));
     }
 
     private static GitHubClient CreateAnonymousClientFromRequests(
@@ -3444,7 +3952,7 @@ public sealed class GitHubClientTests
         var responseCache = new GitHubResponseCache(cache, publicCacheStore);
         var cacheScopeResolver = new GitHubCacheScopeResolver(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, options, cache);
 
-        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment());
+        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment(), CreateReviewPolicyOptions("example/repo"));
     }
 
     private static IOptions<GitHubCacheWarmupOptions> CreateWarmupOptions(

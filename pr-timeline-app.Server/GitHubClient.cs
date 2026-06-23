@@ -2,8 +2,10 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization.Metadata;
+using Microsoft.Extensions.Options;
 
 sealed partial class GitHubClient(
     HttpClient httpClient,
@@ -12,7 +14,8 @@ sealed partial class GitHubClient(
     GitHubPublicCacheStore publicCacheStore,
     GitHubCacheScopeResolver cacheScopeResolver,
     GitHubResponseCache cache,
-    IHostEnvironment environment)
+    IHostEnvironment environment,
+    IOptions<GitHubReviewPolicyOptions> reviewPolicyOptions)
 {
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
     internal static readonly TimeSpan PublicCacheDuration = TimeSpan.FromHours(1);
@@ -27,6 +30,12 @@ sealed partial class GitHubClient(
     private const string CtiTeamSearchTerm = "AspireE2E";
     private static readonly SemaphoreSlim s_githubRequestThrottle = new(MaxConcurrentGitHubRequests, MaxConcurrentGitHubRequests);
     private static readonly SemaphoreSlim s_checksFetchThrottle = new(MaxConcurrentChecksFetches, MaxConcurrentChecksFetches);
+
+    private readonly HashSet<string> _conversationResolutionRepositories =
+        new(reviewPolicyOptions.Value.RequireConversationResolution, StringComparer.OrdinalIgnoreCase);
+
+    private bool RequiresConversationResolution(RepositoryName repositoryName) =>
+        _conversationResolutionRepositories.Contains(repositoryName.ToString());
 
     private async Task<GitHubCacheScope> GetRepositoryCacheScopeAsync(
         RepositoryName repositoryName,
@@ -2385,6 +2394,35 @@ sealed partial class GitHubClient(
                 latestByReviewer.Any(review => review.State == "COMMENTED") ? "reviewed" :
                 "waiting";
 
+            // Unresolved review threads matter in two cases, both of which need GraphQL (thread
+            // resolution is GraphQL-only) and a token:
+            //
+            //  1. Approved PRs in repositories whose branch protection requires conversation
+            //     resolution — there an unresolved thread blocks merge. Enrollment is configured
+            //     per repo (GitHubReviewPolicy:RequireConversationResolution) because the
+            //     branch-protection API needs admin access this app's tokens don't have.
+            //  2. Waiting PRs that the Copilot review bot has commented on. The bot's reviews are
+            //     filtered out of the human review state, so such a PR looks like it "needs a
+            //     reviewer" when it is really waiting on the author to address Copilot's feedback.
+            //     Surfacing the unresolved thread count lets the dashboard route it to a
+            //     "Copilot feedback" lane instead of the needs-review queue.
+            //
+            // The Copilot case is bounded to waiting PRs the bot actually reviewed to keep the
+            // extra GraphQL calls off PRs that have no review threads at all.
+            var copilotReviewed = reviews
+                .Select(ReviewEvent.FromDto)
+                .Any(review => IsCopilotReviewer(review.Actor));
+            var shouldCountUnresolvedThreads =
+                (state == "approved" && RequiresConversationResolution(repositoryName))
+                || (state == "waiting" && copilotReviewed);
+            var unresolvedThreadCount = shouldCountUnresolvedThreads
+                ? await GetUnresolvedReviewThreadCountAsync(
+                    repositoryName,
+                    number,
+                    scope.RequestAuthorization,
+                    cancellationToken)
+                : 0;
+
             return new ReviewStatus(
                 State: state,
                 LatestState: humanReviews.LastOrDefault()?.State,
@@ -2393,9 +2431,144 @@ sealed partial class GitHubClient(
                 ChangesRequestedCount: humanReviews.Count(review => review.State == "CHANGES_REQUESTED"),
                 CommentedReviewCount: humanReviews.Count(review => review.State == "COMMENTED"),
                 LastApprovedAt: humanReviews.LastOrDefault(review => review.State == "APPROVED")?.SubmittedAt,
-                LastReviewedAt: humanReviews.LastOrDefault()?.SubmittedAt);
+                LastReviewedAt: humanReviews.LastOrDefault()?.SubmittedAt,
+                UnresolvedThreadCount: unresolvedThreadCount);
         },
             cancellationToken) ?? ReviewStatus.Waiting;
+    }
+
+    private const string ReviewThreadsGraphQlQuery =
+        "query($owner:String!,$name:String!,$number:Int!,$after:String){" +
+        "repository(owner:$owner,name:$name){" +
+        "pullRequest(number:$number){" +
+        "reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}nodes{isResolved}}}}}";
+
+    // Hard upper bound on review-thread pages (100 threads each) so this best-effort
+    // enrichment stays bounded for pathological PRs. The loop normally stops earlier
+    // once GitHub reports no further pages.
+    private const int MaxReviewThreadPages = 20;
+
+    private async Task<int> GetUnresolvedReviewThreadCountAsync(
+        RepositoryName repositoryName,
+        int number,
+        GitHubRequestAuthorization authorization,
+        CancellationToken cancellationToken)
+    {
+        var token = authorization switch
+        {
+            GitHubRequestAuthorization.Token => (await tokenProvider.GetTokenAsync(cancellationToken))?.Value,
+            GitHubRequestAuthorization.PublicCacheToken => publicCacheIdentity.GetToken()?.Value,
+            _ => null,
+        };
+
+        if (token is null)
+        {
+            return 0;
+        }
+
+        // Paginate so PRs with more than one page of review threads are counted
+        // accurately. reviewThreads has no isResolved server-side filter and no
+        // guaranteed ordering, so capping at the first 100 could undercount to zero
+        // and wrongly mark an approved PR "Ready to merge".
+        var unresolvedCount = 0;
+        string? afterCursor = null;
+
+        try
+        {
+            for (var page = 0; page < MaxReviewThreadPages; page++)
+            {
+                var requestBody = new GitHubGraphQlRequestDto
+                {
+                    Query = ReviewThreadsGraphQlQuery,
+                    Variables = new GitHubReviewThreadsVariablesDto
+                    {
+                        Owner = repositoryName.Owner,
+                        Name = repositoryName.Name,
+                        Number = number,
+                        After = afterCursor,
+                    },
+                };
+
+                var threads = await SendReviewThreadsPageAsync(requestBody, token, cancellationToken);
+                if (threads is null)
+                {
+                    // A mid-pagination page failed; return what we counted so far rather
+                    // than 0, so a PR with already-seen unresolved threads stays blocked.
+                    break;
+                }
+
+                if (threads.Nodes is not null)
+                {
+                    unresolvedCount += threads.Nodes.Count(node => !node.IsResolved);
+                }
+
+                // Stop unless there is a genuinely new page: a missing/empty cursor, or one
+                // that does not advance, would otherwise re-count the same page and inflate
+                // the total up to MaxReviewThreadPages times.
+                var pageInfo = threads.PageInfo;
+                if (pageInfo?.HasNextPage == true
+                    && !string.IsNullOrEmpty(pageInfo.EndCursor)
+                    && pageInfo.EndCursor != afterCursor)
+                {
+                    afterCursor = pageInfo.EndCursor;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            return unresolvedCount;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsBestEffortReviewThreadFailure(ex))
+        {
+            return unresolvedCount;
+        }
+    }
+
+    // Best-effort enrichment must never fail review status: tolerate transient transport
+    // errors as well as a successful response whose body is malformed or not JSON
+    // (e.g. a schema change or an HTML error page), while still surfacing programming bugs.
+    private static bool IsBestEffortReviewThreadFailure(Exception exception) =>
+        IsTransientGitHubTransportFailure(exception)
+            || exception is JsonException or NotSupportedException;
+
+    private async Task<GitHubReviewThreadsConnectionDto?> SendReviewThreadsPageAsync(
+        GitHubGraphQlRequestDto requestBody,
+        string token,
+        CancellationToken cancellationToken)
+    {
+        await s_githubRequestThrottle.WaitAsync(cancellationToken);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "graphql")
+            {
+                Content = JsonContent.Create(
+                    requestBody,
+                    GitHubJsonSerializerContext.Default.GitHubGraphQlRequestDto),
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            using var response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                // Unresolved-thread enrichment is best-effort; never fail review status on it.
+                return null;
+            }
+
+            var payload = await response.Content.ReadFromJsonAsync(
+                GitHubJsonSerializerContext.Default.GitHubReviewThreadsResponseDto,
+                cancellationToken);
+
+            return payload?.Data?.Repository?.PullRequest?.ReviewThreads;
+        }
+        finally
+        {
+            s_githubRequestThrottle.Release();
+        }
     }
 
     public async Task<IReadOnlyList<TimelineItem>> GetPullRequestTimelineAsync(
@@ -3007,6 +3180,10 @@ sealed partial class GitHubClient(
     private static bool IsBotActor(string actor) =>
         actor.EndsWith("[bot]", StringComparison.OrdinalIgnoreCase)
         || s_knownBotActors.Contains(actor);
+
+    private static bool IsCopilotReviewer(string actor) =>
+        actor.Equals("copilot-pull-request-reviewer", StringComparison.OrdinalIgnoreCase)
+        || actor.Equals("copilot-pull-request-reviewer[bot]", StringComparison.OrdinalIgnoreCase);
 
     private static readonly HashSet<string> s_knownBotActors = new(StringComparer.OrdinalIgnoreCase)
     {
