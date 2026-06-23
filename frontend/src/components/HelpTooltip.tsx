@@ -4,16 +4,14 @@ type HelpTooltipProps = {
 
 function HelpTooltip({ label }: HelpTooltipProps) {
   return (
-    <span
+    <button
+      type="button"
       className="logic-help"
-      tabIndex={0}
-      role="note"
       aria-label={label}
-      title={label}
       data-tooltip={label}
     >
       ?
-    </span>
+    </button>
   );
 }
 

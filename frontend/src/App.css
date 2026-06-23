@@ -1351,6 +1351,8 @@ select:focus-visible {
 
 .logic-help {
   position: relative;
+  appearance: none;
+  -webkit-appearance: none;
   display: inline-grid;
   flex: 0 0 auto;
   width: 1rem;
@@ -1358,6 +1360,7 @@ select:focus-visible {
   place-items: center;
   border: 1px solid var(--border);
   border-radius: 999px;
+  padding: 0;
   color: var(--muted);
   background: var(--surface-sunken);
   cursor: help;
