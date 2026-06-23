@@ -51,6 +51,29 @@ internal sealed class InMemoryNotificationStore : INotificationStore
         }
     }
 
+    public Task<int> RemoveEndpointFromOtherUsersAsync(long keepUserId, string endpoint, CancellationToken cancellationToken)
+    {
+        var id = PushSubscriptionRecord.CreateId(endpoint);
+        var removed = 0;
+        foreach (var (userId, map) in subscriptions)
+        {
+            if (userId == keepUserId)
+            {
+                continue;
+            }
+
+            lock (map)
+            {
+                if (map.Remove(id))
+                {
+                    removed++;
+                }
+            }
+        }
+
+        return Task.FromResult(removed);
+    }
+
     public Task<NotificationPreferences> GetPreferencesAsync(long userId, CancellationToken cancellationToken) =>
         Task.FromResult(preferences.GetValueOrDefault(userId) ?? NotificationPreferences.CreateDefault());
 
@@ -146,6 +169,27 @@ public sealed class NotificationStoreTests
         Assert.True(await store.RemoveSubscriptionAsync(7, record.Endpoint, TestContext.Current.CancellationToken));
         Assert.Empty(await store.GetSubscriptionsAsync(7, TestContext.Current.CancellationToken));
         Assert.False(await store.RemoveSubscriptionAsync(7, record.Endpoint, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task RemoveEndpointFromOtherUsersClaimsSharedDeviceForCurrentUser()
+    {
+        var store = new InMemoryNotificationStore();
+        var shared = new PushSubscriptionRecord { Endpoint = "https://push.example/shared", P256dh = "p", Auth = "a" };
+        var otherEndpoint = new PushSubscriptionRecord { Endpoint = "https://push.example/other", P256dh = "p", Auth = "a" };
+
+        // User 1 (previous account) and user 2 (just signed in) both hold the same device endpoint;
+        // user 1 also has an unrelated subscription that must survive.
+        await store.UpsertSubscriptionAsync(1, shared, TestContext.Current.CancellationToken);
+        await store.UpsertSubscriptionAsync(1, otherEndpoint, TestContext.Current.CancellationToken);
+        await store.UpsertSubscriptionAsync(2, shared, TestContext.Current.CancellationToken);
+
+        var removed = await store.RemoveEndpointFromOtherUsersAsync(2, shared.Endpoint, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, removed);
+        var user1 = await store.GetSubscriptionsAsync(1, TestContext.Current.CancellationToken);
+        Assert.Equal("https://push.example/other", Assert.Single(user1).Endpoint);
+        Assert.Equal("https://push.example/shared", Assert.Single(await store.GetSubscriptionsAsync(2, TestContext.Current.CancellationToken)).Endpoint);
     }
 
     [Fact]

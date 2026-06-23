@@ -3,7 +3,6 @@ import type { ReactNode } from 'react';
 import type { AuthStatus } from '../types';
 import {
   fetchVapidPublicKey,
-  getExistingSubscription,
   getPreferences,
   isIos,
   isPushSupported,
@@ -65,21 +64,15 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
         setServerEnabled(true);
         setServerKey(key);
 
-        const existing = await getExistingSubscription();
+        // Reconcile this device's subscription with the signed-in account. Returns false when
+        // there's no subscription or when a different account previously owned this device (in
+        // which case the stale subscription is torn down and an explicit opt-in is required).
+        const synced = await syncSubscription(key, authStatus?.login ?? '');
         if (cancelled) {
           return;
         }
 
-        if (existing) {
-          try {
-            await syncSubscription(key);
-          } catch {
-            // Keep the existing subscription if the refresh fails; it may still be valid.
-          }
-          if (cancelled) {
-            return;
-          }
-
+        if (synced) {
           setSubscribed(true);
           try {
             const prefs = await getPreferences();
@@ -89,6 +82,8 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
           } catch {
             // Non-fatal: leave the default toggle state.
           }
+        } else {
+          setSubscribed(false);
         }
       } catch {
         if (!cancelled) {
@@ -101,7 +96,7 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
     return () => {
       cancelled = true;
     };
-  }, [canUsePush]);
+  }, [canUsePush, authStatus?.login]);
 
   const enable = useCallback(async () => {
     if (!serverKey) {
@@ -118,7 +113,7 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
         return;
       }
 
-      await subscribeToPush(serverKey);
+      await subscribeToPush(serverKey, authStatus?.login ?? '');
       setSubscribed(true);
       try {
         const prefs = await getPreferences();
@@ -132,7 +127,7 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
     } finally {
       setBusy(false);
     }
-  }, [serverKey]);
+  }, [serverKey, authStatus?.login]);
 
   const disable = useCallback(async () => {
     setBusy(true);

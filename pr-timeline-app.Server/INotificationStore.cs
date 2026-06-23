@@ -13,6 +13,12 @@ interface INotificationStore
 
     Task<bool> RemoveSubscriptionAsync(long userId, string endpoint, CancellationToken cancellationToken);
 
+    // Removes the given push endpoint from every user other than keepUserId. Called when a user
+    // subscribes so a shared browser endpoint belongs to exactly one (the most recent) account,
+    // preventing one user's review notifications from reaching whoever signed in next on the
+    // same device. Returns the number of stale records deleted.
+    Task<int> RemoveEndpointFromOtherUsersAsync(long keepUserId, string endpoint, CancellationToken cancellationToken);
+
     Task<NotificationPreferences> GetPreferencesAsync(long userId, CancellationToken cancellationToken);
 
     Task SavePreferencesAsync(long userId, NotificationPreferences preferences, CancellationToken cancellationToken);

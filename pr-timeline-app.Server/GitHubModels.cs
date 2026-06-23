@@ -157,9 +157,11 @@ record PullRequestSummary(
                 .Where(label => !string.IsNullOrWhiteSpace(label))
                 .Select(label => label!)
                 .ToArray(),
+            // Only individual reviewer logins — team names are intentionally excluded so a
+            // team named like a user can't produce a false-positive reviewer match (the
+            // notification detector and frontend both match the signed-in login against this).
             pullRequest.RequestedReviewers
                 .Select(reviewer => reviewer.Login)
-                .Concat(pullRequest.RequestedTeams.Select(team => team.Name))
                 .Where(reviewer => !string.IsNullOrWhiteSpace(reviewer))
                 .Select(reviewer => reviewer!)
                 .ToArray(),

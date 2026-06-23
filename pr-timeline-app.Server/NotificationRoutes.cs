@@ -92,6 +92,9 @@ public static class NotificationRoutes
             subscription.UserAgent = Truncate(context.Request.Headers.UserAgent.ToString(), 256);
             await UpsertProfileAsync(store, user, cancellationToken);
             await store.UpsertSubscriptionAsync(user.Id, subscription, cancellationToken);
+            // Claim this endpoint exclusively for the current user so a previous account on a
+            // shared device stops receiving pushes that would land on this browser.
+            await store.RemoveEndpointFromOtherUsersAsync(user.Id, subscription.Endpoint, cancellationToken);
 
             return Results.Ok(new { subscribed = true });
         });
@@ -225,6 +228,15 @@ public static class NotificationRoutes
             return false;
         }
 
+        // Reject malformed keys at the door so the detector never stores a subscription that
+        // would throw inside the encryption layer (and abort a send cycle). Web Push keys are
+        // base64url: p256dh is an uncompressed P-256 point (65 bytes), auth is 16 bytes.
+        if (!TryValidateKeyLength(dto.Keys.P256dh, 65) || !TryValidateKeyLength(dto.Keys.Auth, 16))
+        {
+            errors["keys"] = ["The p256dh and auth keys must be valid base64url values of the expected length."];
+            return false;
+        }
+
         var now = DateTimeOffset.UtcNow;
         subscription = new PushSubscriptionRecord
         {
@@ -237,6 +249,22 @@ public static class NotificationRoutes
             UpdatedAt = now
         };
         return true;
+    }
+
+    // Validates that a Web Push key is well-formed base64url decoding to exactly the expected
+    // number of bytes. Accepts unpadded base64url (what browsers send).
+    private static bool TryValidateKeyLength(string value, int expectedBytes)
+    {
+        var normalized = value.Replace('-', '+').Replace('_', '/');
+        switch (normalized.Length % 4)
+        {
+            case 2: normalized += "=="; break;
+            case 3: normalized += "="; break;
+            case 1: return false;
+        }
+
+        Span<byte> buffer = stackalloc byte[expectedBytes + 4];
+        return Convert.TryFromBase64String(normalized, buffer, out var written) && written == expectedBytes;
     }
 
     private static async Task<T?> ReadJsonAsync<T>(HttpContext context, CancellationToken cancellationToken)

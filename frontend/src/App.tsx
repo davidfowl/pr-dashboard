@@ -340,19 +340,25 @@ function App() {
     }
 
     if (
-      selectedPullRequest?.repository === detail.repository
+      selectedPullRequest
+      && selectedPullRequest.repository.toLowerCase() === detail.repository.toLowerCase()
       && selectedPullRequest.number === detail.number
     ) {
       setViewMode('details');
       return;
     }
 
+    // Repository casing can drift between the deep-link URL and the loaded data (GitHub repo
+    // names are case-insensitive), so match case-insensitively and use the canonical casing
+    // from the loaded pull request when loading its timeline.
     const pullRequest = pullRequests.find(
-      (item) => item.repository === detail.repository && item.number === detail.number,
+      (item) =>
+        item.repository.toLowerCase() === detail.repository.toLowerCase()
+        && item.number === detail.number,
     );
 
     if (pullRequest) {
-      void loadTimeline(detail.repository, pullRequest, false);
+      void loadTimeline(pullRequest.repository, pullRequest, false);
     }
     // loadTimeline closes over component state; including it would re-fire on every render.
     // The effect intentionally tracks only the hash + pull-request list + current selection.

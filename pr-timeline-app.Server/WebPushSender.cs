@@ -56,6 +56,20 @@ sealed class WebPushSender(
             logger.LogWarning("Web push delivery failed with status {Status}.", status);
             return new PushDeliveryResult(PushDeliveryOutcome.Failed, status);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Detector shutdown — let cancellation propagate rather than swallowing it.
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // A malformed subscription (bad p256dh/auth) throws Format/Crypto exceptions, and
+            // transient network faults throw HttpRequestException/timeouts. Treat any of these
+            // as a single failed delivery so one bad subscription can't abort the whole cycle.
+            // Log only the exception type — never the endpoint or keys.
+            logger.LogWarning("Web push delivery threw {ExceptionType}.", ex.GetType().Name);
+            return new PushDeliveryResult(PushDeliveryOutcome.Failed, null);
+        }
     }
 
     private PushServiceClient GetClient(WebPushOptions current)

@@ -87,6 +87,50 @@ sealed class BlobNotificationStore : INotificationStore
         }
     }
 
+    public async Task<int> RemoveEndpointFromOtherUsersAsync(
+        long keepUserId,
+        string endpoint,
+        CancellationToken cancellationToken)
+    {
+        // subscriptionId is a deterministic hash of the endpoint, so the same endpoint stored
+        // under a different user has the blob name subscriptions/{otherUserId}/{id}.json. Scan
+        // the subscriptions prefix and delete any matching blob that isn't the keep user's.
+        var subscriptionId = PushSubscriptionRecord.CreateId(endpoint);
+        var suffix = $"/{subscriptionId}.json";
+        var keepPrefix = $"subscriptions/{keepUserId}/";
+        var removed = 0;
+
+        try
+        {
+            await foreach (var blob in container.GetBlobsAsync(
+                BlobTraits.None, BlobStates.None, "subscriptions/", cancellationToken))
+            {
+                if (!blob.Name.EndsWith(suffix, StringComparison.Ordinal)
+                    || blob.Name.StartsWith(keepPrefix, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var response = await container.GetBlobClient(blob.Name)
+                    .DeleteIfExistsAsync(cancellationToken: cancellationToken);
+                if (response.Value)
+                {
+                    removed++;
+                }
+            }
+        }
+        catch (RequestFailedException ex) when (ex.Status == (int)HttpStatusCode.NotFound)
+        {
+            return removed;
+        }
+        catch (RequestFailedException ex)
+        {
+            throw CreateUnavailableException("deleting", ex);
+        }
+
+        return removed;
+    }
+
     public async Task<NotificationPreferences> GetPreferencesAsync(
         long userId,
         CancellationToken cancellationToken)

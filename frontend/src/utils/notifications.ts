@@ -148,9 +148,38 @@ function setStoredKeyId(keyId: string): void {
   }
 }
 
+// The GitHub login that enabled push on this device. Used to detect an account switch on a
+// shared browser so we can drop the previous user's subscription instead of silently
+// delivering their review notifications to whoever signed in next.
+const OWNER_STORAGE_KEY = 'pr-focus.subscription-owner';
+
+function getStoredOwner(): string | null {
+  try {
+    return window.localStorage.getItem(OWNER_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setStoredOwner(login: string): void {
+  try {
+    window.localStorage.setItem(OWNER_STORAGE_KEY, login);
+  } catch {
+    // Ignore storage failures; the server also reassigns the endpoint on subscribe.
+  }
+}
+
+function clearStoredOwner(): void {
+  try {
+    window.localStorage.removeItem(OWNER_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
 // Subscribe this browser and register the subscription with the server. Caller is responsible
 // for having already obtained Notification permission from a user gesture.
-export async function subscribeToPush(key: VapidPublicKey): Promise<PushSubscription> {
+export async function subscribeToPush(key: VapidPublicKey, owner: string): Promise<PushSubscription> {
   const registration = await getServiceWorkerRegistration();
   if (!registration) {
     throw new Error('The service worker is not ready yet. Reload and try again.');
@@ -163,31 +192,43 @@ export async function subscribeToPush(key: VapidPublicKey): Promise<PushSubscrip
 
   await postSubscription(subscription);
   setStoredKeyId(key.keyId);
+  setStoredOwner(owner);
   return subscription;
 }
 
-// Keep this device's subscription in sync with the server on load. If the server rotated its
-// VAPID key, drop and recreate the subscription; otherwise just refresh the server record
-// (idempotent upsert) so it carries the current key id. Returns true when a subscription exists.
-export async function syncSubscription(key: VapidPublicKey): Promise<boolean> {
+// Keep this device's subscription in sync with the server on load. If a different account now
+// owns this device, drop the stale subscription (the previous user must not keep receiving
+// pushes here). If the server rotated its VAPID key, recreate the subscription; otherwise just
+// refresh the server record. Returns true when a subscription exists for the current user.
+export async function syncSubscription(key: VapidPublicKey, owner: string): Promise<boolean> {
   const existing = await getExistingSubscription();
   if (!existing) {
     return false;
   }
 
+  const storedOwner = getStoredOwner();
+  if (storedOwner && storedOwner.toLowerCase() !== owner.toLowerCase()) {
+    // Account switched on this shared device: tear down the previous user's subscription and
+    // require an explicit opt-in before this account receives notifications.
+    await unsubscribeFromPush();
+    return false;
+  }
+
   if (getStoredKeyId() !== key.keyId) {
     await existing.unsubscribe().catch(() => undefined);
-    await subscribeToPush(key);
+    await subscribeToPush(key, owner);
     return true;
   }
 
-  // Same key: refresh the server-side record without disturbing the subscription.
+  // Same key and owner: refresh the server-side record without disturbing the subscription.
   await postSubscription(existing).catch(() => undefined);
   setStoredKeyId(key.keyId);
+  setStoredOwner(owner);
   return true;
 }
 
 export async function unsubscribeFromPush(): Promise<void> {
+  clearStoredOwner();
   const subscription = await getExistingSubscription();
   if (!subscription) {
     return;
