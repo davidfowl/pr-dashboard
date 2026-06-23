@@ -154,6 +154,39 @@ describe('App navigation', () => {
     await unmountApp(root);
   });
 
+  it('keeps stale-preserving live baseline rows out of the finalized rendered list', async () => {
+    window.history.replaceState(null, '', '/');
+    const liveRefresh = createDeferred<void>();
+    const fetchMock = createStalePreservingRefreshFetchMock(liveRefresh.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Cached enriched row');
+      expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    await clickButton('Refresh now');
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Live baseline row');
+      expect(document.body.textContent).not.toContain('Live enriched row');
+    });
+    expect((getButton('Refreshing...') as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => {
+      liveRefresh.resolve();
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Live enriched row');
+      expect(document.body.textContent).not.toContain('Cached enriched row');
+      expect(document.body.textContent).not.toContain('Live baseline row');
+    });
+
+    await unmountApp(root);
+  });
+
   it('clears ship snapshot status on logout before ship mode reloads', async () => {
     window.history.replaceState(null, '', '/');
     const clipboard = { writeText: vi.fn().mockResolvedValue(undefined) };
@@ -367,6 +400,97 @@ function createHardRefreshFetchMock(liveRefresh: Promise<void>) {
             checks: staleOnly.checks,
           },
         ],
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createStalePreservingRefreshFetchMock(liveRefresh: Promise<void>) {
+  const cached = createPullRequest('success', {
+    title: 'Cached enriched row',
+    updatedAt: '2026-01-01T00:00:00Z',
+  });
+  const liveBaseline = createPullRequest('unknown', {
+    title: 'Live baseline row',
+    updatedAt: '2026-01-03T00:00:00Z',
+  });
+  const liveEnriched = createPullRequest('success', {
+    title: 'Live enriched row',
+    updatedAt: '2026-01-03T00:00:00Z',
+  });
+
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/github/pulls/stream') {
+      if (url.searchParams.get('label')) {
+        return jsonLinesResponse([]);
+      }
+
+      if (url.searchParams.get('repo') !== cached.repository) {
+        return jsonLinesResponse([]);
+      }
+
+      if (url.searchParams.get('refresh') === 'true') {
+        return jsonLinesStreamResponse(
+          [
+            createStreamItem(cached, { isStale: true }),
+            createStreamItem(liveBaseline, { isStale: true }),
+          ],
+          liveRefresh,
+          [
+            createStreamItem(liveEnriched),
+            { repository: liveEnriched.repository, isComplete: true },
+          ],
+        );
+      }
+
+      return jsonLinesResponse([createStreamItem(cached)]);
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: cached.repository,
+        pullRequests: [cached, liveBaseline, liveEnriched].map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
       });
     }
 
@@ -608,6 +732,7 @@ function getButton(name: string) {
 type AppFetchMock =
   | ReturnType<typeof createFetchMock>
   | ReturnType<typeof createHardRefreshFetchMock>
+  | ReturnType<typeof createStalePreservingRefreshFetchMock>
   | ReturnType<typeof createDelayedVisibleChecksFetchMock>;
 
 function checksRequestUrls(fetchMock: AppFetchMock) {

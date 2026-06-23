@@ -5,7 +5,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
@@ -1778,6 +1782,151 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task StreamPullRequestEntriesPreserveStaleEnrichmentUntilLiveRowCompletes()
+    {
+        var listRequests = 0;
+        var client = CreateClient(path =>
+        {
+            if (TryGetPullRequestNumber(path, "/reviews?per_page=100", out _))
+            {
+                return Json("[]");
+            }
+
+            if (TryGetPullRequestNumber(path, "", out var detailsNumber))
+            {
+                return Json(PullRequestDetailsJson(detailsNumber));
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when ++listRequests == 1 => Json(
+                    PullRequestsJson([PullRequestJson(1, title: "Cached enriched", body: "Fixes #404")])),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    PullRequestsJson([PullRequestJson(1, title: "Live baseline", body: "Fixes #405")])),
+                "repos/example/repo/issues/404" => Json(
+                    """
+                    {
+                      "number": 404,
+                      "title": "Old cached issue",
+                      "html_url": "https://github.com/example/repo/issues/404",
+                      "repository_url": "https://api.github.com/repos/example/repo",
+                      "labels": []
+                    }
+                    """),
+                "repos/example/repo/issues/405" => Json(
+                    """
+                    {
+                      "number": 405,
+                      "title": "Fresh live issue",
+                      "html_url": "https://github.com/example/repo/issues/405",
+                      "repository_url": "https://api.github.com/repos/example/repo",
+                      "labels": []
+                    }
+                    """),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        await EnumerateAsync(client.StreamPullRequestEntriesAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken));
+
+        var entries = await EnumerateAsync(client.StreamPullRequestEntriesAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            true,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("Cached enriched", entries[0].PullRequest?.Title);
+        Assert.True(entries[0].IsStale);
+        Assert.Equal(404, Assert.Single(entries[0].PullRequest!.LinkedIssues).Number);
+
+        Assert.Equal("Live baseline", entries[1].PullRequest?.Title);
+        Assert.True(entries[1].IsStale);
+        Assert.True(entries[1].IsStaleRefreshOverlay);
+        Assert.Equal(404, Assert.Single(entries[1].PullRequest!.LinkedIssues).Number);
+
+        var completedLiveRow = entries.Single(entry =>
+            entry.PullRequest?.Title == "Live baseline"
+            && !entry.IsStale
+            && !entry.IsComplete);
+        Assert.Equal(405, Assert.Single(completedLiveRow.PullRequest!.LinkedIssues).Number);
+        Assert.True(entries[^1].IsComplete);
+    }
+
+    [Fact]
+    public async Task PullStreamEndpointSerializesStalePreservingLiveBaselineAsStale()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var gitHub = new FakeGitHubApi()
+            .Respond("repos/example/repo", "public-cache-token", _ => Json("""{ "visibility": "public" }"""))
+            .Respond(
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100",
+                "token-a",
+                requestCount => Json(requestCount == 1
+                    ? PullRequestsJson([PullRequestJson(1, title: "Cached enriched", body: "Fixes #404")])
+                    : PullRequestsJson([PullRequestJson(1, title: "Live baseline", body: "Fixes #405")])))
+            .Respond("repos/example/repo/pulls/1/reviews?per_page=100", "token-a", _ => Json("[]"))
+            .Respond("repos/example/repo/pulls/1", "token-a", _ => Json(PullRequestDetailsJson(1)))
+            .Respond(
+                "repos/example/repo/issues/404",
+                "token-a",
+                _ => Json(
+                    """
+                    {
+                      "number": 404,
+                      "title": "Old cached issue",
+                      "html_url": "https://github.com/example/repo/issues/404",
+                      "repository_url": "https://api.github.com/repos/example/repo",
+                      "labels": []
+                    }
+                    """))
+            .Respond(
+                "repos/example/repo/issues/405",
+                "token-a",
+                _ => Json(
+                    """
+                    {
+                      "number": 405,
+                      "title": "Fresh live issue",
+                      "html_url": "https://github.com/example/repo/issues/405",
+                      "repository_url": "https://api.github.com/repos/example/repo",
+                      "labels": []
+                    }
+                    """));
+        await using var app = await CreatePullRequestTestAppAsync(gitHub, cache, "token-a");
+        using var httpClient = CreateHttpClient(app);
+
+        using var warmupResponse = await httpClient.GetAsync(
+            "/api/github/pulls/stream?repo=example/repo&state=open",
+            TestContext.Current.CancellationToken);
+        await ReadJsonLineElementsAsync(warmupResponse);
+        using var response = await httpClient.GetAsync(
+            "/api/github/pulls/stream?repo=example/repo&state=open&refresh=true",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("application/x-ndjson", response.Content.Headers.ContentType?.MediaType);
+        var items = await ReadJsonLineElementsAsync(response);
+
+        Assert.Equal("Cached enriched", GetPullRequestTitle(items[0]));
+        Assert.True(items[0].GetProperty("isStale").GetBoolean());
+        Assert.Equal(404, GetFirstLinkedIssueNumber(items[0]));
+
+        Assert.Equal("Live baseline", GetPullRequestTitle(items[1]));
+        Assert.True(items[1].GetProperty("isStale").GetBoolean());
+        Assert.Equal(404, GetFirstLinkedIssueNumber(items[1]));
+
+        var completedLiveItem = items.Single(item =>
+            GetPullRequestTitle(item) == "Live baseline"
+            && !item.GetProperty("isStale").GetBoolean()
+            && !item.GetProperty("isComplete").GetBoolean());
+        Assert.Equal(405, GetFirstLinkedIssueNumber(completedLiveItem));
+        Assert.True(items[^1].GetProperty("isComplete").GetBoolean());
+    }
+
+    [Fact]
     public async Task StreamPullRequestsDoesNotDowngradeStaleItemsWhenRefreshFailsBeforeBatchIsEnriched()
     {
         var listRequests = 0;
@@ -3167,6 +3316,92 @@ public sealed class GitHubClientTests
         return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment());
     }
 
+    private static async Task<WebApplication> CreatePullRequestTestAppAsync(
+        FakeGitHubApi gitHub,
+        IMemoryCache cache,
+        string token)
+    {
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+        {
+            EnvironmentName = Environments.Development
+        });
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services.AddLogging();
+        builder.Services.AddHttpContextAccessor();
+        builder.Services.AddSingleton(new TestGitHubToken(token));
+        builder.Services.AddAuthentication("test")
+            .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>("test", _ => { });
+
+        var options = CreateWarmupOptions();
+        builder.Services.AddSingleton(options);
+        builder.Services.AddSingleton(cache);
+        builder.Services.AddSingleton(_ => new HttpClient(new RequestStubGitHubHandler(gitHub.SendAsync))
+        {
+            BaseAddress = new Uri("https://api.github.com/")
+        });
+        builder.Services.AddSingleton<GitHubTokenProvider>();
+        builder.Services.AddSingleton<GitHubPublicCacheIdentity>();
+        builder.Services.AddSingleton<GitHubPublicCacheStore>();
+        builder.Services.AddSingleton<GitHubResponseCache>();
+        builder.Services.AddSingleton(sp => new GitHubCacheScopeResolver(
+            sp.GetRequiredService<HttpClient>(),
+            sp.GetRequiredService<GitHubTokenProvider>(),
+            sp.GetRequiredService<GitHubPublicCacheIdentity>(),
+            sp.GetRequiredService<GitHubPublicCacheStore>(),
+            sp.GetRequiredService<IOptions<GitHubCacheWarmupOptions>>(),
+            sp.GetRequiredService<IMemoryCache>()));
+        builder.Services.AddSingleton(sp => new GitHubClient(
+            sp.GetRequiredService<HttpClient>(),
+            sp.GetRequiredService<GitHubTokenProvider>(),
+            sp.GetRequiredService<GitHubPublicCacheIdentity>(),
+            sp.GetRequiredService<GitHubPublicCacheStore>(),
+            sp.GetRequiredService<GitHubCacheScopeResolver>(),
+            sp.GetRequiredService<GitHubResponseCache>(),
+            sp.GetRequiredService<IHostEnvironment>()));
+        builder.Services.AddSingleton<GitHubPullRequestService>();
+
+        var app = builder.Build();
+        app.UseAuthentication();
+        app.MapGitHubPullRequestRoutes();
+        await app.StartAsync(TestContext.Current.CancellationToken);
+        return app;
+    }
+
+    private static HttpClient CreateHttpClient(WebApplication app)
+    {
+        var addresses = app.Services.GetRequiredService<IServer>()
+            .Features
+            .Get<IServerAddressesFeature>()?
+            .Addresses;
+        var address = Assert.Single(addresses ?? []);
+        return new HttpClient
+        {
+            BaseAddress = new Uri(address)
+        };
+    }
+
+    private static async Task<IReadOnlyList<JsonElement>> ReadJsonLineElementsAsync(HttpResponseMessage response)
+    {
+        response.EnsureSuccessStatusCode();
+        var content = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        return content
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line =>
+            {
+                using var document = JsonDocument.Parse(line);
+                return document.RootElement.Clone();
+            })
+            .ToArray();
+    }
+
+    private static string? GetPullRequestTitle(JsonElement streamItem) =>
+        streamItem.GetProperty("pullRequest") is { ValueKind: JsonValueKind.Object } pullRequest
+            ? pullRequest.GetProperty("title").GetString()
+            : null;
+
+    private static int GetFirstLinkedIssueNumber(JsonElement streamItem) =>
+        streamItem.GetProperty("pullRequest").GetProperty("linkedIssues")[0].GetProperty("number").GetInt32();
+
     private static GitHubClient CreateClientFromRequests(
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> route,
         IMemoryCache cache,
@@ -3437,6 +3672,50 @@ public sealed class GitHubClientTests
           "mergeable_state": {{JsonSerializer.Serialize(mergeableState)}}
         }
         """;
+    }
+
+    private sealed class FakeGitHubApi
+    {
+        private readonly List<FakeGitHubRoute> routes = [];
+
+        public FakeGitHubApi Respond(
+            string path,
+            string? token,
+            Func<int, HttpResponseMessage> responseFactory)
+        {
+            routes.Add(new FakeGitHubRoute(path, token, responseFactory));
+            return this;
+        }
+
+        public Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken _)
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            var token = request.Headers.Authorization?.Parameter;
+            var route = routes.FirstOrDefault(candidate =>
+                candidate.Path.Equals(path, StringComparison.Ordinal)
+                && string.Equals(candidate.Token, token, StringComparison.Ordinal));
+            if (route is null)
+            {
+                throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}");
+            }
+
+            route.RequestCount++;
+            return Task.FromResult(route.ResponseFactory(route.RequestCount));
+        }
+
+        private sealed class FakeGitHubRoute(
+            string path,
+            string? token,
+            Func<int, HttpResponseMessage> responseFactory)
+        {
+            public string Path { get; } = path;
+
+            public string? Token { get; } = token;
+
+            public Func<int, HttpResponseMessage> ResponseFactory { get; } = responseFactory;
+
+            public int RequestCount { get; set; }
+        }
     }
 
     private sealed class StubGitHubHandler(Func<string, CancellationToken, Task<HttpResponseMessage>> route) : HttpMessageHandler

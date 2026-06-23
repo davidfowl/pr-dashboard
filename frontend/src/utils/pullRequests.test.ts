@@ -30,6 +30,41 @@ describe('pull request overlays', () => {
     });
   });
 
+  it('preserves loaded checks when final replacement has a same-head unknown overlay', () => {
+    const loaded = pullRequest({ number: 1, headSha: 'abc123', checksState: 'success' });
+    const staleOnly = pullRequest({ number: 2, title: 'Stale-only row' });
+    const liveOverlay = pullRequest({
+      number: 1,
+      title: 'Live title from stream',
+      headSha: 'abc123',
+      checksState: 'unknown',
+      updatedAt: '2026-01-03T00:00:00Z',
+    });
+
+    const result = replacePullRequestsByUpdatedAt([loaded, staleOnly], [liveOverlay]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      number: 1,
+      title: 'Live title from stream',
+      checks: loaded.checks,
+    });
+  });
+
+  it('uses loaded checks from the overlay instead of preserving older loaded checks', () => {
+    const current = pullRequest({ number: 1, headSha: 'abc123', checksState: 'success' });
+    const loadedOverlay = pullRequest({
+      number: 1,
+      headSha: 'abc123',
+      checksState: 'pending',
+      updatedAt: '2026-01-03T00:00:00Z',
+    });
+
+    const result = upsertPullRequestByUpdatedAt([current], loadedOverlay);
+
+    expect(result[0].checks.state).toBe('pending');
+  });
+
   it('replaces the final list with the authoritative streamed rows', () => {
     const current = [
       pullRequest({ number: 1, updatedAt: '2026-01-01T00:00:00Z' }),
@@ -86,6 +121,32 @@ describe('pull request overlays', () => {
 
     expect(result.completed).toBe(false);
     expect(result.pullRequests.map((pullRequest) => pullRequest.title)).toEqual(['Cached row', 'Live baseline']);
+  });
+
+  it('filters stale and live stream overlays before displaying or finalizing them', async () => {
+    const staleRejected = pullRequest({ number: 1, title: 'Rejected cached row' });
+    const staleAccepted = pullRequest({ number: 2, title: 'Accepted cached row' });
+    const liveAccepted = pullRequest({
+      number: 2,
+      title: 'Accepted live row',
+      updatedAt: '2026-01-02T00:00:00Z',
+    });
+    const displayedTitles: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async () => jsonLinesResponse([
+      streamItem(staleRejected, { isStale: true }),
+      streamItem(staleAccepted, { isStale: true }),
+      streamItem(liveAccepted),
+      { repository: liveAccepted.repository, isComplete: true },
+    ])));
+
+    const result = await streamPullRequests('/api/github/pulls/stream?refresh=true', {
+      filter: (pullRequest) => pullRequest.number === 2,
+      onPullRequest: (pullRequest) => displayedTitles.push(pullRequest.title),
+    });
+
+    expect(displayedTitles).toEqual(['Accepted cached row', 'Accepted live row']);
+    expect(result.completed).toBe(true);
+    expect(result.pullRequests.map((pullRequest) => pullRequest.title)).toEqual(['Accepted live row']);
   });
 });
 
