@@ -16,7 +16,7 @@ function LoadingCardPlaceholders({
       role="status"
     >
       {Array.from({ length: count }, (_, index) => (
-        <article className="loading-card-placeholder" key={index}>
+        <article className="loading-card-placeholder" key={index} aria-hidden="true">
           <span className="loading-card-line short" />
           <span className="loading-card-line title" />
           <span className="loading-card-line medium" />

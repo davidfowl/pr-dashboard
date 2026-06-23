@@ -60,6 +60,7 @@ function TileDrilldown<TId extends string, TTile extends DrilldownTile<TId>>({
             onClick={() => onSelect(tile.id)}
             disabled={tile.placeholder}
             role="tab"
+            aria-disabled={tile.placeholder || undefined}
             aria-controls={panelId(idPrefix, tile.id)}
             aria-selected={activeId === tile.id}
           >
