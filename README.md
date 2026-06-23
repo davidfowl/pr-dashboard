@@ -25,6 +25,7 @@ By default, the dashboard watches:
 
 - `microsoft/aspire`
 - `microsoft/aspire.dev`
+- `microsoft/aspire-skills`
 - `microsoft/dcp`
 - `CommunityToolkit/Aspire`
 
