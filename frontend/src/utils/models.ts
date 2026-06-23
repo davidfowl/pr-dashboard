@@ -650,7 +650,7 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
   }
 
   const unresolvedFeedback = hasUnresolvedFeedback(pullRequest);
-  if (unresolvedFeedback && !ciFailing) {
+  if (unresolvedFeedback) {
     labels.push('Unresolved feedback');
   }
 
