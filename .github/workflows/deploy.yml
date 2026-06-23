@@ -95,3 +95,9 @@ jobs:
           Parameters__git_commit_sha: ${{ github.sha }}
           Parameters__github_client_id: ${{ vars.OAUTH_GITHUB_CLIENT_ID }}
           Parameters__github_client_secret: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
+          # Web Push (VAPID). Only the private key is sensitive; the public key is shipped to
+          # browsers and the subject/key-id are non-secret config, so those live as variables.
+          Parameters__web_push_public_key: ${{ vars.WEB_PUSH_PUBLIC_KEY }}
+          Parameters__web_push_private_key: ${{ secrets.WEB_PUSH_PRIVATE_KEY }}
+          Parameters__web_push_subject: ${{ vars.WEB_PUSH_SUBJECT }}
+          Parameters__web_push_key_id: ${{ vars.WEB_PUSH_KEY_ID }}
