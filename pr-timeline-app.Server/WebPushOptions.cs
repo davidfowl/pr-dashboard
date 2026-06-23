@@ -22,6 +22,10 @@ sealed class WebPushOptions
     // key so the client can still detect a key rotation and re-subscribe.
     public string? KeyId { get; init; }
 
+    // How often the detector scans the cached PRs for new review requests. ~5 min keeps push
+    // latency low while leaning on the warmed public cache (≈hourly) for the underlying data.
+    public int DetectionIntervalMinutes { get; init; } = 5;
+
     public bool IsConfigured =>
         Enabled
         && !string.IsNullOrWhiteSpace(PublicKey)

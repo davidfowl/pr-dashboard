@@ -10,6 +10,7 @@ public static class NotificationServiceCollectionExtensions
         services.AddHttpClient(WebPushSender.HttpClientName);
         services.AddSingleton<IPushSender, WebPushSender>();
         services.AddSingleton<NotificationTestRateLimiter>();
+        services.AddHostedService<NotificationDetectorService>();
         return services;
     }
 }

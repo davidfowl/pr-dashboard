@@ -136,16 +136,16 @@ public sealed class NotificationStoreTests
             Auth = "a"
         };
 
-        await store.UpsertSubscriptionAsync(7, record, default);
-        Assert.Single(await store.GetSubscriptionsAsync(7, default));
+        await store.UpsertSubscriptionAsync(7, record, TestContext.Current.CancellationToken);
+        Assert.Single(await store.GetSubscriptionsAsync(7, TestContext.Current.CancellationToken));
 
         // Same endpoint upserts in place rather than duplicating.
-        await store.UpsertSubscriptionAsync(7, record, default);
-        Assert.Single(await store.GetSubscriptionsAsync(7, default));
+        await store.UpsertSubscriptionAsync(7, record, TestContext.Current.CancellationToken);
+        Assert.Single(await store.GetSubscriptionsAsync(7, TestContext.Current.CancellationToken));
 
-        Assert.True(await store.RemoveSubscriptionAsync(7, record.Endpoint, default));
-        Assert.Empty(await store.GetSubscriptionsAsync(7, default));
-        Assert.False(await store.RemoveSubscriptionAsync(7, record.Endpoint, default));
+        Assert.True(await store.RemoveSubscriptionAsync(7, record.Endpoint, TestContext.Current.CancellationToken));
+        Assert.Empty(await store.GetSubscriptionsAsync(7, TestContext.Current.CancellationToken));
+        Assert.False(await store.RemoveSubscriptionAsync(7, record.Endpoint, TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public sealed class NotificationStoreTests
         {
             state.Events["seed"] = new NotificationEventState { Fingerprint = "f0" };
             return true;
-        }, default);
+        }, TestContext.Current.CancellationToken);
 
         // Force exactly one concurrent write between the read and the save.
         store.OnBeforeNextStateSave = () => store.ForceStateBump(5);
@@ -167,11 +167,11 @@ public sealed class NotificationStoreTests
             invocations++;
             state.Events["seed"] = new NotificationEventState { Fingerprint = "f1" };
             return true;
-        }, default);
+        }, TestContext.Current.CancellationToken);
 
         Assert.True(changed);
         Assert.Equal(2, invocations); // first attempt lost the race, second succeeded
-        var result = await store.GetStateAsync(5, default);
+        var result = await store.GetStateAsync(5, TestContext.Current.CancellationToken);
         Assert.Equal("f1", result.State.Events["seed"].Fingerprint);
     }
 
@@ -179,7 +179,7 @@ public sealed class NotificationStoreTests
     public async Task UpdateStateReturnsFalseWhenMutationMakesNoChange()
     {
         var store = new InMemoryNotificationStore();
-        var changed = await store.UpdateStateAsync(9, _ => false, default);
+        var changed = await store.UpdateStateAsync(9, _ => false, TestContext.Current.CancellationToken);
         Assert.False(changed);
     }
 }
