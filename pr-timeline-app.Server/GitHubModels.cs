@@ -748,6 +748,9 @@ sealed class GitHubReviewThreadsVariablesDto
 
     [JsonPropertyName("number")]
     public int Number { get; init; }
+
+    [JsonPropertyName("after")]
+    public string? After { get; init; }
 }
 
 sealed class GitHubReviewThreadsResponseDto
@@ -776,8 +779,20 @@ sealed class GitHubReviewThreadsPullRequestDto
 
 sealed class GitHubReviewThreadsConnectionDto
 {
+    [JsonPropertyName("pageInfo")]
+    public GitHubReviewThreadsPageInfoDto? PageInfo { get; init; }
+
     [JsonPropertyName("nodes")]
     public IReadOnlyList<GitHubReviewThreadNodeDto>? Nodes { get; init; }
+}
+
+sealed class GitHubReviewThreadsPageInfoDto
+{
+    [JsonPropertyName("hasNextPage")]
+    public bool HasNextPage { get; init; }
+
+    [JsonPropertyName("endCursor")]
+    public string? EndCursor { get; init; }
 }
 
 sealed class GitHubReviewThreadNodeDto

@@ -2348,6 +2348,119 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListPaginatesUnresolvedReviewThreadCountAcrossPages()
+    {
+        var graphqlCalls = 0;
+        var client = CreateClient(path =>
+        {
+            switch (path)
+            {
+                case "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100":
+                    return Json(PullRequestsJson([PullRequestJson(1, title: "Approved work")]));
+                case "repos/example/repo/pulls/1/reviews?per_page=100":
+                    return Json(
+                        """
+                        [
+                          {
+                            "user": { "login": "reviewer" },
+                            "state": "APPROVED",
+                            "submitted_at": "2026-01-02T00:00:00Z"
+                          }
+                        ]
+                        """);
+                case "graphql":
+                    graphqlCalls++;
+                    return graphqlCalls == 1
+                        ? Json(
+                            """
+                            {
+                              "data": {
+                                "repository": {
+                                  "pullRequest": {
+                                    "reviewThreads": {
+                                      "pageInfo": { "hasNextPage": true, "endCursor": "CURSOR1" },
+                                      "nodes": [
+                                        { "isResolved": false },
+                                        { "isResolved": true },
+                                        { "isResolved": false }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                            """)
+                        : Json(
+                            """
+                            {
+                              "data": {
+                                "repository": {
+                                  "pullRequest": {
+                                    "reviewThreads": {
+                                      "pageInfo": { "hasNextPage": false, "endCursor": null },
+                                      "nodes": [
+                                        { "isResolved": false },
+                                        { "isResolved": false }
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                            """);
+                case "repos/example/repo/pulls/1":
+                    return Json(PullRequestDetailsJson(1));
+                default:
+                    throw new InvalidOperationException($"Unexpected GitHub request: {path}");
+            }
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("approved", pullRequest.Review.State);
+        Assert.Equal(2, graphqlCalls);
+        Assert.Equal(4, pullRequest.Review.UnresolvedThreadCount);
+    }
+
+    [Fact]
+    public async Task PullListTreatsMalformedUnresolvedThreadPayloadAsZero()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                PullRequestsJson([PullRequestJson(1, title: "Approved work")])),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                """
+                [
+                  {
+                    "user": { "login": "reviewer" },
+                    "state": "APPROVED",
+                    "submitted_at": "2026-01-02T00:00:00Z"
+                  }
+                ]
+                """),
+            "graphql" => Json("not valid json", HttpStatusCode.OK),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("approved", pullRequest.Review.State);
+        Assert.Equal(0, pullRequest.Review.UnresolvedThreadCount);
+    }
+
+    [Fact]
     public async Task PullListSkipsUnresolvedThreadFetchWhenRepositoryNotEnrolled()
     {
         var graphqlRequested = false;

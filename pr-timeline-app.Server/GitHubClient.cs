@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.Options;
@@ -2437,10 +2438,14 @@ sealed partial class GitHubClient(
     }
 
     private const string ReviewThreadsGraphQlQuery =
-        "query($owner:String!,$name:String!,$number:Int!){" +
+        "query($owner:String!,$name:String!,$number:Int!,$after:String){" +
         "repository(owner:$owner,name:$name){" +
         "pullRequest(number:$number){" +
-        "reviewThreads(first:100){nodes{isResolved}}}}}";
+        "reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}nodes{isResolved}}}}}";
+
+    // Upper bound on review-thread pages (100 threads each) to keep this best-effort
+    // enrichment bounded even if GitHub reports hasNextPage without advancing the cursor.
+    private const int MaxReviewThreadPages = 20;
 
     private async Task<int> GetUnresolvedReviewThreadCountAsync(
         RepositoryName repositoryName,
@@ -2460,17 +2465,71 @@ sealed partial class GitHubClient(
             return 0;
         }
 
-        var requestBody = new GitHubGraphQlRequestDto
+        try
         {
-            Query = ReviewThreadsGraphQlQuery,
-            Variables = new GitHubReviewThreadsVariablesDto
-            {
-                Owner = repositoryName.Owner,
-                Name = repositoryName.Name,
-                Number = number,
-            },
-        };
+            // Paginate so PRs with more than one page of review threads are counted
+            // accurately. reviewThreads has no isResolved server-side filter and no
+            // guaranteed ordering, so capping at the first 100 could undercount to zero
+            // and wrongly mark an approved PR "Ready to merge".
+            var unresolvedCount = 0;
+            string? afterCursor = null;
 
+            for (var page = 0; page < MaxReviewThreadPages; page++)
+            {
+                var requestBody = new GitHubGraphQlRequestDto
+                {
+                    Query = ReviewThreadsGraphQlQuery,
+                    Variables = new GitHubReviewThreadsVariablesDto
+                    {
+                        Owner = repositoryName.Owner,
+                        Name = repositoryName.Name,
+                        Number = number,
+                        After = afterCursor,
+                    },
+                };
+
+                var threads = await SendReviewThreadsPageAsync(requestBody, token, cancellationToken);
+                if (threads is null)
+                {
+                    return 0;
+                }
+
+                if (threads.Nodes is not null)
+                {
+                    unresolvedCount += threads.Nodes.Count(node => !node.IsResolved);
+                }
+
+                var pageInfo = threads.PageInfo;
+                if (pageInfo?.HasNextPage == true && !string.IsNullOrEmpty(pageInfo.EndCursor))
+                {
+                    afterCursor = pageInfo.EndCursor;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            return unresolvedCount;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsBestEffortReviewThreadFailure(ex))
+        {
+            return 0;
+        }
+    }
+
+    // Best-effort enrichment must never fail review status: tolerate transient transport
+    // errors as well as a successful response whose body is malformed or not JSON
+    // (e.g. a schema change or an HTML error page), while still surfacing programming bugs.
+    private static bool IsBestEffortReviewThreadFailure(Exception exception) =>
+        IsTransientGitHubTransportFailure(exception)
+            || exception is JsonException or NotSupportedException;
+
+    private async Task<GitHubReviewThreadsConnectionDto?> SendReviewThreadsPageAsync(
+        GitHubGraphQlRequestDto requestBody,
+        string token,
+        CancellationToken cancellationToken)
+    {
         await s_githubRequestThrottle.WaitAsync(cancellationToken);
         try
         {
@@ -2489,19 +2548,14 @@ sealed partial class GitHubClient(
             if (!response.IsSuccessStatusCode)
             {
                 // Unresolved-thread enrichment is best-effort; never fail review status on it.
-                return 0;
+                return null;
             }
 
             var payload = await response.Content.ReadFromJsonAsync(
                 GitHubJsonSerializerContext.Default.GitHubReviewThreadsResponseDto,
                 cancellationToken);
 
-            var nodes = payload?.Data?.Repository?.PullRequest?.ReviewThreads?.Nodes;
-            return nodes is null ? 0 : nodes.Count(node => !node.IsResolved);
-        }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsTransientGitHubTransportFailure(ex))
-        {
-            return 0;
+            return payload?.Data?.Repository?.PullRequest?.ReviewThreads;
         }
         finally
         {

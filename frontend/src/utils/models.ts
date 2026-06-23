@@ -392,8 +392,9 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
   const bucketsByLabel = new Map(buckets.map((bucket) => [bucket.label, bucket]));
   // Unlike the other shared lists (core-team ownership, Ship week) which use
   // shouldHideFromSharedPullRequestLists, the attention board surfaces merge-conflict PRs in their
-  // own "Merge conflicts" lane (kept out of the Needs attention focus queue). Only needs-author-action
-  // PRs are hidden here.
+  // own "Merge conflicts" lane (kept out of the Needs attention focus queue). Only PRs carrying a
+  // do-not-merge label (any name in doNotMergeLabels, e.g. NO-MERGE or needs-author-action) are
+  // hidden here.
   const visibleOpenPullRequests = pullRequests.filter((item) =>
     item.state === 'open' && !hasNeedsAuthorActionLabel(item));
 
