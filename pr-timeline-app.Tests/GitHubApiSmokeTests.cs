@@ -1,13 +1,21 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 [assembly: CaptureConsole]
 
 namespace pr_timeline_app.Tests;
 
-public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<AppHostFixture>
+public sealed class GitHubApiSmokeTests(ApiSmokeTestFixture fixture) : IClassFixture<ApiSmokeTestFixture>
 {
     [Fact]
     public async Task AuthStatusReportsLoggedOutAfterLocalLogout()
@@ -110,64 +118,101 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
     }
 }
 
-public sealed class AppHostFixture : IAsyncLifetime
+public sealed class ApiSmokeTestFixture : IAsyncLifetime
 {
-    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(2);
-    private readonly SemaphoreSlim startLock = new(1, 1);
-    private DistributedApplication? app;
+    private WebApplication? app;
     private HttpClient? client;
 
     public HttpClient Client => client ?? throw new InvalidOperationException("Test app was not initialized.");
 
-    public ValueTask InitializeAsync() => ValueTask.CompletedTask;
-
-    public async Task EnsureStartedAsync(CancellationToken cancellationToken)
+    public async ValueTask InitializeAsync()
     {
-        if (client is not null)
+        var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
-            return;
-        }
+            EnvironmentName = Environments.Production
+        });
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        builder.Services.AddProblemDetails();
+        builder.Services.AddHttpContextAccessor();
+        builder.Services.AddMemoryCache();
+        builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+            .AddCookie();
 
-        await startLock.WaitAsync(cancellationToken);
-        try
+        builder.Services.AddSingleton(Options.Create(new GitHubCacheWarmupOptions()));
+        builder.Services.AddSingleton(_ => new HttpClient(new ThrowingGitHubHandler())
         {
-            if (client is not null)
-            {
-                return;
-            }
+            BaseAddress = new Uri("https://api.github.com/")
+        });
+        builder.Services.AddSingleton<GitHubTokenProvider>();
+        builder.Services.AddSingleton<GitHubPublicCacheIdentity>();
+        builder.Services.AddSingleton<GitHubPublicCacheStore>();
+        builder.Services.AddSingleton<GitHubResponseCache>();
+        builder.Services.AddSingleton(sp => new GitHubCacheScopeResolver(
+            sp.GetRequiredService<HttpClient>(),
+            sp.GetRequiredService<GitHubTokenProvider>(),
+            sp.GetRequiredService<GitHubPublicCacheIdentity>(),
+            sp.GetRequiredService<GitHubPublicCacheStore>(),
+            sp.GetRequiredService<IOptions<GitHubCacheWarmupOptions>>(),
+            sp.GetRequiredService<IMemoryCache>()));
+        builder.Services.AddSingleton(sp => new GitHubClient(
+            sp.GetRequiredService<HttpClient>(),
+            sp.GetRequiredService<GitHubTokenProvider>(),
+            sp.GetRequiredService<GitHubPublicCacheIdentity>(),
+            sp.GetRequiredService<GitHubPublicCacheStore>(),
+            sp.GetRequiredService<GitHubCacheScopeResolver>(),
+            sp.GetRequiredService<GitHubResponseCache>(),
+            sp.GetRequiredService<IHostEnvironment>()));
+        builder.Services.AddScoped<GitHubAuthService>();
+        builder.Services.AddScoped<GitHubPullRequestService>();
 
-            var appHost = await DistributedApplicationTestingBuilder
-                .CreateAsync<Projects.pr_timeline_app_AppHost>(["IncludeFrontend=false"], cancellationToken);
-
-            appHost.Services.AddLogging(logging => logging.AddSimpleConsole());
-
-            app = await appHost.BuildAsync(cancellationToken)
-                .WaitAsync(DefaultTimeout, cancellationToken);
-
-            // GitHub-hosted runners can be much slower to initialize the Aspire test host than a
-            // developer machine. Start the AppHost once per test class so startup cost and DCP
-            // initialization happen once, then give health checks a CI-sized timeout.
-            await app.StartAsync(cancellationToken)
-                .WaitAsync(DefaultTimeout, cancellationToken);
-            await app.ResourceNotifications.WaitForResourceHealthyAsync("server", cancellationToken)
-                .WaitAsync(DefaultTimeout, cancellationToken);
-
-            client = app.CreateHttpClient("server");
-        }
-        finally
+        app = builder.Build();
+        app.UseAuthentication();
+        app.MapGitHubAuthRoutes();
+        app.MapGitHubPullRequestRoutes();
+        app.MapGet("/api/app-info", (IConfiguration configuration) =>
         {
-            startLock.Release();
-        }
+            var commitSha = configuration["GIT_COMMIT_SHA"]?.Trim() is { Length: > 0 } configuredCommitSha
+                ? configuredCommitSha
+                : "local";
+            var shortCommitSha = commitSha[..Math.Min(7, commitSha.Length)];
+            var commitUrl = commitSha == "local"
+                ? null
+                : $"https://github.com/davidfowl/pr-dashboard/commit/{commitSha}";
+
+            return new { commitSha, shortCommitSha, commitUrl };
+        });
+
+        await app.StartAsync(TestContext.Current.CancellationToken);
+
+        var addresses = app.Services.GetRequiredService<IServer>()
+            .Features
+            .Get<IServerAddressesFeature>()?
+            .Addresses;
+        var address = Assert.Single(addresses ?? []);
+        client = new HttpClient
+        {
+            BaseAddress = new Uri(address)
+        };
+    }
+
+    public Task EnsureStartedAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()
     {
         client?.Dispose();
-        startLock.Dispose();
-
         if (app is not null)
         {
             await app.DisposeAsync().AsTask();
         }
+    }
+
+    private sealed class ThrowingGitHubHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException($"Unexpected GitHub request: {request.RequestUri?.PathAndQuery}");
     }
 }
