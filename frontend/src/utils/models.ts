@@ -1074,7 +1074,7 @@ function escapeRegExp(value: string) {
 
 function oldFirstSignal(pullRequest: PullRequestSummary): AttentionSignal | null {
   const activityAge = ageMs(pullRequestAgingReferenceAt(pullRequest));
-  if (activityAge >= 14 * dayMs) {
+  if (activityAge >= focusAgeLimitMs) {
     return { label: 'review debt', tone: 'danger' };
   }
 
@@ -1090,6 +1090,10 @@ function oldFirstSignal(pullRequest: PullRequestSummary): AttentionSignal | null
 }
 
 function pullRequestAgingReferenceAt(pullRequest: PullRequestSummary) {
+  if (isChecksFailing(pullRequest)) {
+    return ciActivityAt(pullRequest);
+  }
+
   if (pullRequest.review.state === 'approved') {
     return reviewActivityAt(pullRequest);
   }
@@ -1100,10 +1104,6 @@ function pullRequestAgingReferenceAt(pullRequest: PullRequestSummary) {
 
   if (pullRequest.review.state === 'reviewed' || pullRequest.review.state === 'changes_requested') {
     return reviewedActivityAt(pullRequest);
-  }
-
-  if (isChecksFailing(pullRequest)) {
-    return ciActivityAt(pullRequest);
   }
 
   return pullRequest.updatedAt;
@@ -1126,9 +1126,22 @@ function ciActivityAt(pullRequest: PullRequestSummary) {
 }
 
 function latestDate(...values: (string | null | undefined)[]) {
-  return values
-    .filter((value): value is string => value != null)
-    .sort((first, second) => new Date(second).getTime() - new Date(first).getTime())[0] ?? null;
+  let latestValue: string | null = null;
+  let latestTime = Number.NEGATIVE_INFINITY;
+
+  for (const value of values) {
+    if (value == null) {
+      continue;
+    }
+
+    const time = new Date(value).getTime();
+    if (time > latestTime) {
+      latestValue = value;
+      latestTime = time;
+    }
+  }
+
+  return latestValue;
 }
 
 function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {

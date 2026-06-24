@@ -186,4 +186,29 @@ describe('createAttentionBuckets lane routing', () => {
     expect(pullRequestFocusActivityAt(pullRequest, 'Ready to merge')).toBe('2026-06-08T21:00:00Z');
     expect(isPullRequestWithinFocusAgeLimit(pullRequest, 'Ready to merge')).toBe(false);
   });
+
+  it('uses CI activity for aging signals when failing checks are the primary action', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const pullRequest = pr({
+      number: 9,
+      createdAt: '2026-06-01T20:28:55Z',
+      updatedAt: '2026-06-22T21:00:00Z',
+      review: {
+        state: 'approved',
+        approvalCount: 1,
+        lastApprovedAt: '2026-06-08T21:00:00Z',
+        lastReviewedAt: '2026-06-08T21:00:00Z',
+      },
+      checks: {
+        state: 'failure',
+        failureCount: 1,
+        completedAt: '2026-06-22T21:00:00Z',
+      },
+    });
+
+    expect(pullRequestFocusActivityAt(pullRequest, 'CI failing')).toBe('2026-06-22T21:00:00Z');
+    expect(createAttentionSignals({ pullRequest, reason: '' }).map((signal) => signal.label)).not.toContain('review debt');
+  });
 });
