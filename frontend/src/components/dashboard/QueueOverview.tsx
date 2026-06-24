@@ -205,6 +205,7 @@ function QueueOverview({
             onSelectPullRequest={onSelectPullRequest}
             onVisiblePullRequest={onVisiblePullRequest}
             visibleChecksRefreshKey={visibleChecksRefreshKey}
+            login={login}
           />
         )}
       </section>
@@ -253,6 +254,7 @@ function QueueOverview({
           onSelectPullRequest={onSelectPullRequest}
           onVisiblePullRequest={onVisiblePullRequest}
           visibleChecksRefreshKey={visibleChecksRefreshKey}
+          login={login}
         />
       )}
     </section>

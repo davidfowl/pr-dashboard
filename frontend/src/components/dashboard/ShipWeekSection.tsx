@@ -35,6 +35,7 @@ type ShipWeekSectionProps = {
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: VisiblePullRequestHandler;
   visibleChecksRefreshKey: number;
+  login?: string;
 };
 
 type ShipModePullRequestItem = {
@@ -61,6 +62,7 @@ function ShipWeekSection({
   onSelectPullRequest,
   onVisiblePullRequest,
   visibleChecksRefreshKey,
+  login,
 }: ShipWeekSectionProps) {
   const model = useMemo(() => shipWeek ? createShipModeModel(shipWeek) : null, [shipWeek]);
   const snapshotProgress = snapshotCopying ? 'Copying PNG...' : snapshotExporting ? 'Exporting PNG...' : '';
@@ -195,6 +197,7 @@ function ShipWeekSection({
                 onSelectPullRequest={onSelectPullRequest}
                 onVisiblePullRequest={onVisiblePullRequest}
                 visibleChecksRefreshKey={visibleChecksRefreshKey}
+                login={login}
               />
             </section>
 
@@ -220,6 +223,7 @@ function ShipWeekSection({
                 onSelectPullRequest={onSelectPullRequest}
                 onVisiblePullRequest={onVisiblePullRequest}
                 visibleChecksRefreshKey={visibleChecksRefreshKey}
+                login={login}
               />
             </section>
 
@@ -246,6 +250,7 @@ function ShipWeekSection({
                   onSelectPullRequest={onSelectPullRequest}
                   onVisiblePullRequest={onVisiblePullRequest}
                   visibleChecksRefreshKey={visibleChecksRefreshKey}
+                  login={login}
                 />
               </section>
             )}
@@ -271,6 +276,7 @@ function ShipWeekSection({
               loading={sectionLoading.issues}
               hasLoaded={hasLoaded}
               emptyState={sectionLoading.issues ? 'Loading milestone issues...' : 'No open non-PR issues in this milestone.'}
+              login={login}
             />
           </section>
         </>
@@ -384,6 +390,7 @@ function ShipModePullRequestList({
   onSelectPullRequest,
   onVisiblePullRequest,
   visibleChecksRefreshKey,
+  login,
 }: {
   items: ShipModePullRequestItem[];
   loading: boolean;
@@ -392,6 +399,7 @@ function ShipModePullRequestList({
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: VisiblePullRequestHandler;
   visibleChecksRefreshKey: number;
+  login?: string;
 }) {
   if (loading && !hasLoaded && items.length === 0) {
     return <LoadingCardPlaceholders label="Loading ship mode pull request cards" />;
@@ -412,6 +420,7 @@ function ShipModePullRequestList({
       onSelectPullRequest={onSelectPullRequest}
       onVisiblePullRequest={onVisiblePullRequest}
       visibleChecksRefreshKey={visibleChecksRefreshKey}
+      login={login}
     />
   );
 }
@@ -421,11 +430,13 @@ function ShipWeekIssueList({
   loading,
   hasLoaded,
   emptyState,
+  login,
 }: {
   issues: ShipWeekIssueSummary[];
   loading: boolean;
   hasLoaded: boolean;
   emptyState: string;
+  login?: string;
 }) {
   return (
     <div className="attention-list">
@@ -437,6 +448,7 @@ function ShipWeekIssueList({
           key={`${issue.repository}#${issue.number}`}
           issue={issue}
           signalProps={{ computedSignalLimit: 5 }}
+          login={login}
         />
       ))}
     </div>

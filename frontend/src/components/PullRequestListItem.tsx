@@ -1,16 +1,27 @@
 import { useEffect, useRef } from 'react';
-import type { CheckState, LinkedIssueSummary, PullRequestSummary, VisiblePullRequestHandler } from '../types';
+import { dayMs } from '../constants';
+import type {
+  AttentionSignal,
+  CheckState,
+  LinkedIssueSummary,
+  PullRequestSummary,
+  VisiblePullRequestHandler,
+} from '../types';
 import { formatRelative } from '../utils/format';
+import { createAttentionSignals, sameLogin } from '../utils/models';
+import { rowMetadataDisplaySignals } from '../utils/rowMetadataSignals';
 import PullRequestSignalPills from './PullRequestSignalPills';
 import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
 
 type PullRequestListItemProps = {
   pullRequest: PullRequestSummary;
+  bucketLabel: string;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest?: VisiblePullRequestHandler;
   visibleChecksRefreshKey?: number;
   signalProps?: Omit<PullRequestSignalPillsProps, 'pullRequest'>;
   linkedIssues?: LinkedIssueSummary[];
+  login?: string;
 };
 
 const checkBadgeGlyphs: Record<Exclude<CheckState, 'none'>, { glyph: string; label: string }> = {
@@ -22,11 +33,13 @@ const checkBadgeGlyphs: Record<Exclude<CheckState, 'none'>, { glyph: string; lab
 
 function PullRequestListItem({
   pullRequest,
+  bucketLabel,
   onSelectPullRequest,
   onVisiblePullRequest,
   visibleChecksRefreshKey = 0,
   signalProps,
   linkedIssues = [],
+  login,
 }: PullRequestListItemProps) {
   const itemRef = useRef<HTMLElement | null>(null);
   const lastForcedVisibleChecksRefreshRef = useRef(0);
@@ -35,6 +48,12 @@ function PullRequestListItem({
     visibleChecksRefreshKey > 0
     && lastForcedVisibleChecksRefreshRef.current !== visibleChecksRefreshKey;
   const badge = checksState && checksState !== 'none' ? checkBadgeGlyphs[checksState] : null;
+  const isSignedInAuthor = login ? sameLogin(pullRequest.author, login) : false;
+  const actionMarker = rowActionMarker(bucketLabel);
+  const isReadyToMerge = actionMarker?.id === 'ready-to-merge';
+  const updatedAge = updatedAgeParts(pullRequest.updatedAt);
+  const updatedAgeTone = staleUpdatedAgeTone(pullRequest.updatedAt);
+  const metadataSignals = rowMetadataDisplaySignals(createAttentionSignals({ pullRequest, reason: '' }));
   const badgeTitle = badge
     ? `${badge.label}${pullRequest.checks?.failingChecks?.length
       ? ` · ${pullRequest.checks.failingChecks.map((failing) => failing.name).join(', ')}`
@@ -84,7 +103,16 @@ function PullRequestListItem({
   }, [checksState, onVisiblePullRequest, pullRequest, shouldForceVisibleChecksRefresh, visibleChecksRefreshKey]);
 
   return (
-    <article ref={itemRef} className="attention-pr-row">
+    <article
+      ref={itemRef}
+      className={[
+        'attention-pr-row',
+        'compact-pr-action-marker-layout content-bounded-action-marker-layout',
+        actionMarker ? `${actionMarker.id}-entry` : undefined,
+        isSignedInAuthor ? 'signed-in-user-entry signed-in-user-entry-full-bleed' : undefined,
+        isReadyToMerge ? 'ready-to-merge-entry-full-bleed' : undefined,
+      ].filter(Boolean).join(' ')}
+    >
       <span className="attention-pr-number">
         {badge && (
           <span
@@ -96,10 +124,36 @@ function PullRequestListItem({
             {badge.glyph}
           </span>
         )}
-        #{pullRequest.number}
+        <a
+          className="attention-pr-number-link"
+          href={pullRequest.htmlUrl}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Open ${pullRequest.repository} #${pullRequest.number} on GitHub`}
+        >
+          #{pullRequest.number}
+        </a>
       </span>
       <span className="attention-pr-repo" title={pullRequest.repository}>
-        {pullRequest.repository}
+        <a
+          className="attention-pr-repo-link"
+          href={repositoryUrl(pullRequest.repository)}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {pullRequest.repository}
+        </a>
+      </span>
+      <span
+        className={[
+          'attention-pr-action-marker',
+          'first-row-action-marker',
+          'row-height-neutral-action-marker',
+          actionMarker ? actionMarker.id : 'empty-action-marker',
+        ].join(' ')}
+        aria-hidden={actionMarker ? undefined : true}
+      >
+        {actionMarker && <span>{actionMarker.label}</span>}
       </span>
       <a
         className="attention-pr-title"
@@ -111,21 +165,25 @@ function PullRequestListItem({
         {pullRequest.title}
       </a>
       <span className="attention-pr-meta">
-        {pullRequest.author} · updated {formatRelative(pullRequest.updatedAt)}
+        {pullRequest.author} · updated{' '}
+        <span className={`attention-pr-updated-age${updatedAgeTone ? ` age-tone-${updatedAgeTone}` : ''}`}>
+          {updatedAge.value}
+        </span>
+        {updatedAge.suffix && ` ${updatedAge.suffix}`}
+        {metadataSignals.map((signal) => (
+          <span
+            key={signal.label}
+            className={rowMetadataClassName(signal)}
+          >
+            {` · ${signal.label}`}
+          </span>
+        ))}
+        {isSignedInAuthor && <span className="signed-in-user-badge">Yours</span>}
       </span>
       <div className="attention-pr-actions">
-        <a
-          className="attention-pr-github-link"
-          href={pullRequest.htmlUrl}
-          target="_blank"
-          rel="noreferrer"
-          aria-label={`Open ${pullRequest.repository} #${pullRequest.number} on GitHub`}
-        >
-          GitHub
-        </a>
         <button
           type="button"
-          className="attention-pr-timeline-button"
+          className="attention-pr-timeline-button attention-pr-primary-action"
           onClick={() => onSelectPullRequest(pullRequest.repository, pullRequest)}
           aria-label={`View timeline for ${pullRequest.repository} #${pullRequest.number}`}
         >
@@ -150,6 +208,47 @@ function PullRequestListItem({
       )}
     </article>
   );
+}
+
+function rowActionMarker(bucketLabel: string) {
+  switch (bucketLabel) {
+    case 'Ready to merge':
+      return { id: 'ready-to-merge', label: 'Ready to merge' };
+    case 'Needs review':
+      return { id: 'needs-review', label: 'Needs review' };
+    default:
+      return null;
+  }
+}
+
+function repositoryUrl(repository: string) {
+  return `https://github.com/${repository}`;
+}
+
+function updatedAgeParts(value: string) {
+  const relative = formatRelative(value);
+  const [age, suffix] = relative.split(' ', 2);
+  return suffix ? { value: age, suffix } : { value: relative, suffix: '' };
+}
+
+function staleUpdatedAgeTone(value: string) {
+  const age = Date.now() - new Date(value).getTime();
+  if (age >= 14 * dayMs) {
+    return 'danger';
+  }
+  if (age >= 7 * dayMs) {
+    return 'warning';
+  }
+  return null;
+}
+
+function rowMetadataTone(signal: AttentionSignal) {
+  return signal.tone === 'warning' || signal.tone === 'danger' ? signal.tone : null;
+}
+
+function rowMetadataClassName(signal: AttentionSignal) {
+  const tone = rowMetadataTone(signal);
+  return `attention-pr-row-metadata-signal${tone ? ` age-tone-${tone}` : ''}`;
 }
 
 export default PullRequestListItem;

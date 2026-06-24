@@ -1,5 +1,7 @@
 export function formatCount(count: number, singular: string, plural = `${singular}s`) {
-  return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
+  const invariantLabels = new Set(['shown']);
+  const label = count === 1 || invariantLabels.has(singular) ? singular : plural;
+  return `${count.toLocaleString()} ${label}`;
 }
 
 export function formatRelative(value: string) {

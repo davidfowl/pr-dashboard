@@ -169,6 +169,7 @@ function DashboardView({
               onSelectPullRequest={onSelectPullRequest}
               onVisiblePullRequest={onVisiblePullRequest}
               visibleChecksRefreshKey={visibleChecksRefreshKey}
+              login={login}
             />
           ) : issuesModeActive ? (
             <IssuesOverview
@@ -177,6 +178,7 @@ function DashboardView({
               hasLoaded={hasLoadedData}
               selectedBucketId={selectedBucketId}
               onSelectBucket={onSelectBucket}
+              login={login}
             />
           ) : (pullsLoading || pullRequests.length > 0) && (
             <QueueOverview

@@ -19,6 +19,7 @@ type PullRequestListProps = {
   limit?: number;
   preserveOrder?: boolean;
   visibleChecksRefreshKey?: number;
+  login?: string;
 };
 
 const recentlyUpdatedWindowMs = 2 * dayMs;
@@ -42,6 +43,7 @@ function PullRequestList({
   limit,
   preserveOrder,
   visibleChecksRefreshKey = 0,
+  login,
 }: PullRequestListProps) {
   const visibleEntries = useMemo(() => {
     const orderedEntries = [...entries];
@@ -60,15 +62,34 @@ function PullRequestList({
         <PullRequestListItem
           key={`${entry.bucketLabel}-${entry.pullRequest.repository}-${entry.pullRequest.number}`}
           pullRequest={entry.pullRequest}
+          bucketLabel={entry.bucketLabel}
           onSelectPullRequest={onSelectPullRequest}
           onVisiblePullRequest={onVisiblePullRequest}
           visibleChecksRefreshKey={visibleChecksRefreshKey}
-          signalProps={entry.signalProps}
+          signalProps={rowActionSignalProps(entry)}
           linkedIssues={entry.linkedIssues}
+          login={login}
         />
       ))}
     </div>
   );
+}
+
+const rowActionLabels = new Set(['Ready to merge', 'Needs review']);
+
+function rowActionSignalProps(entry: PullRequestListEntry): PullRequestListEntry['signalProps'] {
+  if (!rowActionLabels.has(entry.bucketLabel) || !entry.signalProps) {
+    return entry.signalProps;
+  }
+
+  return {
+    ...entry.signalProps,
+    leadingSignals: entry.signalProps.leadingSignals?.filter((signal) => signal.label !== entry.bucketLabel),
+    excludeComputedLabels: [
+      ...(entry.signalProps.excludeComputedLabels ?? []),
+      entry.bucketLabel,
+    ],
+  };
 }
 
 function comparePullRequestListEntries(first: PullRequestListEntry, second: PullRequestListEntry) {

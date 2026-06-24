@@ -12,6 +12,7 @@ import type {
   PullRequestChecksResponse,
   PullRequestStreamItem,
   PullRequestSummary,
+  ShipWeekIssueSummary,
   ShipWeekResponse,
   TimelineResponse,
 } from './types';
@@ -24,6 +25,7 @@ type ActEnvironment = typeof globalThis & {
 
 describe('App navigation', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     document.body.innerHTML = '';
     window.history.replaceState(null, '', '/');
@@ -80,6 +82,200 @@ describe('App navigation', () => {
     await unmountApp(root);
   });
 
+  it('highlights pull requests authored by the signed-in user', async () => {
+    window.history.replaceState(null, '', '/');
+    vi.stubGlobal('fetch', createFetchMock({
+      authenticated: true,
+      author: 'octocat',
+    }));
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Yours');
+    });
+    const signedInRow = document.querySelector('.attention-pr-row.signed-in-user-entry');
+    const metaBadge = signedInRow?.querySelector('.attention-pr-meta .signed-in-user-badge');
+    expect(metaBadge?.textContent).toBe('Yours');
+    expect(signedInRow?.classList.contains('signed-in-user-entry-full-bleed')).toBe(true);
+
+    await unmountApp(root);
+  });
+
+  it('renders ready-to-merge as a row marker instead of a signal pill', async () => {
+    window.history.replaceState(null, '', '/');
+    vi.stubGlobal('fetch', createFetchMock({ readyToMerge: true }));
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Ready to merge');
+    });
+    const readyRow = document.querySelector('.attention-pr-row.ready-to-merge-entry');
+    expect(readyRow).not.toBeNull();
+    expect(readyRow?.classList.contains('ready-to-merge-entry-full-bleed')).toBe(true);
+    expect(readyRow?.classList.contains('compact-pr-action-marker-layout')).toBe(true);
+    expect(readyRow?.classList.contains('content-bounded-action-marker-layout')).toBe(true);
+    const readyMarker = readyRow?.querySelector('.attention-pr-action-marker');
+    expect(readyMarker?.classList.contains('first-row-action-marker')).toBe(true);
+    expect(readyMarker?.classList.contains('row-height-neutral-action-marker')).toBe(true);
+    expect(readyMarker?.textContent).toBe('Ready to merge');
+    expect(readyRow?.querySelector('.attention-pr-signals')?.textContent).not.toContain('Ready to merge');
+
+    await unmountApp(root);
+  });
+
+  it('renders needs-review as a row marker instead of a signal pill', async () => {
+    window.history.replaceState(null, '', '/');
+    vi.stubGlobal('fetch', createFetchMock());
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Needs review');
+    });
+    const needsReviewRow = document.querySelector('.attention-pr-row.needs-review-entry');
+    expect(needsReviewRow).not.toBeNull();
+    expect(needsReviewRow?.classList.contains('compact-pr-action-marker-layout')).toBe(true);
+    expect(needsReviewRow?.querySelector('.attention-pr-action-marker')?.textContent).toBe('Needs review');
+    expect(needsReviewRow?.querySelector('.attention-pr-signals')?.textContent).not.toContain('Needs review');
+
+    await unmountApp(root);
+  });
+
+  it('reserves the action marker column on every pull request row', async () => {
+    window.history.replaceState(null, '', '/');
+    vi.stubGlobal('fetch', createFetchMock({
+      readyToMerge: true,
+      extraPullRequests: [
+        createPullRequest('none', {
+          number: 102,
+          title: 'Author response row',
+          htmlUrl: 'https://github.com/microsoft/aspire/pull/102',
+          headSha: 'def456',
+          review: {
+            state: 'changes_requested',
+            reviewerCount: 1,
+            approvalCount: 0,
+            changesRequestedCount: 1,
+            commentedReviewCount: 0,
+            unresolvedThreadCount: 0,
+            lastReviewedAt: '2026-06-24T16:00:00Z',
+          },
+        }),
+      ],
+    }));
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Author response row');
+    });
+    const rows = Array.from(document.querySelectorAll('.attention-pr-row'));
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    for (const row of rows) {
+      expect(row.classList.contains('compact-pr-action-marker-layout')).toBe(true);
+      expect(row.querySelector('.attention-pr-action-marker')).not.toBeNull();
+    }
+    const normalRow = rows.find((row) => row.textContent?.includes('Author response row'));
+    const emptyMarker = normalRow?.querySelector('.attention-pr-action-marker.empty-action-marker');
+    expect(emptyMarker).not.toBeNull();
+    expect(emptyMarker?.getAttribute('aria-hidden')).toBe('true');
+    expect(emptyMarker?.textContent).toBe('');
+
+    await unmountApp(root);
+  });
+
+  it('uses a single purple timeline action on pull request rows', async () => {
+    window.history.replaceState(null, '', '/');
+    vi.stubGlobal('fetch', createFetchMock());
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('View timeline');
+    });
+    const pullRequestRow = document.querySelector('.attention-pr-row');
+    expect(pullRequestRow?.querySelector<HTMLAnchorElement>('.attention-pr-number-link')?.href).toBe('https://github.com/microsoft/aspire/pull/101');
+    expect(pullRequestRow?.querySelector<HTMLAnchorElement>('.attention-pr-repo-link')?.href).toBe('https://github.com/microsoft/aspire');
+    expect(pullRequestRow?.querySelector('.attention-pr-github-link')).toBeNull();
+    expect(pullRequestRow?.querySelector('.attention-pr-actions')?.textContent).toBe('View timeline');
+    expect(pullRequestRow?.querySelector('.attention-pr-timeline-button')?.classList.contains('attention-pr-primary-action')).toBe(true);
+
+    await unmountApp(root);
+  });
+
+  it('colors stale updated age instead of showing redundant idle pills', async () => {
+    window.history.replaceState(null, '', '/');
+    vi.stubGlobal('fetch', createFetchMock({
+      updatedAt: '2026-05-01T00:00:00Z',
+    }));
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('updated');
+    });
+    const pullRequestRow = document.querySelector('.attention-pr-row');
+    const signalsText = pullRequestRow?.querySelector('.attention-pr-signals')?.textContent ?? '';
+    expect(signalsText).not.toContain('idle');
+    expect(signalsText).not.toContain('review debt');
+    expect(signalsText).not.toContain('open ');
+    expect(pullRequestRow?.querySelector('.attention-pr-updated-age.age-tone-danger')?.textContent).toBeTruthy();
+
+    await unmountApp(root);
+  });
+
+  it('moves approved, open, and old-first computed age semantics into row metadata', async () => {
+    window.history.replaceState(null, '', '/');
+    vi.stubGlobal('fetch', createFetchMock({
+      createdAt: daysAgo(16),
+      updatedAt: daysAgo(16),
+      extraPullRequests: [
+        createPullRequest('success', {
+          number: 102,
+          title: 'Approved metadata row',
+          htmlUrl: 'https://github.com/microsoft/aspire/pull/102',
+          createdAt: daysAgo(10),
+          updatedAt: daysAgo(1),
+          lastCommitAt: daysAgo(1),
+          headSha: 'def456',
+          review: {
+            state: 'approved',
+            reviewerCount: 1,
+            approvalCount: 1,
+            changesRequestedCount: 0,
+            commentedReviewCount: 0,
+            unresolvedThreadCount: 0,
+            lastReviewedAt: daysAgo(3),
+            lastApprovedAt: daysAgo(3),
+          },
+        }),
+        createPullRequest('none', {
+          number: 103,
+          title: 'Old first metadata row',
+          htmlUrl: 'https://github.com/microsoft/aspire/pull/103',
+          createdAt: daysAgo(8),
+          updatedAt: daysAgo(8),
+          lastCommitAt: daysAgo(8),
+          headSha: 'ghi789',
+        }),
+      ],
+    }));
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Old first metadata row');
+    });
+
+    const approvedRow = pullRequestRow('Approved metadata row');
+    expect(approvedRow.querySelector('.attention-pr-signals')?.textContent).not.toContain('approved ');
+    expect(approvedRow.querySelector('.attention-pr-meta')?.textContent).toContain('approved ');
+
+    const oldFirstRow = pullRequestRow('Old first metadata row');
+    const oldFirstSignals = oldFirstRow.querySelector('.attention-pr-signals')?.textContent ?? '';
+    const oldFirstMeta = oldFirstRow.querySelector('.attention-pr-meta')?.textContent ?? '';
+    expect(oldFirstSignals).not.toContain('old first');
+    expect(oldFirstSignals).not.toContain('open ');
+    expect(oldFirstMeta).toContain('old first');
+    expect(oldFirstMeta).toContain('open ');
+    await unmountApp(root);
+  });
+
   it('force-refreshes rows that become visible after an earlier checks refresh flush', async () => {
     window.history.replaceState(null, '', '/');
     const observers = installIntersectionObserverMock();
@@ -99,16 +295,14 @@ describe('App navigation', () => {
     });
 
     await act(async () => {
-      observers[0].trigger();
+      triggerObservedRows(observers, 1);
     });
     await waitFor(() => {
       expect(refreshChecksRequestNumbers(fetchMock).length).toBeGreaterThan(0);
     });
 
     await act(async () => {
-      for (const observer of observers.slice(1)) {
-        observer.trigger();
-      }
+      triggerObservedRows(observers);
     });
     await waitFor(() => {
       expect(new Set(refreshChecksRequestNumbers(fetchMock))).toEqual(new Set([101, 102]));
@@ -218,18 +412,66 @@ describe('App navigation', () => {
 
     await unmountApp(root);
   });
+
+  it('focuses the copied issues bucket link on direct load', async () => {
+    window.history.replaceState(null, '', '/?mode=issues#bucket/regression');
+    vi.stubGlobal('fetch', createFetchMock({
+      issues: [createIssue({
+        labels: ['regression'],
+        title: 'Regression issue',
+      })],
+    }));
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Regression issue');
+    });
+    const regressionTab = document.querySelector<HTMLButtonElement>('#issue-bucket-regression-tab');
+    expect(regressionTab?.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(regressionTab);
+    const issueRow = document.querySelector('.attention-issue-row');
+    expect(issueRow?.querySelector<HTMLAnchorElement>('.attention-issue-number-link')?.href).toBe('https://github.com/microsoft/aspire/issues/1001');
+    expect(issueRow?.querySelector<HTMLAnchorElement>('.attention-issue-repo-link')?.href).toBe('https://github.com/microsoft/aspire');
+
+    await unmountApp(root);
+  });
 });
 
 type FetchMockOptions = {
   authenticated?: boolean;
   checksState?: CheckState;
   visibleChecksState?: CheckState;
+  author?: string;
+  readyToMerge?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+  issues?: ShipWeekIssueSummary[];
+  extraPullRequests?: PullRequestSummary[];
 };
 
 function createFetchMock(options: FetchMockOptions = {}) {
   let authenticated = options.authenticated ?? false;
-  const pullRequest = createPullRequest(options.checksState ?? 'none');
-  const streamItem = createStreamItem(pullRequest);
+  const pullRequest = createPullRequest(
+    options.readyToMerge ? 'success' : (options.checksState ?? 'none'),
+    {
+      ...(options.author === undefined ? {} : { author: options.author }),
+      ...(options.createdAt === undefined ? {} : { createdAt: options.createdAt }),
+      ...(options.updatedAt === undefined ? {} : { updatedAt: options.updatedAt }),
+      ...(options.readyToMerge ? {
+        review: {
+          state: 'approved' as const,
+          reviewerCount: 1,
+          approvalCount: 1,
+          changesRequestedCount: 0,
+          commentedReviewCount: 0,
+          unresolvedThreadCount: 0,
+          lastReviewedAt: '2026-06-24T16:00:00Z',
+          lastApprovedAt: '2026-06-24T16:00:00Z',
+        },
+      } : {}),
+    },
+  );
+  const pullRequests = [pullRequest, ...(options.extraPullRequests ?? [])];
 
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(input.toString(), window.location.origin);
@@ -261,7 +503,9 @@ function createFetchMock(options: FetchMockOptions = {}) {
       }
 
       const repository = url.searchParams.get('repo');
-      return jsonLinesResponse(repository === pullRequest.repository ? [streamItem] : []);
+      return jsonLinesResponse(repository === pullRequest.repository
+        ? pullRequests.map((item) => createStreamItem(item))
+        : []);
     }
 
     if (url.pathname === '/api/github/pulls/101/timeline') {
@@ -296,13 +540,13 @@ function createFetchMock(options: FetchMockOptions = {}) {
     if (url.pathname === '/api/github/pulls/checks') {
       return jsonResponse<PullRequestChecksResponse>({
         repository: pullRequest.repository,
-        pullRequests: [
-          {
-            number: pullRequest.number,
-            headSha: pullRequest.headSha ?? '',
-            checks: checksStatus(options.visibleChecksState ?? 'success'),
-          },
-        ],
+        pullRequests: pullRequests.map((item) => ({
+          number: item.number,
+          headSha: item.headSha ?? '',
+          checks: item.number === pullRequest.number
+            ? checksStatus(options.visibleChecksState ?? 'success')
+            : item.checks,
+        })),
       });
     }
 
@@ -319,7 +563,7 @@ function createFetchMock(options: FetchMockOptions = {}) {
     if (url.pathname === '/api/github/issues/focus') {
       return jsonResponse({
         repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
-        issues: [],
+        issues: options.issues ?? [],
       });
     }
 
@@ -630,6 +874,36 @@ function createPullRequest(
   };
 }
 
+function createIssue(overrides: Partial<ShipWeekIssueSummary> = {}): ShipWeekIssueSummary {
+  const now = overrides.updatedAt ?? new Date().toISOString();
+  const number = overrides.number ?? 1001;
+  return {
+    repository: 'microsoft/aspire',
+    number,
+    title: 'Issue needs attention',
+    htmlUrl: `https://github.com/microsoft/aspire/issues/${number}`,
+    author: 'octocat',
+    labels: [],
+    assignees: [],
+    milestone: null,
+    updatedAt: now,
+    fetchedAt: now,
+    linkedOpenPullRequests: [],
+    ...overrides,
+  };
+}
+
+function pullRequestRow(title: string) {
+  const row = Array.from(document.querySelectorAll<HTMLElement>('.attention-pr-row'))
+    .find((candidate) => candidate.textContent?.includes(title));
+  expect(row).toBeTruthy();
+  return row!;
+}
+
+function daysAgo(days: number) {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
 function checksStatus(state: CheckState): PullRequestSummary['checks'] {
   return {
     state,
@@ -819,6 +1093,10 @@ function installIntersectionObserverMock() {
       return [];
     }
 
+    isObserving() {
+      return this.element !== null;
+    }
+
     trigger() {
       if (!this.element) {
         return;
@@ -835,4 +1113,19 @@ function installIntersectionObserverMock() {
 
   vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
   return observers;
+}
+
+function triggerObservedRows(observers: { isObserving: () => boolean; trigger: () => void }[], limit = Number.POSITIVE_INFINITY) {
+  let triggered = 0;
+  for (const observer of observers) {
+    if (!observer.isObserving()) {
+      continue;
+    }
+
+    observer.trigger();
+    triggered += 1;
+    if (triggered >= limit) {
+      break;
+    }
+  }
 }

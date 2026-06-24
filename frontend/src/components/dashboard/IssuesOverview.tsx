@@ -15,6 +15,7 @@ type IssuesOverviewProps = {
   hasLoaded: boolean;
   selectedBucketId: string;
   onSelectBucket: (bucketId: string) => void;
+  login?: string;
 };
 
 type IssueBucketTile = DrilldownTile & {
@@ -44,6 +45,7 @@ function IssuesOverview({
   hasLoaded,
   selectedBucketId,
   onSelectBucket,
+  login,
 }: IssuesOverviewProps) {
   const [copyStatus, setCopyStatus] = useState<CopyStatus | null>(null);
   const issueFocusItems = useMemo(
@@ -131,6 +133,7 @@ function IssuesOverview({
                 excludeComputedLabels: [item.bucketLabel],
                 computedSignalLimit: 4,
               }}
+              login={login}
             />
           ))}
         </div>
@@ -222,6 +225,7 @@ function IssuesOverview({
                           excludeComputedLabels: [issueBucket.label],
                           computedSignalLimit: 4,
                         }}
+                        login={login}
                       />
                     ))}
                   </div>
