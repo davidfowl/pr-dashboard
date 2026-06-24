@@ -1,13 +1,18 @@
-using System.Diagnostics;
 using System.Net.Http.Json;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
 
 [assembly: CaptureConsole]
 
 namespace pr_timeline_app.Tests;
 
-public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<AppHostFixture>
+public sealed class GitHubApiSmokeTests(ServerSmokeFixture fixture) : IClassFixture<ServerSmokeFixture>
 {
     [Fact]
     public async Task AuthStatusReportsLoggedOutAfterLocalLogout()
@@ -63,6 +68,43 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
         {
             Assert.Equal($"https://github.com/davidfowl/pr-dashboard/commit/{appInfo.CommitSha}", appInfo.CommitUrl);
         }
+    }
+
+    [Fact]
+    public async Task AgentSchemaReportsModeUseCases()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var client = await GetClientAsync(cancellationToken);
+        using var response = await client.GetAsync("/api/agents/schema", cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        var schema = await response.Content.ReadFromJsonAsync<AgentSchemaSmokeResponse>(cancellationToken);
+
+        Assert.NotNull(schema);
+        Assert.Equal(1, schema.SchemaVersion);
+        Assert.Contains(schema.Modes, mode =>
+            mode.Id == "review"
+            && mode.UseCases.Any(useCase => useCase.Contains("pull requests", StringComparison.OrdinalIgnoreCase))
+            && mode.ApiEndpoints.Any(endpoint => endpoint.Path.Contains("/api/github/pulls/stream", StringComparison.Ordinal)));
+        Assert.Contains(schema.Modes, mode => mode.Id == "issues");
+        Assert.Contains(schema.Modes, mode =>
+            mode.Id == "ship"
+            && mode.DashboardUrl.Contains("repos={owner}/{repo}", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AgentSchemaIsMachineDiscoverable()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var client = await GetClientAsync(cancellationToken);
+        using var response = await client.GetAsync("/.well-known/pr-dashboard-agent-schema", cancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        var schema = await response.Content.ReadFromJsonAsync<AgentSchemaSmokeResponse>(cancellationToken);
+
+        Assert.NotNull(schema);
+        Assert.Equal("pr-dashboard", schema.Name);
+        Assert.Contains(schema.Discovery.SchemaUrls, url => url == "/api/agents/schema.json");
     }
 
     [Fact]
@@ -130,16 +172,32 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
         string ShortCommitSha,
         string? CommitUrl);
 
+    private sealed record AgentSchemaSmokeResponse(
+        int SchemaVersion,
+        string Name,
+        AgentDiscoverySchemaSmokeResponse Discovery,
+        IReadOnlyList<AgentModeSchemaSmokeResponse> Modes);
+
+    private sealed record AgentModeSchemaSmokeResponse(
+        string Id,
+        string DashboardUrl,
+        IReadOnlyList<string> UseCases,
+        IReadOnlyList<AgentApiEndpointSchemaSmokeResponse> ApiEndpoints);
+
+    private sealed record AgentApiEndpointSchemaSmokeResponse(string Path);
+
+    private sealed record AgentDiscoverySchemaSmokeResponse(IReadOnlyList<string> SchemaUrls);
+
     private sealed record ValidationProblemSmokeResponse(Dictionary<string, string[]> Errors);
 }
 
-public sealed class AppHostFixture : IAsyncLifetime
+public sealed class ServerSmokeFixture : IAsyncLifetime
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(2);
     private readonly SemaphoreSlim startLock = new(1, 1);
     private readonly CancellationTokenSource startupCts = new();
     private Task? startupTask;
-    private DistributedApplication? app;
+    private WebApplication? app;
     private HttpClient? client;
 
     public HttpClient Client => client ?? throw new InvalidOperationException("Test app was not initialized.");
@@ -162,7 +220,7 @@ public sealed class AppHostFixture : IAsyncLifetime
                 return;
             }
 
-            startup = startupTask ??= StartAppHostAsync(startupCts.Token);
+            startup = startupTask ??= StartServerAsync(startupCts.Token);
         }
         finally
         {
@@ -172,31 +230,55 @@ public sealed class AppHostFixture : IAsyncLifetime
         await startup.WaitAsync(cancellationToken);
     }
 
-    private async Task StartAppHostAsync(CancellationToken cancellationToken)
+    private async Task StartServerAsync(CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(DefaultTimeout);
 
         try
         {
-            var appHost = await DistributedApplicationTestingBuilder
-                .CreateAsync<Projects.pr_timeline_app_AppHost>(["IncludeFrontend=false"], timeout.Token);
+            var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+            {
+                EnvironmentName = Environments.Development
+            });
+            builder.WebHost.UseUrls("http://127.0.0.1:0");
+            builder.Services.AddProblemDetails();
+            builder.Services.Configure<GitHubCacheWarmupOptions>(
+                builder.Configuration.GetSection(GitHubCacheWarmupOptions.SectionName));
+            builder.Services.Configure<WebPushOptions>(
+                builder.Configuration.GetSection(WebPushOptions.SectionName));
+            builder.Services.Configure<GitHubReviewPolicyOptions>(
+                builder.Configuration.GetSection(GitHubReviewPolicyOptions.SectionName));
+            builder.Services.AddGitHubApiServices(builder.Environment);
+            builder.Services.RemoveAll<IHostedService>();
 
-            appHost.Services.AddLogging(logging => logging.AddSimpleConsole());
+            app = builder.Build();
 
-            app = await appHost.BuildAsync(timeout.Token);
+            app.UseGitHubApiExceptionHandler();
+            app.UseAuthentication();
+            app.MapGitHubAuthRoutes();
+            app.MapGitHubPullRequestRoutes();
+            app.MapAgentSchemaRoutes();
+            app.MapGet("/api/app-info", (IConfiguration configuration) =>
+            {
+                var commitSha = configuration["GIT_COMMIT_SHA"]?.Trim() is { Length: > 0 } configuredCommitSha
+                    ? configuredCommitSha
+                    : "local";
+                var shortCommitSha = commitSha[..Math.Min(7, commitSha.Length)];
+                var commitUrl = commitSha == "local"
+                    ? null
+                    : $"https://github.com/davidfowl/pr-dashboard/commit/{commitSha}";
+
+                return new AppInfoResponse(commitSha, shortCommitSha, commitUrl);
+            });
 
             await app.StartAsync(timeout.Token);
-            await app.ResourceNotifications.WaitForResourceHealthyAsync("server", timeout.Token);
-
-            client = app.CreateHttpClient("server");
-            Console.WriteLine($"Aspire AppHost smoke fixture started in {stopwatch.Elapsed}.");
+            client = CreateHttpClient(app);
         }
         catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
         {
             await DisposeAppAsync();
-            throw new TimeoutException($"Aspire AppHost smoke fixture did not start within {DefaultTimeout}.", ex);
+            throw new TimeoutException($"Server smoke fixture did not start within {DefaultTimeout}.", ex);
         }
         catch
         {
@@ -220,7 +302,7 @@ public sealed class AppHostFixture : IAsyncLifetime
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                Console.WriteLine($"Ignoring Aspire AppHost startup failure during fixture disposal: {ex}");
+                Console.WriteLine($"Ignoring server smoke fixture startup failure during fixture disposal: {ex}");
             }
         }
 
@@ -237,5 +319,17 @@ public sealed class AppHostFixture : IAsyncLifetime
             await app.DisposeAsync().AsTask();
             app = null;
         }
+    }
+
+    private static HttpClient CreateHttpClient(WebApplication app)
+    {
+        var addresses = app.Services.GetRequiredService<IServer>()
+            .Features.Get<IServerAddressesFeature>()
+            ?? throw new InvalidOperationException("The test server did not publish any addresses.");
+
+        return new HttpClient
+        {
+            BaseAddress = new Uri(addresses.Addresses.Single())
+        };
     }
 }
