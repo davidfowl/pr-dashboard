@@ -4,12 +4,19 @@ import { describe, expect, it } from 'vitest';
 const css = readFileSync(new URL('./App.css', import.meta.url), 'utf8');
 
 describe('pull request row layout CSS', () => {
-  it('uses the same content-independent grid columns for every PR row variant', () => {
+  it('uses content-independent grid columns and collapses the marker column on unmarked rows', () => {
+    const unmarkedColumns = cssVariableFor('.attention-list', '--attention-pr-grid-columns');
+    const markedColumns = cssVariableFor('.attention-list', '--attention-pr-marked-grid-columns');
     const baseTemplate = gridTemplateColumnsFor('.attention-pr-row');
     const compactTemplate = gridTemplateColumnsFor('.attention-pr-row.compact-pr-action-marker-layout');
 
     expect(baseTemplate).toBe('var(--attention-pr-grid-columns)');
-    expect(compactTemplate).toBe(baseTemplate);
+    expect(compactTemplate).toBe('var(--attention-pr-marked-grid-columns)');
+    expect(unmarkedColumns).toMatch(/\b0\s+minmax\(0,\s*1fr\)/);
+    expect(markedColumns).toMatch(/\b7\.1rem\s+minmax\(0,\s*1fr\)/);
+    expect(unmarkedColumns).not.toBe(markedColumns);
+    expect(unmarkedColumns).not.toMatch(/\b(fit-content|max-content|min-content|auto)\b/);
+    expect(markedColumns).not.toMatch(/\b(fit-content|max-content|min-content|auto)\b/);
     expect(compactTemplate).not.toMatch(/\b(fit-content|max-content|min-content|auto)\b/);
   });
 
@@ -22,9 +29,12 @@ describe('pull request row layout CSS', () => {
 
 function gridTemplateColumnsFor(selector: string) {
   const body = ruleBody(selector);
-  const declaration = body.match(/grid-template-columns:\s*([^;]+);/);
-  expect(declaration, `${selector} should set grid-template-columns`).not.toBeNull();
-  return declaration?.[1].trim();
+  return cssDeclaration(body, 'grid-template-columns');
+}
+
+function cssVariableFor(selector: string, property: string) {
+  const body = ruleBody(selector);
+  return cssDeclaration(body, property);
 }
 
 function ruleBody(selector: string) {

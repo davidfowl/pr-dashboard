@@ -1817,7 +1817,8 @@ select:focus-visible {
 .attention-list {
   display: grid;
   margin-top: 0.65rem;
-  --attention-pr-grid-columns: 5rem minmax(10rem, 14rem) 7.1rem minmax(0, 1fr) 12rem 7.25rem;
+  --attention-pr-grid-columns: 5rem minmax(10rem, 14rem) 0 minmax(0, 1fr) 12rem 7.25rem;
+  --attention-pr-marked-grid-columns: 5rem minmax(10rem, 14rem) 7.1rem minmax(0, 1fr) 12rem 7.25rem;
 }
 
 .attention-pr-row,
@@ -1841,7 +1842,7 @@ select:focus-visible {
 }
 
 .attention-pr-row.compact-pr-action-marker-layout {
-  grid-template-columns: var(--attention-pr-grid-columns);
+  grid-template-columns: var(--attention-pr-marked-grid-columns);
 }
 
 .attention-issue-row {
