@@ -131,6 +131,8 @@ public sealed class GitHubClientTests
             TestContext.Current.CancellationToken));
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, exception.StatusCode);
+        Assert.Contains("No live GitHub token is available to the backend", exception.Message);
+        Assert.Contains("GITHUB_TOKEN/GH_TOKEN", exception.Message);
         Assert.Equal(("repos/example/repo", "public-cache-token"), Assert.Single(requests));
     }
 

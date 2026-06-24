@@ -384,7 +384,7 @@ sealed partial class GitHubClient(
     private static GitHubApiException CreatePublicCacheUnavailableException() =>
         new(
             HttpStatusCode.ServiceUnavailable,
-            "The shared public GitHub cache is warming or temporarily unavailable. Sign in with GitHub to load live data.");
+            "The shared public GitHub cache is empty, warming, or temporarily unavailable. No live GitHub token is available to the backend, so it cannot refresh this data on demand. In local development, run `gh auth login` and restart Aspire, or start the app with GITHUB_TOKEN/GH_TOKEN. You can also sign in with GitHub when OAuth is configured.");
 
     private static bool IsTransientGitHubFailure(Exception exception, CancellationToken cancellationToken) =>
         !cancellationToken.IsCancellationRequested
