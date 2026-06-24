@@ -44,12 +44,12 @@ static class ReviewRequestDetection
         return repository.Length > 0;
     }
 
-    // For one repository's open PRs, yield a candidate for every requested reviewer that maps
-    // to a subscribed user. Draft and non-open PRs are ignored.
+    // For one repository's open PRs, yield a candidate for every requested reviewer id that maps
+    // to a subscribed user id. Draft and non-open PRs are ignored.
     public static IEnumerable<DetectedReviewRequest> DetectForRepository(
         string repository,
         IReadOnlyList<PullRequestSummary> pullRequests,
-        IReadOnlyDictionary<string, long> subscribersByLogin)
+        IReadOnlySet<long> subscribedUserIds)
     {
         foreach (var pullRequest in pullRequests)
         {
@@ -59,12 +59,12 @@ static class ReviewRequestDetection
                 continue;
             }
 
-            foreach (var reviewer in pullRequest.RequestedReviewers)
+            foreach (var reviewerId in pullRequest.RequestedReviewerIds)
             {
-                if (subscribersByLogin.TryGetValue(reviewer, out var userId))
+                if (subscribedUserIds.Contains(reviewerId))
                 {
                     yield return new DetectedReviewRequest(
-                        userId,
+                        reviewerId,
                         repository,
                         pullRequest.Number,
                         pullRequest.Title,

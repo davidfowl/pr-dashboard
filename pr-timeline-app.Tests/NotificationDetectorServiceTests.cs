@@ -45,19 +45,16 @@ public sealed class ReviewRequestDetectionTests
     }
 
     [Fact]
-    public void DetectMatchesRequestedReviewersCaseInsensitivelyAndSkipsDraftAndClosed()
+    public void DetectMatchesRequestedReviewerIdsAndSkipsDraftAndClosed()
     {
-        var subscribers = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Octocat"] = 7
-        };
+        var subscribers = new HashSet<long> { 7 };
 
         var pullRequests = new[]
         {
-            Pr(1, "Open, requested", ["octocat", "someone-else"]),
-            Pr(2, "Draft, requested", ["octocat"], draft: true),
-            Pr(3, "Closed, requested", ["octocat"], state: "closed"),
-            Pr(4, "Open, not requested", ["nobody"])
+            Pr(1, "Open, requested", ["renamed-login", "someone-else"], [7, 99]),
+            Pr(2, "Draft, requested", ["renamed-login"], [7], draft: true),
+            Pr(3, "Closed, requested", ["renamed-login"], [7], state: "closed"),
+            Pr(4, "Open, not requested", ["nobody"], [42])
         };
 
         var detected = ReviewRequestDetection
@@ -70,10 +67,26 @@ public sealed class ReviewRequestDetectionTests
         Assert.Equal("/#pr/o%2Fr/1", detected[0].Url);
     }
 
+    [Fact]
+    public void DetectDoesNotFallBackToMutableReviewerLogin()
+    {
+        var pullRequests = new[]
+        {
+            Pr(1, "Login matches but id missing", ["octocat"], [])
+        };
+
+        var detected = ReviewRequestDetection
+            .DetectForRepository("o/r", pullRequests, new HashSet<long> { 7 })
+            .ToList();
+
+        Assert.Empty(detected);
+    }
+
     internal static PullRequestSummary Pr(
         int number,
         string title,
         string[] reviewers,
+        long[] reviewerIds,
         bool draft = false,
         string state = "open") =>
         new(
@@ -98,7 +111,10 @@ public sealed class ReviewRequestDetectionTests
             null,
             null,
             ReviewStatus.Waiting,
-            ChecksStatus.Unknown);
+            ChecksStatus.Unknown)
+        {
+            RequestedReviewerIds = reviewerIds
+        };
 }
 
 public sealed class NotificationDetectorServiceTests

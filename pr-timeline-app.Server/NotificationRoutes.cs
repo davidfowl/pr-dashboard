@@ -222,6 +222,12 @@ public static class NotificationRoutes
             return false;
         }
 
+        if (!PushSubscriptionEndpointValidator.IsAllowed(endpointUri))
+        {
+            errors["endpoint"] = ["The push endpoint must be from a supported browser push service."];
+            return false;
+        }
+
         if (string.IsNullOrWhiteSpace(dto.Keys?.P256dh) || string.IsNullOrWhiteSpace(dto.Keys?.Auth))
         {
             errors["keys"] = ["Both p256dh and auth keys are required."];

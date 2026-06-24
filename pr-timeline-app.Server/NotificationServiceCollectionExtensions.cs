@@ -7,7 +7,8 @@ public static class NotificationServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<INotificationStore, BlobNotificationStore>();
         services.AddScoped<NotificationUserResolver>();
-        services.AddHttpClient(WebPushSender.HttpClientName);
+        services.AddHttpClient(WebPushSender.HttpClientName)
+            .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
         services.AddSingleton<IPushSender, WebPushSender>();
         services.AddSingleton<NotificationTestRateLimiter>();
         services.AddHostedService<NotificationDetectorService>();

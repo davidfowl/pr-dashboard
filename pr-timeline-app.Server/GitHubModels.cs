@@ -142,8 +142,17 @@ record PullRequestSummary(
 {
     public DateTimeOffset FetchedAt { get; init; }
 
-    public static PullRequestSummary FromDto(GitHubPullRequestDto pullRequest) =>
-        new(
+    public IReadOnlyList<long> RequestedReviewerIds { get; init; } = [];
+
+    public static PullRequestSummary FromDto(GitHubPullRequestDto pullRequest)
+    {
+        var requestedReviewerLogins = pullRequest.RequestedReviewers
+            .Select(reviewer => reviewer.Login)
+            .Where(login => !string.IsNullOrWhiteSpace(login))
+            .Select(login => login!)
+            .ToArray();
+
+        return new(
             pullRequest.Number,
             pullRequest.Title ?? "",
             pullRequest.State ?? "",
@@ -157,14 +166,9 @@ record PullRequestSummary(
                 .Where(label => !string.IsNullOrWhiteSpace(label))
                 .Select(label => label!)
                 .ToArray(),
-            // Only individual reviewer logins — team names are intentionally excluded so a
-            // team named like a user can't produce a false-positive reviewer match (the
-            // notification detector and frontend both match the signed-in login against this).
-            pullRequest.RequestedReviewers
-                .Select(reviewer => reviewer.Login)
-                .Where(reviewer => !string.IsNullOrWhiteSpace(reviewer))
-                .Select(reviewer => reviewer!)
-                .ToArray(),
+            // Only individual reviewer logins — team names are intentionally excluded so
+            // frontend "for me" checks cannot false-positive on a team named like a user.
+            requestedReviewerLogins,
             pullRequest.Milestone?.Title,
             [],
             pullRequest.Commits,
@@ -179,7 +183,17 @@ record PullRequestSummary(
             pullRequest.State?.Equals("open", StringComparison.OrdinalIgnoreCase) is true
                 && !string.IsNullOrEmpty(pullRequest.Head?.Sha)
                     ? ChecksStatus.Unknown
-                    : ChecksStatus.None);
+                    : ChecksStatus.None)
+        {
+            // Notification delivery uses stable numeric user ids instead of mutable logins.
+            RequestedReviewerIds = pullRequest.RequestedReviewers
+                .Select(reviewer => reviewer.Id)
+                .Where(id => id is > 0)
+                .Select(id => id!.Value)
+                .Distinct()
+                .ToArray()
+        };
+    }
 
     private static string ResolveAuthor(GitHubPullRequestDto pullRequest)
     {

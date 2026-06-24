@@ -81,11 +81,11 @@ sealed class NotificationDetectorService(
 
         // Build the set of users who can actually receive a review_requested push: opted in
         // (have a profile), have the trigger enabled, and have at least one subscription.
-        var byLogin = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
+        var subscribedUserIds = new HashSet<long>();
         var subscriptionsByUser = new Dictionary<long, IReadOnlyList<PushSubscriptionRecord>>();
         foreach (var profile in await store.ListUserProfilesAsync(cancellationToken))
         {
-            if (string.IsNullOrWhiteSpace(profile.Login))
+            if (profile.Id <= 0)
             {
                 continue;
             }
@@ -102,12 +102,12 @@ sealed class NotificationDetectorService(
                 continue;
             }
 
-            byLogin[profile.Login] = profile.Id;
+            subscribedUserIds.Add(profile.Id);
             subscriptionsByUser[profile.Id] = subscriptions;
             stats.Subscribers++;
         }
 
-        if (byLogin.Count == 0)
+        if (subscribedUserIds.Count == 0)
         {
             return stats;
         }
@@ -140,7 +140,7 @@ sealed class NotificationDetectorService(
             scannedRepositories.Add(repository.ToString());
             stats.PullRequestsScanned += pullRequests.Count;
 
-            foreach (var candidate in ReviewRequestDetection.DetectForRepository(repository.ToString(), pullRequests, byLogin))
+            foreach (var candidate in ReviewRequestDetection.DetectForRepository(repository.ToString(), pullRequests, subscribedUserIds))
             {
                 if (!candidatesByUser.TryGetValue(candidate.UserId, out var list))
                 {
