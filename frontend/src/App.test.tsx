@@ -23,10 +23,17 @@ type ActEnvironment = typeof globalThis & {
 
 (globalThis as ActEnvironment).IS_REACT_ACT_ENVIRONMENT = true;
 
+const originalScrollIntoView = Element.prototype.scrollIntoView;
+
 describe('App navigation', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    if (originalScrollIntoView) {
+      Element.prototype.scrollIntoView = originalScrollIntoView;
+    } else {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
     document.body.innerHTML = '';
     window.history.replaceState(null, '', '/');
   });
@@ -448,6 +455,10 @@ describe('App navigation', () => {
 
   it('focuses the copied issues bucket link on direct load', async () => {
     window.history.replaceState(null, '', '/?mode=issues#bucket/regression');
+    const scrollIntoView = vi.fn(function (this: Element) {
+      return this.id;
+    });
+    Element.prototype.scrollIntoView = scrollIntoView;
     vi.stubGlobal('fetch', createFetchMock({
       issues: [createIssue({
         labels: ['regression'],
@@ -462,6 +473,9 @@ describe('App navigation', () => {
     const regressionTab = document.querySelector<HTMLButtonElement>('#issue-bucket-regression-tab');
     expect(regressionTab?.getAttribute('aria-selected')).toBe('true');
     expect(document.activeElement).toBe(regressionTab);
+    const scrolledPanelCall = scrollIntoView.mock.contexts.find((element) =>
+      element instanceof Element && element.id === 'issue-bucket-regression-panel');
+    expect(scrolledPanelCall).toBeTruthy();
     const issueRow = document.querySelector('.attention-issue-row');
     expect(issueRow?.querySelector<HTMLAnchorElement>('.attention-issue-number-link')?.href).toBe('https://github.com/microsoft/aspire/issues/1001');
     expect(issueRow?.querySelector<HTMLAnchorElement>('.attention-issue-repo-link')?.href).toBe('https://github.com/microsoft/aspire');

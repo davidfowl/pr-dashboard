@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type LoadingMetricProps<T> = {
   value: T;
@@ -20,15 +20,19 @@ function LoadingMetric<T>({
   pendingLabel = 'Count is loading',
 }: LoadingMetricProps<T>) {
   const [stableValue, setStableValue] = useState(value);
+  const hasCompletedLoadRef = useRef(!loading && hasLoaded);
 
   useEffect(() => {
     if (!loading) {
       setStableValue(value);
+      if (hasLoaded) {
+        hasCompletedLoadRef.current = true;
+      }
     }
-  }, [loading, value]);
+  }, [hasLoaded, loading, value]);
 
   const pending = loading && !hasLoaded;
-  const displayedValue = loading ? stableValue : value;
+  const displayedValue = loading && hasCompletedLoadRef.current ? stableValue : value;
   const classNames = [
     'loading-metric',
     className,

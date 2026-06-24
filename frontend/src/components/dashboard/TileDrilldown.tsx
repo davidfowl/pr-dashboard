@@ -37,6 +37,7 @@ function TileDrilldown<TId extends string, TTile extends DrilldownTile<TId>>({
   renderDetails,
 }: TileDrilldownProps<TId, TTile>) {
   const selectedButtonRef = useRef<HTMLButtonElement | null>(null);
+  const selectedPanelRef = useRef<HTMLDivElement | null>(null);
   const selectedTile = tiles.find((tile) => tile.id === selectedId) ?? tiles[0];
   const activeId = selectedTile?.id;
 
@@ -47,6 +48,7 @@ function TileDrilldown<TId extends string, TTile extends DrilldownTile<TId>>({
 
     selectedButtonRef.current?.focus({ preventScroll: true });
     selectedButtonRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    selectedPanelRef.current?.scrollIntoView?.({ block: 'start', inline: 'nearest' });
   }, [activeId, selectedId]);
 
   if (!selectedTile || !activeId) {
@@ -91,6 +93,7 @@ function TileDrilldown<TId extends string, TTile extends DrilldownTile<TId>>({
       </div>
 
       <div
+        ref={selectedPanelRef}
         id={panelId(idPrefix, activeId)}
         className="drilldown-content"
         role="tabpanel"
