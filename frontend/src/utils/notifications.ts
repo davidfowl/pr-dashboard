@@ -37,6 +37,22 @@ export function isIos(): boolean {
   return /iphone|ipad|ipod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
 }
 
+export function isAndroid(): boolean {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+
+  return /android/i.test(navigator.userAgent);
+}
+
+// True for any touch phone/tablet where "install to Home Screen" is the path to a
+// native-feeling, reliably-notifying app. Used to decide whether to surface the
+// install nudge; on Android push can also work in-browser, but we still show it
+// for consistent cross-platform messaging.
+export function isMobileDevice(): boolean {
+  return isIos() || isAndroid();
+}
+
 // iOS Safari only allows push when the PWA is installed to the Home Screen (standalone).
 export function isStandalone(): boolean {
   if (typeof window === 'undefined') {

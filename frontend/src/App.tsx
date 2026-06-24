@@ -3,6 +3,7 @@ import type { CSSProperties, FormEvent } from 'react';
 import './App.css';
 import AppInfo from './components/AppInfo';
 import AuthCard from './components/AuthCard';
+import MobileNav from './components/MobileNav';
 import NotificationSettings from './components/NotificationSettings';
 import DashboardView from './components/dashboard/DashboardView';
 import DetailView from './components/detail/DetailView';
@@ -34,6 +35,7 @@ import type {
 import { colorForText } from './utils/format';
 import { readJson } from './utils/http';
 import { beginAbortableLoad } from './utils/loadLifecycle';
+import { useMediaQuery } from './utils/useMediaQuery';
 import {
   streamPullRequests,
   replacePullRequestsByUpdatedAt,
@@ -106,6 +108,7 @@ function App() {
   const [activeRepo, setActiveRepo] = useState(defaultRepos[0]);
   const [state, setState] = useState<PullState>('open');
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const isMobileNav = useMediaQuery('(max-width: 720px)');
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => parseDashboardMode(window.location.search));
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
   const [issues, setIssues] = useState<ShipWeekIssueSummary[]>([]);
@@ -1105,6 +1108,15 @@ function App() {
 
   return (
     <div className="app-shell" style={{ '--repo-accent': repoAccent } as CSSProperties}>
+      <MobileNav
+        dashboardMode={dashboardMode}
+        authStatus={authStatus}
+        loginLoading={loginLoading}
+        currentMilestoneLabel={currentMilestoneLabel}
+        onSwitchMode={switchDashboardMode}
+        onLogin={() => void startGitHubLogin()}
+        onLogout={() => void logoutGitHub()}
+      />
       <header className="hero">
         <div>
           <div className="hero-brand">
@@ -1152,15 +1164,17 @@ function App() {
           </p>
         </div>
 
-        <div className="hero-actions">
-          <NotificationSettings authStatus={authStatus} />
-          <AuthCard
-            authStatus={authStatus}
-            loginLoading={loginLoading}
-            onLogin={() => void startGitHubLogin()}
-            onLogout={() => void logoutGitHub()}
-          />
-        </div>
+        {!isMobileNav && (
+          <div className="hero-actions">
+            <NotificationSettings authStatus={authStatus} />
+            <AuthCard
+              authStatus={authStatus}
+              loginLoading={loginLoading}
+              onLogin={() => void startGitHubLogin()}
+              onLogout={() => void logoutGitHub()}
+            />
+          </div>
+        )}
       </header>
 
       <main className={`workspace ${viewMode}`}>
