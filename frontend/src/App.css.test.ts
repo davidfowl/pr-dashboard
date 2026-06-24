@@ -12,6 +12,12 @@ describe('pull request row layout CSS', () => {
     expect(compactTemplate).toBe(baseTemplate);
     expect(compactTemplate).not.toMatch(/\b(fit-content|max-content|min-content|auto)\b/);
   });
+
+  it('vertically centers action markers with the row text', () => {
+    const markerBody = ruleBody('.attention-pr-action-marker');
+
+    expect(cssDeclaration(markerBody, 'align-self')).toBe('center');
+  });
 });
 
 function gridTemplateColumnsFor(selector: string) {
@@ -26,4 +32,11 @@ function ruleBody(selector: string) {
   const rule = css.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`));
   expect(rule, `${selector} rule should exist`).not.toBeNull();
   return rule?.[1] ?? '';
+}
+
+function cssDeclaration(body: string, property: string) {
+  const escapedProperty = property.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const declaration = body.match(new RegExp(`${escapedProperty}:\\s*([^;]+);`));
+  expect(declaration, `${property} declaration should exist`).not.toBeNull();
+  return declaration?.[1].trim();
 }
