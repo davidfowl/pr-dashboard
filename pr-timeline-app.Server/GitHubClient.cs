@@ -23,6 +23,16 @@ sealed partial class GitHubClient(
     private const int PullRequestPageSize = 100;
     private const int PullRequestStreamBatchSize = 20;
     private const int MaxLinkedIssuesPerPullRequest = 10;
+    private const int FocusIssueGraphQlBatchSize = 20;
+    private const int FocusIssueCrossReferenceEventLimit = 20;
+    private static readonly string FocusIssueLinkedPullRequestsGraphQlQuery =
+        "query($ids:[ID!]!){" +
+        "nodes(ids:$ids){" +
+        "__typename " +
+        "... on Issue{" +
+        "number " +
+        "timelineItems(last:" + FocusIssueCrossReferenceEventLimit + ",itemTypes:[CROSS_REFERENCED_EVENT]){" +
+        "nodes{... on CrossReferencedEvent{source{__typename ... on PullRequest{number updatedAt state isDraft repository{nameWithOwner}}}}}}}}}";
     internal const int MaxConcurrentGitHubRequests = 8;
     private const int MaxConcurrentChecksFetches = 4;
     private const string RegressionLabelMarker = "regression";
@@ -957,17 +967,34 @@ sealed partial class GitHubClient(
 
             await Task.WhenAll(regressionIssuesTask, ctiTeamIssuesTask);
 
-            var fetchedAt = DateTimeOffset.UtcNow;
-            return regressionIssuesTask.Result
+            // "Focus issues" are the actual issue cards shown in the issues dashboard. The
+            // source searches can overlap and GitHub's issues APIs can return PRs, so normalize
+            // them to a unique set of non-PR issues before applying linked-PR activity.
+            var focusIssues = regressionIssuesTask.Result
                 .Concat(ctiTeamIssuesTask.Result)
                 .Where(issue => issue.PullRequest is null)
                 .GroupBy(issue => issue.Number)
                 .Select(group => group.First())
                 .OrderByDescending(issue => issue.UpdatedAt)
-                .Select(issue => ShipWeekIssueSummary.FromDto(repositoryName, issue, []) with
+                .ToArray();
+            var linkedOpenPullRequestsByIssue = await GetLinkedOpenPullRequestsByFocusIssueAsync(
+                repositoryName,
+                focusIssues,
+                scope,
+                cancellationToken);
+            var fetchedAt = DateTimeOffset.UtcNow;
+            return focusIssues
+                .Select(issue =>
                 {
-                    FetchedAt = fetchedAt
+                    var linkedOpenPullRequests = linkedOpenPullRequestsByIssue.TryGetValue(issue.Number, out var linked)
+                        ? linked
+                        : [];
+                    return ShipWeekIssueSummary.FromDto(repositoryName, issue, linkedOpenPullRequests) with
+                    {
+                        FetchedAt = fetchedAt
+                    };
                 })
+                .OrderByDescending(issue => issue.UpdatedAt)
                 .ToArray();
         },
             cancellationToken,
@@ -1633,6 +1660,111 @@ sealed partial class GitHubClient(
             .ToArray();
     }
 
+    private async Task<IReadOnlyDictionary<int, IReadOnlyList<LinkedOpenPullRequestSummary>>> GetLinkedOpenPullRequestsByFocusIssueAsync(
+        RepositoryName repositoryName,
+        IReadOnlyList<GitHubIssueDto> focusIssues,
+        GitHubCacheScope scope,
+        CancellationToken cancellationToken)
+    {
+        var focusIssueNodeIds = focusIssues
+            .Select(issue => issue.NodeId)
+            .Where(nodeId => !string.IsNullOrWhiteSpace(nodeId))
+            .Select(nodeId => nodeId!)
+            .Distinct(StringComparer.Ordinal)
+            .Order()
+            .ToArray();
+        if (focusIssueNodeIds.Length == 0)
+        {
+            return new Dictionary<int, IReadOnlyList<LinkedOpenPullRequestSummary>>();
+        }
+
+        var token = await GetGraphQlTokenAsync(scope.RequestAuthorization, cancellationToken);
+        if (token is null)
+        {
+            return new Dictionary<int, IReadOnlyList<LinkedOpenPullRequestSummary>>();
+        }
+
+        var linkedOpenPullRequestsByIssue = new Dictionary<int, List<LinkedOpenPullRequestSummary>>();
+        // Keep this proportional to the rendered focus issues: one GraphQL batch per 20 issues,
+        // reading only each issue's recent cross-reference events instead of scanning repo PRs.
+        foreach (var nodeIdBatch in focusIssueNodeIds.Chunk(FocusIssueGraphQlBatchSize))
+        {
+            try
+            {
+                var issueNodes = await SendLinkedPullRequestsBatchAsync(
+                    nodeIdBatch,
+                    token,
+                    cancellationToken);
+                if (issueNodes is { Count: > 0 })
+                {
+                    AddLinkedOpenPullRequestsByFocusIssue(
+                        repositoryName,
+                        issueNodes,
+                        linkedOpenPullRequestsByIssue);
+                }
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsBestEffortGraphQlFailure(ex))
+            {
+                continue;
+            }
+        }
+
+        return NormalizeLinkedOpenPullRequestsByIssue(linkedOpenPullRequestsByIssue);
+    }
+
+    private async Task<IReadOnlyList<GitHubLinkedPullRequestsIssueNodeDto?>> SendLinkedPullRequestsBatchAsync(
+        IReadOnlyList<string> nodeIds,
+        string token,
+        CancellationToken cancellationToken)
+    {
+        await s_githubRequestThrottle.WaitAsync(cancellationToken);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "graphql")
+            {
+                Content = JsonContent.Create(
+                    new GitHubLinkedPullRequestsGraphQlRequestDto
+                    {
+                        Query = FocusIssueLinkedPullRequestsGraphQlQuery,
+                        Variables = new GitHubLinkedPullRequestsVariablesDto
+                        {
+                            Ids = nodeIds
+                        }
+                    },
+                    GitHubJsonSerializerContext.Default.GitHubLinkedPullRequestsGraphQlRequestDto),
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            using var response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                    return [];
+            }
+
+            var payload = await response.Content.ReadFromJsonAsync(
+                GitHubJsonSerializerContext.Default.GitHubLinkedPullRequestsResponseDto,
+                cancellationToken);
+                return payload?.Data?.Nodes ?? [];
+        }
+        finally
+        {
+            s_githubRequestThrottle.Release();
+        }
+    }
+
+    private async Task<string?> GetGraphQlTokenAsync(
+        GitHubRequestAuthorization authorization,
+        CancellationToken cancellationToken) =>
+        authorization switch
+        {
+            GitHubRequestAuthorization.Token => (await tokenProvider.GetTokenAsync(cancellationToken))?.Value,
+            GitHubRequestAuthorization.PublicCacheToken => publicCacheIdentity.GetToken()?.Value,
+            _ => null,
+        };
+
     private async Task<IReadOnlyList<string>> GetLabelNamesContainingAsync(
         RepositoryName repositoryName,
         string labelMarker,
@@ -1816,13 +1948,67 @@ sealed partial class GitHubClient(
         }
     }
 
-    private static IReadOnlyDictionary<int, IReadOnlyList<int>> CreateLinkedOpenPullRequestsByIssue(
+    private static void AddLinkedOpenPullRequestsByFocusIssue(
+        RepositoryName repositoryName,
+        IReadOnlyList<GitHubLinkedPullRequestsIssueNodeDto?> issueNodes,
+        IDictionary<int, List<LinkedOpenPullRequestSummary>> linkedOpenPullRequestsByIssue)
+    {
+        foreach (var issueNode in issueNodes)
+        {
+            if (issueNode is null
+                || !string.Equals(issueNode.TypeName, "Issue", StringComparison.Ordinal)
+                || issueNode.TimelineItems?.Nodes is not { Count: > 0 } nodes)
+            {
+                continue;
+            }
+
+            foreach (var node in nodes)
+            {
+                if (!TryCreateLinkedOpenPullRequestFromGraphQl(repositoryName, node.Source, out var pullRequest))
+                {
+                    continue;
+                }
+
+                AddLinkedOpenPullRequest(
+                    linkedOpenPullRequestsByIssue,
+                    issueNode.Number,
+                    pullRequest.Number,
+                    pullRequest.UpdatedAt);
+            }
+        }
+    }
+
+    private static bool TryCreateLinkedOpenPullRequestFromGraphQl(
+        RepositoryName repositoryName,
+        GitHubLinkedPullRequestsSourceDto? source,
+        out LinkedOpenPullRequestSummary pullRequest)
+    {
+        pullRequest = default;
+        if (source is null
+            || !string.Equals(source.TypeName, "PullRequest", StringComparison.Ordinal)
+            || !string.Equals(source.State, "OPEN", StringComparison.Ordinal)
+            || source.IsDraft
+            || source.UpdatedAt is not { } updatedAt)
+        {
+            return false;
+        }
+
+        if (!RepositoryMatches(source.Repository?.NameWithOwner ?? "", repositoryName))
+        {
+            return false;
+        }
+
+        pullRequest = new LinkedOpenPullRequestSummary(source.Number, updatedAt);
+        return true;
+    }
+
+    private static IReadOnlyDictionary<int, IReadOnlyList<LinkedOpenPullRequestSummary>> CreateLinkedOpenPullRequestsByIssue(
         RepositoryName repositoryName,
         string milestoneTitle,
         IReadOnlyList<PullRequestSummary> pullRequests,
         IReadOnlySet<int> milestoneIssueNumbers)
     {
-        var linkedOpenPullRequestsByIssue = new Dictionary<int, List<int>>();
+        var linkedOpenPullRequestsByIssue = new Dictionary<int, List<LinkedOpenPullRequestSummary>>();
 
         foreach (var pullRequest in pullRequests)
         {
@@ -1835,21 +2021,41 @@ sealed partial class GitHubClient(
                     continue;
                 }
 
-                if (!linkedOpenPullRequestsByIssue.TryGetValue(issue.Number, out var linkedPullRequests))
-                {
-                    linkedPullRequests = [];
-                    linkedOpenPullRequestsByIssue[issue.Number] = linkedPullRequests;
-                }
-
-                linkedPullRequests.Add(pullRequest.Number);
+                AddLinkedOpenPullRequest(
+                    linkedOpenPullRequestsByIssue,
+                    issue.Number,
+                    pullRequest.Number,
+                    pullRequest.UpdatedAt);
             }
         }
 
+        return NormalizeLinkedOpenPullRequestsByIssue(linkedOpenPullRequestsByIssue);
+    }
+
+    private static void AddLinkedOpenPullRequest(
+        IDictionary<int, List<LinkedOpenPullRequestSummary>> linkedOpenPullRequestsByIssue,
+        int issueNumber,
+        int pullRequestNumber,
+        DateTimeOffset pullRequestUpdatedAt)
+    {
+        if (!linkedOpenPullRequestsByIssue.TryGetValue(issueNumber, out var linkedPullRequests))
+        {
+            linkedPullRequests = [];
+            linkedOpenPullRequestsByIssue[issueNumber] = linkedPullRequests;
+        }
+
+        linkedPullRequests.Add(new LinkedOpenPullRequestSummary(pullRequestNumber, pullRequestUpdatedAt));
+    }
+
+    private static IReadOnlyDictionary<int, IReadOnlyList<LinkedOpenPullRequestSummary>> NormalizeLinkedOpenPullRequestsByIssue(
+        IReadOnlyDictionary<int, List<LinkedOpenPullRequestSummary>> linkedOpenPullRequestsByIssue)
+    {
         return linkedOpenPullRequestsByIssue.ToDictionary(
             pair => pair.Key,
-            pair => (IReadOnlyList<int>)pair.Value
-                .Distinct()
-                .OrderBy(number => number)
+            pair => (IReadOnlyList<LinkedOpenPullRequestSummary>)pair.Value
+                .GroupBy(pullRequest => pullRequest.Number)
+                .Select(group => group.OrderByDescending(pullRequest => pullRequest.UpdatedAt).First())
+                .OrderBy(pullRequest => pullRequest.Number)
                 .ToArray());
     }
 
@@ -2454,13 +2660,7 @@ sealed partial class GitHubClient(
         GitHubRequestAuthorization authorization,
         CancellationToken cancellationToken)
     {
-        var token = authorization switch
-        {
-            GitHubRequestAuthorization.Token => (await tokenProvider.GetTokenAsync(cancellationToken))?.Value,
-            GitHubRequestAuthorization.PublicCacheToken => publicCacheIdentity.GetToken()?.Value,
-            _ => null,
-        };
-
+        var token = await GetGraphQlTokenAsync(authorization, cancellationToken);
         if (token is null)
         {
             return 0;
@@ -2530,6 +2730,9 @@ sealed partial class GitHubClient(
     // errors as well as a successful response whose body is malformed or not JSON
     // (e.g. a schema change or an HTML error page), while still surfacing programming bugs.
     private static bool IsBestEffortReviewThreadFailure(Exception exception) =>
+        IsBestEffortGraphQlFailure(exception);
+
+    private static bool IsBestEffortGraphQlFailure(Exception exception) =>
         IsTransientGitHubTransportFailure(exception)
             || exception is JsonException or NotSupportedException;
 

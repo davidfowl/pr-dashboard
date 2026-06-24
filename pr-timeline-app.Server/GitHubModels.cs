@@ -77,6 +77,8 @@ record ShipWeekReleaseScope(
     IReadOnlyList<int> MilestoneIssueNumbers,
     bool DocsFromCode = false);
 
+readonly record struct LinkedOpenPullRequestSummary(int Number, DateTimeOffset UpdatedAt);
+
 record ShipWeekIssueSummary(
     string Repository,
     int Number,
@@ -94,7 +96,7 @@ record ShipWeekIssueSummary(
     public static ShipWeekIssueSummary FromDto(
         RepositoryName repositoryName,
         GitHubIssueDto issue,
-        IReadOnlyList<int> linkedOpenPullRequests) =>
+        IReadOnlyList<LinkedOpenPullRequestSummary> linkedOpenPullRequests) =>
         new(
             repositoryName.ToString(),
             issue.Number,
@@ -112,8 +114,24 @@ record ShipWeekIssueSummary(
                 .Select(assignee => assignee!)
                 .ToArray(),
             issue.Milestone?.Title,
-            issue.UpdatedAt,
-            linkedOpenPullRequests);
+            ResolveUpdatedAt(issue.UpdatedAt, linkedOpenPullRequests),
+            linkedOpenPullRequests.Select(pullRequest => pullRequest.Number).ToArray());
+
+    private static DateTimeOffset ResolveUpdatedAt(
+        DateTimeOffset issueUpdatedAt,
+        IReadOnlyList<LinkedOpenPullRequestSummary> linkedOpenPullRequests)
+    {
+        var updatedAt = issueUpdatedAt;
+        foreach (var pullRequest in linkedOpenPullRequests)
+        {
+            if (pullRequest.UpdatedAt > updatedAt)
+            {
+                updatedAt = pullRequest.UpdatedAt;
+            }
+        }
+
+        return updatedAt;
+    }
 }
 
 record PullRequestSummary(
@@ -567,7 +585,9 @@ record TimelineItem(
 [JsonSerializable(typeof(GitHubPullRequestDto[]))]
 [JsonSerializable(typeof(GitHubReviewDto[]))]
 [JsonSerializable(typeof(GitHubGraphQlRequestDto))]
+[JsonSerializable(typeof(GitHubLinkedPullRequestsGraphQlRequestDto))]
 [JsonSerializable(typeof(GitHubReviewThreadsResponseDto))]
+[JsonSerializable(typeof(GitHubLinkedPullRequestsResponseDto))]
 [JsonSerializable(typeof(GitHubRepositoryDto))]
 [JsonSerializable(typeof(GitHubTimelineItemDto[]))]
 partial class GitHubJsonSerializerContext : JsonSerializerContext;
@@ -623,6 +643,7 @@ sealed class GitHubIssuePullRequestDto
 sealed class GitHubIssueDto
 {
     public int Number { get; init; }
+    public string? NodeId { get; init; }
     public string? Title { get; init; }
     public string? State { get; init; }
     public GitHubActorDto? User { get; init; }
@@ -799,6 +820,84 @@ sealed class GitHubReviewThreadNodeDto
 {
     [JsonPropertyName("isResolved")]
     public bool IsResolved { get; init; }
+}
+
+sealed class GitHubLinkedPullRequestsGraphQlRequestDto
+{
+    [JsonPropertyName("query")]
+    public string? Query { get; init; }
+
+    [JsonPropertyName("variables")]
+    public GitHubLinkedPullRequestsVariablesDto? Variables { get; init; }
+}
+
+sealed class GitHubLinkedPullRequestsVariablesDto
+{
+    [JsonPropertyName("ids")]
+    public IReadOnlyList<string> Ids { get; init; } = [];
+}
+
+sealed class GitHubLinkedPullRequestsResponseDto
+{
+    [JsonPropertyName("data")]
+    public GitHubLinkedPullRequestsDataDto? Data { get; init; }
+}
+
+sealed class GitHubLinkedPullRequestsDataDto
+{
+    [JsonPropertyName("nodes")]
+    public IReadOnlyList<GitHubLinkedPullRequestsIssueNodeDto?>? Nodes { get; init; }
+}
+
+sealed class GitHubLinkedPullRequestsIssueNodeDto
+{
+    [JsonPropertyName("__typename")]
+    public string? TypeName { get; init; }
+
+    [JsonPropertyName("number")]
+    public int Number { get; init; }
+
+    [JsonPropertyName("timelineItems")]
+    public GitHubLinkedPullRequestsTimelineConnectionDto? TimelineItems { get; init; }
+}
+
+sealed class GitHubLinkedPullRequestsTimelineConnectionDto
+{
+    [JsonPropertyName("nodes")]
+    public IReadOnlyList<GitHubLinkedPullRequestsTimelineNodeDto>? Nodes { get; init; }
+}
+
+sealed class GitHubLinkedPullRequestsTimelineNodeDto
+{
+    [JsonPropertyName("source")]
+    public GitHubLinkedPullRequestsSourceDto? Source { get; init; }
+}
+
+sealed class GitHubLinkedPullRequestsSourceDto
+{
+    [JsonPropertyName("__typename")]
+    public string? TypeName { get; init; }
+
+    [JsonPropertyName("number")]
+    public int Number { get; init; }
+
+    [JsonPropertyName("updatedAt")]
+    public DateTimeOffset? UpdatedAt { get; init; }
+
+    [JsonPropertyName("state")]
+    public string? State { get; init; }
+
+    [JsonPropertyName("isDraft")]
+    public bool IsDraft { get; init; }
+
+    [JsonPropertyName("repository")]
+    public GitHubLinkedPullRequestsRepositoryDto? Repository { get; init; }
+}
+
+sealed class GitHubLinkedPullRequestsRepositoryDto
+{
+    [JsonPropertyName("nameWithOwner")]
+    public string? NameWithOwner { get; init; }
 }
 
 sealed class GitHubTimelineItemDto
