@@ -3624,6 +3624,56 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListHydratesChecksFromCachedHeadShaStatus()
+    {
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var responseCache = new GitHubResponseCache(cache, new GitHubPublicCacheStore(cache));
+        await responseCache.SetAsync(
+            GitHubCachePolicy.CreateRepositoryCacheKey(
+                CreateTokenScopeForTestToken("token-a"),
+                repositoryName,
+                "checks",
+                "cache123"),
+            new ChecksStatus(
+                State: "success",
+                TotalCount: 1,
+                SuccessCount: 1,
+                FailureCount: 0,
+                PendingCount: 0,
+                NeutralCount: 0,
+                SkippedCount: 0,
+                CompletedAt: DateTimeOffset.Parse("2026-01-02T00:45:00Z"),
+                FailingChecks: []),
+            TimeSpan.FromMinutes(5),
+            TestContext.Current.CancellationToken);
+        var requests = new ConcurrentQueue<string>();
+        var client = CreateClientFromRequests((request, _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            requests.Enqueue(path);
+
+            return Task.FromResult(path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    PullRequestsJson([PullRequestJson(1, headSha: "cache123")])),
+                "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+                "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            });
+        }, cache, "token-a");
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            repositoryName,
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("success", Assert.Single(pullRequests).Checks.State);
+        Assert.DoesNotContain(requests, path => path.Contains("/commits/cache123/", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ShipWeekCombinesMilestoneIssuesAndReleaseBranchPullRequests()
     {
         var client = CreateClient(path => path switch

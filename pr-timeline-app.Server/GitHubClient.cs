@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -1467,12 +1468,19 @@ sealed partial class GitHubClient(
             linkedIssuesByPullRequest[number] = await task;
         }
 
+        var cachedChecksByPullRequest = await GetCachedChecksByPullRequestAsync(
+            repositoryName,
+            pullRequests,
+            scope,
+            cancellationToken);
+
         var fetchedAt = DateTimeOffset.UtcNow;
         return pullRequests
             .Select(pullRequest =>
             {
                 detailsByPullRequest.TryGetValue(pullRequest.Number, out var details);
                 lastCommitByPullRequest.TryGetValue(pullRequest.Number, out var lastCommitAt);
+                cachedChecksByPullRequest.TryGetValue(pullRequest.Number, out var cachedChecks);
                 return pullRequest with
                 {
                     FetchedAt = fetchedAt,
@@ -1484,11 +1492,51 @@ sealed partial class GitHubClient(
                     LastCommitAt = lastCommitAt,
                     MergeableState = details?.MergeableState ?? pullRequest.MergeableState,
                     Review = reviewsByPullRequest[pullRequest.Number],
-                    Checks = pullRequest.Checks
+                    Checks = cachedChecks ?? pullRequest.Checks
                 };
             })
             .ToArray();
     }
+
+    private async Task<IReadOnlyDictionary<int, ChecksStatus>> GetCachedChecksByPullRequestAsync(
+        RepositoryName repositoryName,
+        IReadOnlyList<PullRequestSummary> pullRequests,
+        GitHubCacheScope scope,
+        CancellationToken cancellationToken)
+    {
+        var checksByPullRequest = new Dictionary<int, ChecksStatus>();
+        foreach (var pullRequest in pullRequests)
+        {
+            var headSha = pullRequest.HeadSha;
+            if (!ShouldHydrateCachedChecks(pullRequest, headSha))
+            {
+                continue;
+            }
+
+            var cacheKey = CreateChecksCacheKey(scope, repositoryName, headSha);
+            if (await cache.GetAsync<ChecksStatus>(cacheKey, cancellationToken) is { Found: true, Value: { } checks })
+            {
+                checksByPullRequest[pullRequest.Number] = checks;
+            }
+        }
+
+        return checksByPullRequest;
+    }
+
+    private static bool ShouldHydrateCachedChecks(PullRequestSummary pullRequest, [NotNullWhen(true)] string? headSha) =>
+        pullRequest.State.Equals("open", StringComparison.OrdinalIgnoreCase)
+        && pullRequest.Checks.State.Equals(ChecksStatus.Unknown.State, StringComparison.OrdinalIgnoreCase)
+        && !string.IsNullOrWhiteSpace(headSha);
+
+    private static string CreateChecksCacheKey(
+        GitHubCacheScope scope,
+        RepositoryName repositoryName,
+        string headSha) =>
+        CreateRepositoryCacheKey(
+            scope,
+            repositoryName,
+            "checks",
+            headSha);
 
     private static IReadOnlyList<PullRequestSummary> CreatePullRequestBaselineSummaries(
         IReadOnlyList<GitHubPullRequestDto> pullRequestDtos)
@@ -2190,11 +2238,7 @@ sealed partial class GitHubClient(
 
         // Key by SHA so a fresh push naturally invalidates stale check state once
         // GitHub posts results for the new commit.
-        var cacheKey = CreateRepositoryCacheKey(
-            scope,
-            repositoryName,
-            "checks",
-            headSha);
+        var cacheKey = CreateChecksCacheKey(scope, repositoryName, headSha);
         var refreshCache = forceRefresh;
         var cachedStatus = await cache.GetAsync<ChecksStatus>(cacheKey, cancellationToken);
         var hasCachedStatus = cachedStatus is { Found: true, Value: not null };
