@@ -16,8 +16,8 @@ const exclusionReasons: ExclusionReason[] = [
     detail: 'PRs with any failed check are hidden here until CI is green again (pending checks are fine). Look for it in the "CI failing" bucket on the board below.',
   },
   {
-    title: 'It was opened more than 14 days ago',
-    detail: 'The queue keeps only PRs opened in the last 14 days so it stays focused on recent work.',
+    title: 'It has had no actionable activity in 14 days',
+    detail: 'The queue keeps each PR only while its action lane has recent activity — a fresh commit, review, approval, or update in the last 14 days — so it stays focused on PRs that are actually moving. An older PR reappears as soon as it sees new activity.',
   },
   {
     title: 'It is still a draft',
@@ -37,7 +37,7 @@ const exclusionReasons: ExclusionReason[] = [
   },
   {
     title: 'It has gone quiet for 7+ days (stalled)',
-    detail: 'A stalled PR only appears here when it also needs review, an author response, or a merge — otherwise it is kept out.',
+    detail: 'The standalone "Stalled" lane is kept out of this queue. A stalled PR still appears here when it also has an actionable reason in another lane — for example it needs review or re-review, an author response, or a merge.',
   },
 ];
 
