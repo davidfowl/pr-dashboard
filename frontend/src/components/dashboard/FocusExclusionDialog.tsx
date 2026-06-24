@@ -65,7 +65,7 @@ function FocusExclusionDialog({ open, onClose }: FocusExclusionDialogProps) {
       onClose={onClose}
       onClick={(event) => {
         if (event.target === dialogRef.current) {
-          onClose();
+          dialogRef.current.close();
         }
       }}
     >
@@ -76,7 +76,7 @@ function FocusExclusionDialog({ open, onClose }: FocusExclusionDialogProps) {
             type="button"
             className="focus-info-dialog-close"
             aria-label="Close"
-            onClick={onClose}
+            onClick={() => dialogRef.current?.close()}
           >
             ×
           </button>
