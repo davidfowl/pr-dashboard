@@ -114,6 +114,7 @@ describe('App navigation', () => {
     expect(readyRow?.classList.contains('ready-to-merge-entry-full-bleed')).toBe(true);
     expect(readyRow?.classList.contains('compact-pr-action-marker-layout')).toBe(true);
     expect(readyRow?.classList.contains('content-bounded-action-marker-layout')).toBe(true);
+    expect(readyRow?.classList.contains('has-action-marker')).toBe(true);
     const readyMarker = readyRow?.querySelector('.attention-pr-action-marker');
     expect(readyMarker?.classList.contains('first-row-action-marker')).toBe(true);
     expect(readyMarker?.classList.contains('row-height-neutral-action-marker')).toBe(true);
@@ -134,13 +135,14 @@ describe('App navigation', () => {
     const needsReviewRow = document.querySelector('.attention-pr-row.needs-review-entry');
     expect(needsReviewRow).not.toBeNull();
     expect(needsReviewRow?.classList.contains('compact-pr-action-marker-layout')).toBe(true);
+    expect(needsReviewRow?.classList.contains('has-action-marker')).toBe(true);
     expect(needsReviewRow?.querySelector('.attention-pr-action-marker')?.textContent).toBe('Needs review');
     expect(needsReviewRow?.querySelector('.attention-pr-signals')?.textContent).not.toContain('Needs review');
 
     await unmountApp(root);
   });
 
-  it('reserves the action marker column on every pull request row', async () => {
+  it('renders the action marker slot on every pull request row', async () => {
     window.history.replaceState(null, '', '/');
     vi.stubGlobal('fetch', createFetchMock({
       readyToMerge: true,
@@ -174,6 +176,7 @@ describe('App navigation', () => {
       expect(row.querySelector('.attention-pr-action-marker')).not.toBeNull();
     }
     const normalRow = rows.find((row) => row.textContent?.includes('Author response row'));
+    expect(normalRow?.classList.contains('has-action-marker')).toBe(false);
     const emptyMarker = normalRow?.querySelector('.attention-pr-action-marker.empty-action-marker');
     expect(emptyMarker).not.toBeNull();
     expect(emptyMarker?.getAttribute('aria-hidden')).toBe('true');

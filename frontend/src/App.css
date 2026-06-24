@@ -1842,6 +1842,10 @@ select:focus-visible {
 }
 
 .attention-pr-row.compact-pr-action-marker-layout {
+  grid-template-columns: var(--attention-pr-grid-columns);
+}
+
+.attention-pr-row.compact-pr-action-marker-layout.has-action-marker {
   grid-template-columns: var(--attention-pr-marked-grid-columns);
 }
 

@@ -9,15 +9,18 @@ describe('pull request row layout CSS', () => {
     const markedColumns = cssVariableFor('.attention-list', '--attention-pr-marked-grid-columns');
     const baseTemplate = gridTemplateColumnsFor('.attention-pr-row');
     const compactTemplate = gridTemplateColumnsFor('.attention-pr-row.compact-pr-action-marker-layout');
+    const markedTemplate = gridTemplateColumnsFor('.attention-pr-row.compact-pr-action-marker-layout.has-action-marker');
 
     expect(baseTemplate).toBe('var(--attention-pr-grid-columns)');
-    expect(compactTemplate).toBe('var(--attention-pr-marked-grid-columns)');
+    expect(compactTemplate).toBe(baseTemplate);
+    expect(markedTemplate).toBe('var(--attention-pr-marked-grid-columns)');
     expect(unmarkedColumns).toMatch(/\b0\s+minmax\(0,\s*1fr\)/);
     expect(markedColumns).toMatch(/\b7\.1rem\s+minmax\(0,\s*1fr\)/);
     expect(unmarkedColumns).not.toBe(markedColumns);
     expect(unmarkedColumns).not.toMatch(/\b(fit-content|max-content|min-content|auto)\b/);
     expect(markedColumns).not.toMatch(/\b(fit-content|max-content|min-content|auto)\b/);
     expect(compactTemplate).not.toMatch(/\b(fit-content|max-content|min-content|auto)\b/);
+    expect(markedTemplate).not.toMatch(/\b(fit-content|max-content|min-content|auto)\b/);
   });
 
   it('vertically centers action markers with the row text', () => {

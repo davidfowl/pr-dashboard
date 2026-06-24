@@ -108,6 +108,7 @@ function PullRequestListItem({
       className={[
         'attention-pr-row',
         'compact-pr-action-marker-layout content-bounded-action-marker-layout',
+        actionMarker ? 'has-action-marker' : undefined,
         actionMarker ? `${actionMarker.id}-entry` : undefined,
         isSignedInAuthor ? 'signed-in-user-entry signed-in-user-entry-full-bleed' : undefined,
         isReadyToMerge ? 'ready-to-merge-entry-full-bleed' : undefined,
