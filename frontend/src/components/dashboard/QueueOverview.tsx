@@ -17,6 +17,7 @@ import LoadingCardPlaceholders from '../LoadingCardPlaceholders';
 import LoadingMetric from '../LoadingMetric';
 import PullRequestList from '../PullRequestList';
 import AttentionBoard from './AttentionBoard';
+import FocusExclusionDialog from './FocusExclusionDialog';
 
 type QueueOverviewProps = {
   counts: DeveloperPullRequestCount[];
@@ -50,6 +51,7 @@ function QueueOverview({
   visibleChecksRefreshKey,
 }: QueueOverviewProps) {
   const [showAllCoreMembers, setShowAllCoreMembers] = useState(false);
+  const [showFilterInfo, setShowFilterInfo] = useState(false);
 
   const focusItems = useMemo<FocusItem[]>(
     () => computeFocusItems(attentionBuckets),
@@ -158,6 +160,17 @@ function QueueOverview({
           </div>
         </div>
         <p>Actionable PRs across the loaded repositories.</p>
+        <p className="focus-info-note">
+          Not finding the PR you were looking for?{' '}
+          <button
+            type="button"
+            className="focus-info-trigger"
+            onClick={() => setShowFilterInfo(true)}
+          >
+            See why it might be filtered out
+          </button>
+        </p>
+        <FocusExclusionDialog open={showFilterInfo} onClose={() => setShowFilterInfo(false)} />
 
         {loading && !hasLoaded && focusItems.length === 0 ? (
           <LoadingCardPlaceholders label="Loading review queue cards" />
