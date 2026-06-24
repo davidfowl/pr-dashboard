@@ -6,8 +6,8 @@ It helps the team prioritize GitHub pull request work, focus on urgent reviews, 
 
 ## Prerequisites
 
-- .NET 10 SDK
-- Aspire CLI from the dev channel
+- .NET 11 SDK
+- Aspire CLI from the stable channel
 - Docker or another Aspire-supported container runtime for the local Azurite storage emulator
 - Node.js `20.19+`, `22.12+`, or newer
 - Optional: GitHub CLI (`gh`) for local development auth
@@ -16,6 +16,7 @@ It helps the team prioritize GitHub pull request work, focus on urgent reviews, 
 ## Run locally
 
 ```bash
+npm --prefix frontend ci
 aspire start
 ```
 
@@ -34,6 +35,10 @@ You can replace that list in the dashboard with any comma-separated `owner/repo`
 ## GitHub auth
 
 In development, the server can use an OAuth session, `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`. Outside development, configure `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`; the callback path is `/signin-github`. The OAuth flow requests no GitHub scopes, so it supports public repository API reads without requesting repository or organization permissions.
+
+## Agent schema
+
+Automation can read `/api/agents/schema` to choose the dashboard mode and API endpoint by use case. The schema lists review, issue-focus, and ship-week modes, their use cases, required inputs, and the backing API paths. The dashboard footer links to the same schema.
 
 ## Conversation-resolution policy
 
@@ -101,19 +106,19 @@ npm --prefix frontend ci
 npm --prefix frontend run lint
 npm --prefix frontend run build
 
-dotnet restore pr-timeline-app.slnx
-dotnet build pr-timeline-app.slnx --no-restore
+dotnet restore pr-timeline-app.Tests/pr-timeline-app.Tests.csproj
+dotnet build pr-timeline-app.Tests/pr-timeline-app.Tests.csproj --no-restore
 ```
 
 ## Test
 
 ```bash
-dotnet test pr-timeline-app.slnx --no-build
+dotnet test pr-timeline-app.Tests/pr-timeline-app.Tests.csproj --no-build
 ```
 
 ## Project layout
 
-- `pr-timeline-app.AppHost/` - Aspire AppHost for local orchestration and Azure deployment.
+- `apphost.cs` - file-based Aspire AppHost for local orchestration and Azure deployment.
 - `pr-timeline-app.Server/` - ASP.NET Core API and production static-file host.
 - `frontend/` - React/Vite dashboard UI.
 - `pr-timeline-app.Tests/` - Aspire-backed smoke tests.
