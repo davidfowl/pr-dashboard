@@ -459,6 +459,40 @@ describe('App navigation', () => {
 
     await unmountApp(root);
   });
+
+  it('keeps docs-from-code ship rows scoped to the resolved release branch', async () => {
+    window.history.replaceState(null, '', '/?mode=ship&repos=microsoft/aspire,microsoft/aspire.dev&milestone=13.4');
+    vi.stubGlobal('fetch', createFetchMock({
+      shipWeekReleaseBranch: 'release/13.4',
+      docsPullRequests: [
+        createPullRequest('none', {
+          repository: 'microsoft/aspire.dev',
+          number: 201,
+          title: 'Docs for 13.4',
+          htmlUrl: 'https://github.com/microsoft/aspire.dev/pull/201',
+          labels: ['docs-from-code'],
+          baseRef: 'release/13.4',
+        }),
+        createPullRequest('none', {
+          repository: 'microsoft/aspire.dev',
+          number: 202,
+          title: 'Docs for 13.5',
+          htmlUrl: 'https://github.com/microsoft/aspire.dev/pull/202',
+          labels: ['docs-from-code'],
+          baseRef: 'release/13.5',
+        }),
+      ],
+    }));
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Docs for 13.4');
+    });
+    expect(document.body.textContent).toContain('release/13.4');
+    expect(document.body.textContent).not.toContain('Docs for 13.5');
+
+    await unmountApp(root);
+  });
 });
 
 type FetchMockOptions = {
@@ -471,6 +505,8 @@ type FetchMockOptions = {
   updatedAt?: string;
   issues?: ShipWeekIssueSummary[];
   extraPullRequests?: PullRequestSummary[];
+  docsPullRequests?: PullRequestSummary[];
+  shipWeekReleaseBranch?: string;
 };
 
 function createFetchMock(options: FetchMockOptions = {}) {
@@ -523,7 +559,9 @@ function createFetchMock(options: FetchMockOptions = {}) {
 
     if (url.pathname === '/api/github/pulls/stream') {
       if (url.searchParams.get('label')) {
-        return jsonLinesResponse([]);
+        return jsonLinesResponse((options.docsPullRequests ?? [])
+          .filter((item) => item.repository === url.searchParams.get('repo'))
+          .map((item) => createStreamItem(item)));
       }
 
       const repository = url.searchParams.get('repo');
@@ -578,7 +616,7 @@ function createFetchMock(options: FetchMockOptions = {}) {
       return jsonResponse<ShipWeekResponse>({
         repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
         milestone: url.searchParams.get('milestone') ?? '13.4',
-        releaseBranch: '',
+        releaseBranch: options.shipWeekReleaseBranch ?? '',
         pullRequests: [],
         issues: [],
       });

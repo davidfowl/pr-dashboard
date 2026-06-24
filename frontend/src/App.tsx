@@ -88,6 +88,7 @@ type ShipWeekRefreshParams = ShipWeekRouteParams;
 const autoRefreshIntervalMs = 5 * 60_000;
 const autoRefreshJitterMs = 60_000;
 const clipboardWriteTimeoutMs = 10_000;
+const pullRequestStreamBatchMs = 250;
 
 function getAutoRefreshDelayMs() {
   return autoRefreshIntervalMs + Math.floor(Math.random() * autoRefreshJitterMs);
@@ -443,6 +444,7 @@ function App() {
     const { abortController, isCurrentLoad } = load;
     const previousPullRequests = pullRequests;
     const previousLastUpdatedAt = reviewLastUpdatedAt;
+    let clearPendingStreamBatch: (() => void) | null = null;
 
     setPullsLoading(true);
     setError(null);
@@ -466,6 +468,36 @@ function App() {
         setReviewLastUpdatedAt(null);
       }
 
+      const pendingStreamPullRequests: PullRequestSummary[] = [];
+      let streamBatchTimer: number | null = null;
+      clearPendingStreamBatch = () => {
+        if (streamBatchTimer !== null) {
+          window.clearTimeout(streamBatchTimer);
+          streamBatchTimer = null;
+        }
+
+        pendingStreamPullRequests.length = 0;
+      };
+      const flushPendingStreamPullRequests = () => {
+        streamBatchTimer = null;
+        if (!isCurrentLoad() || pendingStreamPullRequests.length === 0) {
+          pendingStreamPullRequests.length = 0;
+          return;
+        }
+
+        const pullRequestsToPublish = pendingStreamPullRequests.splice(0);
+        setPullRequests((currentPullRequests) =>
+          upsertManyByUpdatedAt(currentPullRequests, pullRequestsToPublish));
+      };
+      const scheduleStreamBatch = (pullRequest: PullRequestSummary) => {
+        pendingStreamPullRequests.push(pullRequest);
+        if (streamBatchTimer !== null) {
+          return;
+        }
+
+        streamBatchTimer = window.setTimeout(flushPendingStreamPullRequests, pullRequestStreamBatchMs);
+      };
+
       const pullRequestTasks = repositories.map(async (repository) => {
         const query = new URLSearchParams({ repo: repository, state: pullState });
         if (options.forceRefresh) {
@@ -479,18 +511,24 @@ function App() {
               return;
             }
 
-            setPullRequests((currentPullRequests) => upsertPullRequestByUpdatedAt(currentPullRequests, pullRequest));
+            scheduleStreamBatch(pullRequest);
           },
         });
       });
 
       const pullRequestResults = await Promise.all(pullRequestTasks);
       if (isCurrentLoad()) {
+        if (streamBatchTimer !== null) {
+          window.clearTimeout(streamBatchTimer);
+          flushPendingStreamPullRequests();
+        }
+
         const streamedPullRequests = pullRequestResults.flatMap((result) => result.pullRequests);
         setPullRequests((currentPullRequests) => replacePullRequestsByUpdatedAt(currentPullRequests, streamedPullRequests));
         setReviewLastUpdatedAt(getReviewLastUpdatedAt(replacePullRequestsByUpdatedAt([], streamedPullRequests)));
       }
     } catch (err) {
+      clearPendingStreamBatch?.();
       if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
         return;
       }
@@ -1307,7 +1345,9 @@ function combineShipWeekResponses(
     releaseBranch,
     pullRequests: [
       ...releaseResponses.flatMap((response) => response.pullRequests),
-      ...docsPullRequests.map(createDocsFromCodeShipWeekPullRequest),
+      ...docsPullRequests
+        .filter((pullRequest) => docsFromCodeMatchesReleaseBranch(pullRequest, releaseBranch))
+        .map(createDocsFromCodeShipWeekPullRequest),
     ].sort(compareShipWeekPullRequests),
     issues: releaseResponses
       .flatMap((response) => response.issues)
@@ -1326,6 +1366,14 @@ function createDocsFromCodeShipWeekPullRequest(pullRequest: PullRequestSummary) 
       docsFromCode: true,
     },
   };
+}
+
+function docsFromCodeMatchesReleaseBranch(pullRequest: PullRequestSummary, releaseBranch: string) {
+  if (!releaseBranch || releaseBranch === 'release branches') {
+    return true;
+  }
+
+  return pullRequest.baseRef === releaseBranch;
 }
 
 function compareShipWeekPullRequests(first: ShipWeekResponse['pullRequests'][number], second: ShipWeekResponse['pullRequests'][number]) {
