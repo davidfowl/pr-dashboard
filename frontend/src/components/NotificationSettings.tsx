@@ -136,7 +136,11 @@ function InstallNote({ required }: { required?: boolean }) {
     <div className="notif-install">
       <div className="notif-install-head">
         <span className="notif-install-icon" aria-hidden="true">📲</span>
-        <span className="notif-install-title">Install as an app to enable notifications</span>
+        <span className="notif-install-title">
+          {required
+            ? 'Install as an app to enable notifications'
+            : 'Install as an app for reliable notifications'}
+        </span>
       </div>
       <p className="notif-install-copy">
         {required

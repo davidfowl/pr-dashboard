@@ -86,10 +86,12 @@ function MobileNav({
 
   const authenticated = authStatus?.authenticated === true;
 
-  // Close + restore focus to the hamburger when the drawer is dismissed.
+  // Close + restore focus to the hamburger when the drawer is dismissed. The
+  // focus restore is deferred a tick so it lands after React unmounts the
+  // aria-modal dialog, rather than briefly moving focus behind a still-open modal.
   const dismiss = useCallback(() => {
     setOpen(false);
-    triggerRef.current?.focus();
+    requestAnimationFrame(() => triggerRef.current?.focus());
   }, []);
 
   // Lock body scroll, wire Escape, trap Tab focus inside the drawer, and move
