@@ -22,6 +22,8 @@ namespace pr_timeline_app.Tests;
 
 public sealed class GitHubClientTests
 {
+    private static readonly JsonSerializerOptions s_testJsonOptions = new(JsonSerializerDefaults.Web);
+
     [Fact]
     public async Task PullListSkipsLinkedIssuesThatGitHubReturnsNotFound()
     {
@@ -1221,6 +1223,7 @@ public sealed class GitHubClientTests
                     [
                       {
                         "number": 10,
+                        "node_id": "I_focus_10",
                         "title": "Broken from last release",
                         "state": "open",
                         "user": { "login": "reporter" },
@@ -1233,6 +1236,7 @@ public sealed class GitHubClientTests
                       },
                       {
                         "number": 11,
+                        "node_id": "PR_focus_11",
                         "title": "Regression PR",
                         "state": "open",
                         "user": { "login": "contributor" },
@@ -1246,6 +1250,7 @@ public sealed class GitHubClientTests
                       },
                       {
                         "number": 12,
+                        "node_id": "I_focus_12",
                         "title": "Wrong label",
                         "state": "open",
                         "user": { "login": "reporter" },
@@ -1258,6 +1263,7 @@ public sealed class GitHubClientTests
                       }
                     ]
                     """),
+                "graphql" => Json(EmptyLinkedFocusGraphQlResponse()),
                 _ when path == CtiTeamIssueSearchPath("open") => Json("""{ "total_count": 0, "incomplete_results": false, "items": [] }"""),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
             };
@@ -1292,6 +1298,7 @@ public sealed class GitHubClientTests
             return path switch
             {
                 "repos/example/repo/labels?per_page=100" => Json("[]"),
+                "graphql" => Json(EmptyLinkedFocusGraphQlResponse()),
                 _ when path == CtiTeamIssueSearchPath("open") => Json(
                     """
                     {
@@ -1300,6 +1307,7 @@ public sealed class GitHubClientTests
                       "items": [
                         {
                           "number": 20,
+                          "node_id": "I_focus_20",
                           "title": "[AspireE2E] Validate dashboard flows",
                           "state": "open",
                           "user": { "login": "jinzhao1127" },
@@ -1312,6 +1320,7 @@ public sealed class GitHubClientTests
                         },
                         {
                           "number": 21,
+                          "node_id": "PR_focus_21",
                           "title": "[AspireE2E] Pull request mirror",
                           "state": "open",
                           "user": { "login": "EmilyFeng97" },
@@ -1325,6 +1334,7 @@ public sealed class GitHubClientTests
                         },
                         {
                           "number": 22,
+                          "node_id": "I_focus_22",
                           "title": "AspireE2E without the title marker",
                           "state": "open",
                           "user": { "login": "Susie-1989" },
@@ -1354,6 +1364,108 @@ public sealed class GitHubClientTests
         Assert.Equal("jinzhao1127", issue.Author);
         Assert.Equal(["cti-owner"], issue.Assignees);
         Assert.Contains(CtiTeamIssueSearchPath("open"), requestedPaths);
+    }
+
+    [Fact]
+    public async Task FocusIssuesUseLinkedOpenPullRequestActivityForUpdatedAt()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/labels?per_page=100" => Json(
+                """
+                [
+                  { "name": "regression-from-last-release" }
+                ]
+                """),
+            "repos/example/repo/issues?state=open&labels=regression-from-last-release&sort=updated&direction=desc&per_page=100" => Json(
+                """
+                [
+                  {
+                    "number": 10,
+                    "node_id": "I_focus_10",
+                    "title": "Broken from last release",
+                    "state": "open",
+                    "user": { "login": "reporter" },
+                    "html_url": "https://github.com/example/repo/issues/10",
+                    "repository_url": "https://api.github.com/repos/example/repo",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-02T00:00:00Z",
+                    "labels": [{ "name": "regression-from-last-release" }],
+                    "assignees": [{ "login": "owner" }]
+                  }
+                ]
+                """),
+            "graphql" => Json(
+                """
+                {
+                  "data": {
+                    "nodes": [
+                      {
+                        "__typename": "Issue",
+                        "number": 10,
+                        "timelineItems": {
+                          "nodes": [
+                            {
+                              "source": {
+                                "__typename": "PullRequest",
+                                "number": 2,
+                                "updatedAt": "2026-01-05T00:00:00Z",
+                                "state": "OPEN",
+                                "isDraft": false,
+                                "repository": { "nameWithOwner": "example/repo" }
+                              }
+                            },
+                            {
+                              "source": {
+                                "__typename": "PullRequest",
+                                "number": 3,
+                                "updatedAt": "2026-01-06T00:00:00Z",
+                                "state": "OPEN",
+                                "isDraft": false,
+                                "repository": { "nameWithOwner": "other/repo" }
+                              }
+                            },
+                            {
+                              "source": {
+                                "__typename": "PullRequest",
+                                "number": 4,
+                                "updatedAt": "2026-01-07T00:00:00Z",
+                                "state": "OPEN",
+                                "isDraft": true,
+                                "repository": { "nameWithOwner": "example/repo" }
+                              }
+                            },
+                            {
+                              "source": {
+                                "__typename": "PullRequest",
+                                "number": 5,
+                                "updatedAt": "2026-01-08T00:00:00Z",
+                                "state": "CLOSED",
+                                "isDraft": false,
+                                "repository": { "nameWithOwner": "example/repo" }
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+                """),
+            _ when path == CtiTeamIssueSearchPath("open") => Json("""{ "total_count": 0, "incomplete_results": false, "items": [] }"""),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var issues = await client.GetFocusIssuesAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var issue = Assert.Single(issues);
+        Assert.Equal(10, issue.Number);
+        Assert.Equal([2], issue.LinkedOpenPullRequests);
+        Assert.Equal(DateTimeOffset.Parse("2026-01-05T00:00:00Z"), issue.UpdatedAt);
     }
 
     [Fact]
@@ -1911,19 +2023,19 @@ public sealed class GitHubClientTests
         var items = await ReadJsonLineElementsAsync(response);
 
         Assert.Equal("Cached enriched", GetPullRequestTitle(items[0]));
-        Assert.True(items[0].GetProperty("isStale").GetBoolean());
+        Assert.True(items[0].IsStale);
         Assert.Equal(404, GetFirstLinkedIssueNumber(items[0]));
 
         Assert.Equal("Live baseline", GetPullRequestTitle(items[1]));
-        Assert.True(items[1].GetProperty("isStale").GetBoolean());
+        Assert.True(items[1].IsStale);
         Assert.Equal(404, GetFirstLinkedIssueNumber(items[1]));
 
         var completedLiveItem = items.Single(item =>
-            GetPullRequestTitle(item) == "Live baseline"
-            && !item.GetProperty("isStale").GetBoolean()
-            && !item.GetProperty("isComplete").GetBoolean());
+            item.PullRequest?.Title == "Live baseline"
+            && !item.IsStale
+            && !item.IsComplete);
         Assert.Equal(405, GetFirstLinkedIssueNumber(completedLiveItem));
-        Assert.True(items[^1].GetProperty("isComplete").GetBoolean());
+        Assert.True(items[^1].IsComplete);
     }
 
     [Fact]
@@ -3556,7 +3668,7 @@ public sealed class GitHubClientTests
             "repos/example/repo/pulls?state=open&base=release%2F13.4&sort=created&direction=asc&per_page=100" => Json(
                 $$"""
                 [
-                  {{PullRequestJson(2, title: "Fix linked issue", body: "Fixes #10", headSha: "sha2", baseRef: "release/13.4")}},
+                  {{PullRequestJson(2, title: "Fix linked issue", body: "Fixes #10", headSha: "sha2", baseRef: "release/13.4", updatedAt: "2026-01-07T00:00:00Z")}},
                   {{PullRequestJson(3, title: "Hotfix outside milestone", headSha: "sha3", baseRef: "release/13.4")}}
                 ]
                 """),
@@ -3572,7 +3684,8 @@ public sealed class GitHubClientTests
                 title: "Fix linked issue",
                 body: "Fixes #10",
                 headSha: "sha2",
-                baseRef: "release/13.4")),
+                baseRef: "release/13.4",
+                updatedAt: "2026-01-07T00:00:00Z")),
             "repos/example/repo/pulls/3" => Json(PullRequestJson(
                 3,
                 title: "Hotfix outside milestone",
@@ -3632,6 +3745,7 @@ public sealed class GitHubClientTests
         var issue = Assert.Single(response.Issues);
         Assert.Equal(10, issue.Number);
         Assert.Equal([2], issue.LinkedOpenPullRequests);
+        Assert.Equal(DateTimeOffset.Parse("2026-01-07T00:00:00Z"), issue.UpdatedAt);
     }
 
     [Fact]
@@ -3888,27 +4002,33 @@ public sealed class GitHubClientTests
         };
     }
 
-    private static async Task<IReadOnlyList<JsonElement>> ReadJsonLineElementsAsync(HttpResponseMessage response)
+    private static async Task<IReadOnlyList<PullRequestStreamTestItem>> ReadJsonLineElementsAsync(HttpResponseMessage response)
     {
         response.EnsureSuccessStatusCode();
         var content = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         return content
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(line =>
-            {
-                using var document = JsonDocument.Parse(line);
-                return document.RootElement.Clone();
-            })
+            .Select(line => JsonSerializer.Deserialize<PullRequestStreamTestItem>(line, s_testJsonOptions)!)
             .ToArray();
     }
 
-    private static string? GetPullRequestTitle(JsonElement streamItem) =>
-        streamItem.GetProperty("pullRequest") is { ValueKind: JsonValueKind.Object } pullRequest
-            ? pullRequest.GetProperty("title").GetString()
-            : null;
+    private static string? GetPullRequestTitle(PullRequestStreamTestItem streamItem) =>
+        streamItem.PullRequest?.Title;
 
-    private static int GetFirstLinkedIssueNumber(JsonElement streamItem) =>
-        streamItem.GetProperty("pullRequest").GetProperty("linkedIssues")[0].GetProperty("number").GetInt32();
+    private static int GetFirstLinkedIssueNumber(PullRequestStreamTestItem streamItem) =>
+        streamItem.PullRequest?.LinkedIssues[0].Number
+            ?? throw new InvalidOperationException("Stream item did not include a linked issue.");
+
+    private sealed record PullRequestStreamTestItem(
+        PullRequestStreamPullRequestTestItem? PullRequest,
+        bool IsStale,
+        bool IsComplete);
+
+    private sealed record PullRequestStreamPullRequestTestItem(
+        string Title,
+        IReadOnlyList<LinkedIssueTestItem> LinkedIssues);
+
+    private sealed record LinkedIssueTestItem(int Number);
 
     private static GitHubClient CreateClientFromRequests(
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> route,
@@ -4082,6 +4202,9 @@ public sealed class GitHubClientTests
     private static string CtiTeamIssueSearchPath(string state) =>
         $"search/issues?q=repo%3Aexample%2Frepo%20is%3Aissue%20state%3A{state}%20in%3Atitle%20AspireE2E&sort=updated&order=desc&per_page=100";
 
+    private static string EmptyLinkedFocusGraphQlResponse() =>
+        """{ "data": { "nodes": [] } }""";
+
     private static string PullRequestDetailsJson(int number) =>
         PullRequestJson(number);
 
@@ -4143,7 +4266,8 @@ public sealed class GitHubClientTests
         string? milestone = null,
         string? headSha = null,
         string? baseRef = null,
-        string? mergeableState = null)
+        string? mergeableState = null,
+        string updatedAt = "2026-01-02T00:00:00Z")
     {
         var milestoneJson = milestone is null
             ? "null"
@@ -4163,7 +4287,7 @@ public sealed class GitHubClientTests
           "state": "open",
           "body": {{JsonSerializer.Serialize(body)}},
           "created_at": "2026-01-01T00:00:00Z",
-          "updated_at": "2026-01-02T00:00:00Z",
+          "updated_at": {{JsonSerializer.Serialize(updatedAt)}},
           "draft": {{draft.ToString().ToLowerInvariant()}},
           "user": { "login": "octocat" },
           "html_url": "https://github.com/example/repo/pull/{{number}}",

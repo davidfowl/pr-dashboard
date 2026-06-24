@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Net.Http.Json;
-using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -21,16 +20,15 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
         using var response = await client.GetAsync("/api/github/auth-status", cancellationToken);
 
         response.EnsureSuccessStatusCode();
-        using var document = await JsonDocument.ParseAsync(
-            await response.Content.ReadAsStreamAsync(cancellationToken),
-            cancellationToken: cancellationToken);
-        var root = document.RootElement;
+        var authStatus = await response.Content.ReadFromJsonAsync<AuthStatusSmokeResponse>(cancellationToken);
 
-        Assert.False(root.GetProperty("authenticated").GetBoolean());
-        Assert.True(root.TryGetProperty("configured", out _));
-        Assert.True(root.TryGetProperty("canLogin", out _));
-        Assert.Equal(JsonValueKind.Null, root.GetProperty("login").ValueKind);
-        Assert.NotEmpty(root.GetProperty("message").GetString() ?? "");
+        Assert.NotNull(authStatus);
+        Assert.False(authStatus.Authenticated);
+        Assert.Equal(IsGitHubOAuthConfigured(), authStatus.Configured);
+        Assert.Equal(IsGitHubOAuthConfigured(), authStatus.CanLogin);
+        Assert.Null(authStatus.Source);
+        Assert.Null(authStatus.Login);
+        Assert.NotEmpty(authStatus.Message);
     }
 
     [Fact]
@@ -51,12 +49,20 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
         using var response = await client.GetAsync("/api/app-info", cancellationToken);
 
         response.EnsureSuccessStatusCode();
-        using var document = await JsonDocument.ParseAsync(
-            await response.Content.ReadAsStreamAsync(cancellationToken),
-            cancellationToken: cancellationToken);
-        Assert.NotEmpty(document.RootElement.GetProperty("commitSha").GetString() ?? "");
-        Assert.NotEmpty(document.RootElement.GetProperty("shortCommitSha").GetString() ?? "");
-        Assert.True(document.RootElement.TryGetProperty("commitUrl", out _));
+        var appInfo = await response.Content.ReadFromJsonAsync<AppInfoSmokeResponse>(cancellationToken);
+
+        Assert.NotNull(appInfo);
+        Assert.NotEmpty(appInfo.CommitSha);
+        Assert.NotEmpty(appInfo.ShortCommitSha);
+        Assert.Equal(appInfo.CommitSha[..Math.Min(7, appInfo.CommitSha.Length)], appInfo.ShortCommitSha);
+        if (appInfo.CommitSha == "local")
+        {
+            Assert.Null(appInfo.CommitUrl);
+        }
+        else
+        {
+            Assert.Equal($"https://github.com/davidfowl/pr-dashboard/commit/{appInfo.CommitSha}", appInfo.CommitUrl);
+        }
     }
 
     [Fact]
@@ -67,11 +73,10 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
         using var response = await client.GetAsync("/api/github/pulls?repo=not-a-repo&state=open", cancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        using var document = await JsonDocument.ParseAsync(
-            await response.Content.ReadAsStreamAsync(cancellationToken),
-            cancellationToken: cancellationToken);
-        Assert.True(document.RootElement.GetProperty("errors").TryGetProperty("repo", out var repoErrors));
-        Assert.Contains("owner/repo", repoErrors[0].GetString());
+        var validationProblem = await response.Content.ReadFromJsonAsync<ValidationProblemSmokeResponse>(cancellationToken);
+        Assert.NotNull(validationProblem);
+        Assert.True(validationProblem.Errors.TryGetValue("repo", out var repoErrors));
+        Assert.Contains("owner/repo", repoErrors[0]);
     }
 
     [Fact]
@@ -82,11 +87,10 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
         using var response = await client.GetAsync("/api/github/pulls?repo=microsoft/aspire&state=merged", cancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        using var document = await JsonDocument.ParseAsync(
-            await response.Content.ReadAsStreamAsync(cancellationToken),
-            cancellationToken: cancellationToken);
-        Assert.True(document.RootElement.GetProperty("errors").TryGetProperty("state", out var stateErrors));
-        Assert.Contains("open, closed, or all", stateErrors[0].GetString());
+        var validationProblem = await response.Content.ReadFromJsonAsync<ValidationProblemSmokeResponse>(cancellationToken);
+        Assert.NotNull(validationProblem);
+        Assert.True(validationProblem.Errors.TryGetValue("state", out var stateErrors));
+        Assert.Contains("open, closed, or all", stateErrors[0]);
     }
 
     [Fact]
@@ -97,11 +101,10 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
         using var response = await client.GetAsync("/api/github/pulls/0/timeline?repo=microsoft/aspire", cancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        using var document = await JsonDocument.ParseAsync(
-            await response.Content.ReadAsStreamAsync(cancellationToken),
-            cancellationToken: cancellationToken);
-        Assert.True(document.RootElement.GetProperty("errors").TryGetProperty("number", out var numberErrors));
-        Assert.Contains("greater than zero", numberErrors[0].GetString());
+        var validationProblem = await response.Content.ReadFromJsonAsync<ValidationProblemSmokeResponse>(cancellationToken);
+        Assert.NotNull(validationProblem);
+        Assert.True(validationProblem.Errors.TryGetValue("number", out var numberErrors));
+        Assert.Contains("greater than zero", numberErrors[0]);
     }
 
     private async Task<HttpClient> GetClientAsync(CancellationToken cancellationToken)
@@ -109,6 +112,25 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
         await fixture.EnsureStartedAsync(cancellationToken);
         return fixture.Client;
     }
+
+    private static bool IsGitHubOAuthConfigured() =>
+        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GITHUB_CLIENT_ID"))
+        && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GITHUB_CLIENT_SECRET"));
+
+    private sealed record AuthStatusSmokeResponse(
+        bool Authenticated,
+        bool Configured,
+        bool CanLogin,
+        string? Source,
+        string? Login,
+        string Message);
+
+    private sealed record AppInfoSmokeResponse(
+        string CommitSha,
+        string ShortCommitSha,
+        string? CommitUrl);
+
+    private sealed record ValidationProblemSmokeResponse(Dictionary<string, string[]> Errors);
 }
 
 public sealed class AppHostFixture : IAsyncLifetime
