@@ -1,13 +1,11 @@
-import { dayMs } from '../../constants';
 import type { AttentionBucket, AttentionItem, PullRequestSummary } from '../../types';
-import { isChecksFailing } from '../../utils/models';
+import { isChecksFailing, isPullRequestWithinFocusAgeLimit } from '../../utils/models';
 
 export type FocusItem = AttentionItem & {
   bucketLabel: string;
   bucketTone: AttentionBucket['tone'];
 };
 
-const focusAgeLimitMs = 14 * dayMs;
 const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Copilot feedback', 'Merge conflicts', 'CI failing']);
 const disqualifyingFocusBucketLabels = new Set(['Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Copilot feedback', 'Merge conflicts']);
 const focusBucketRanks = new Map([
@@ -21,12 +19,9 @@ const focusBucketRanks = new Map([
   ['Review started', 6],
 ]);
 
-function isWithinFocusAgeLimit(pullRequest: PullRequestSummary) {
-  return Date.now() - new Date(pullRequest.createdAt).getTime() <= focusAgeLimitMs;
-}
-
 // Builds the top "Needs attention" focus queue: pick each PR from its highest-priority lane,
-// keep only recent PRs, and exclude any PR with failing CI so it reappears once checks are green.
+// keep only PRs with recent lane activity, and exclude any PR with failing CI so it reappears
+// once checks are green.
 export function computeFocusItems(attentionBuckets: AttentionBucket[]): FocusItem[] {
   const blockedKeys = blockedFocusKeys(attentionBuckets);
   return dedupeFocusItems(
@@ -40,7 +35,7 @@ export function computeFocusItems(attentionBuckets: AttentionBucket[]): FocusIte
         }))),
     blockedKeys,
   )
-    .filter((item) => isWithinFocusAgeLimit(item.pullRequest))
+    .filter((item) => isPullRequestWithinFocusAgeLimit(item.pullRequest, item.bucketLabel))
     .filter((item) => !isChecksFailing(item.pullRequest));
 }
 

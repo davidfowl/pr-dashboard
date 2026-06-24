@@ -27,7 +27,7 @@ type ReviewBucketTile = DrilldownTile & {
 };
 
 const bucketItemLimit = 10;
-const reviewSignalHelp = 'These lanes are signals, not mutually exclusive statuses. A PR can be both Needs review and Stalled; the top queue uses the highest-priority actionable lane while this board keeps every matching signal visible.';
+const reviewSignalHelp = 'These lanes are signals, not mutually exclusive statuses. A PR can be both Needs review and Stalled; Needs attention picks one highest-priority actionable lane with fresh lane activity while this board keeps every matching signal visible.';
 const stalledLaneHelp = 'Stalled means the PR has been quiet for at least 7 days. It is kept as a signal lane here, not a reason to remove the PR from Needs review, CI failing, Author response, or Ready to merge.';
 
 type CopyStatus = {

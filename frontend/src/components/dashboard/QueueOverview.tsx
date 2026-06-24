@@ -34,8 +34,8 @@ type QueueOverviewProps = {
 };
 
 const pullRequestListLimit = 10;
-const queueOverviewHelp = 'Needs attention picks each PR from its highest-priority action lane, keeps only PRs opened in the last 14 days, excludes any PR with failing CI (so it reappears once checks are green), and hides standalone non-review lanes like docs, automation, community, drafts, merge conflicts, Copilot feedback, and stalled.';
-const needsAttentionHelp = 'Stalled means quiet for 7+ days. It is not shown as a standalone top-queue lane, but a stalled PR still appears here when it also needs review, author response, or merge. PRs with failing CI are excluded until their checks are green again.';
+const queueOverviewHelp = 'Needs attention is the focused action queue: each PR appears once under its highest-priority actionable lane when that lane has fresh activity. Activity is lane-specific, such as the latest approval/review for merge lanes, the newest commit for re-review, or the PR update time for review-needed work. PRs with failing CI are excluded until their checks are green again.';
+const needsAttentionHelp = 'Being in Needs attention means the PR has an actionable reason for someone to review, respond, or merge, and that reason was refreshed in the last 14 days. PRs with failing CI are excluded until their checks pass, and standalone signal lanes like stalled, docs, automation, community, drafts, merge conflicts, and Copilot feedback stay out of this top queue.';
 
 function QueueOverview({
   counts,
@@ -134,11 +134,11 @@ function QueueOverview({
       <div className="section-title-row">
         <p className="eyebrow">Queue overview</p>
         <div className="section-title-heading">
-          <h3>One queue across repos: recent PRs first, bucket details one click away.</h3>
+          <h3>One focused action queue across repos, with lane details one click away.</h3>
           <HelpTooltip label={queueOverviewHelp} />
         </div>
         <p className="board-guidance">
-          Needs attention shows primary action lanes; hover the help icon for the exact include/exclude rules.
+          Needs attention shows one actionable row per PR; age is measured from the lane activity, not the date opened.
         </p>
       </div>
 
@@ -159,7 +159,7 @@ function QueueOverview({
             />
           </div>
         </div>
-        <p>Actionable PRs across the loaded repositories.</p>
+        <p>PRs with recent action-relevant activity that need someone to review, respond, or merge.</p>
         <p className="focus-info-note">
           Not finding the PR you were looking for?{' '}
           <button
@@ -185,7 +185,7 @@ function QueueOverview({
               },
             }))}
             limit={pullRequestListLimit}
-            emptyState={loading ? 'Loading review queue...' : 'No recent non-automation PRs need attention in the current results.'}
+            emptyState={loading ? 'Loading review queue...' : 'No PRs with recent action-relevant activity need attention in the current results.'}
             onSelectPullRequest={onSelectPullRequest}
             onVisiblePullRequest={onVisiblePullRequest}
             visibleChecksRefreshKey={visibleChecksRefreshKey}
