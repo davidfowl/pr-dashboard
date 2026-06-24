@@ -1817,8 +1817,7 @@ select:focus-visible {
 .attention-list {
   display: grid;
   margin-top: 0.65rem;
-  --attention-pr-grid-columns: 5rem minmax(10rem, 14rem) 0 minmax(0, 1fr) 12rem 7.25rem;
-  --attention-pr-marked-grid-columns: 5rem minmax(10rem, 14rem) 7.1rem minmax(0, 1fr) 12rem 7.25rem;
+  --attention-pr-grid-columns: 5rem minmax(10rem, 14rem) minmax(0, 1fr) 12rem 7.25rem;
 }
 
 .attention-pr-row,
@@ -1838,15 +1837,11 @@ select:focus-visible {
 
 .attention-pr-row {
   grid-template-columns: var(--attention-pr-grid-columns);
-  column-gap: 0.65rem;
+  column-gap: 0.75rem;
 }
 
 .attention-pr-row.compact-pr-action-marker-layout {
   grid-template-columns: var(--attention-pr-grid-columns);
-}
-
-.attention-pr-row.compact-pr-action-marker-layout.has-action-marker {
-  grid-template-columns: var(--attention-pr-marked-grid-columns);
 }
 
 .attention-issue-row {
@@ -1865,7 +1860,7 @@ select:focus-visible {
 }
 
 .attention-pr-title {
-  grid-column: 4;
+  grid-column: 3;
   grid-row: 1;
   overflow: hidden;
   color: var(--text);
@@ -1877,7 +1872,7 @@ select:focus-visible {
 }
 
 .attention-pr-row.compact-pr-action-marker-layout .attention-pr-title {
-  grid-column: 4;
+  grid-column: 3;
 }
 
 .attention-issue-title {
@@ -1971,7 +1966,7 @@ select:focus-visible {
 }
 
 .attention-pr-meta {
-  grid-column: 5;
+  grid-column: 4;
   grid-row: 1;
   overflow: hidden;
   text-align: right;
@@ -1981,7 +1976,7 @@ select:focus-visible {
 }
 
 .attention-pr-row.compact-pr-action-marker-layout .attention-pr-meta {
-  grid-column: 5;
+  grid-column: 4;
 }
 
 .attention-issue-meta {
@@ -2003,7 +1998,7 @@ select:focus-visible {
 }
 
 .attention-pr-actions {
-  grid-column: 6;
+  grid-column: 5;
   grid-row: 1 / span 2;
   display: flex;
   gap: 0.4rem;
@@ -2013,7 +2008,7 @@ select:focus-visible {
 }
 
 .attention-pr-row.compact-pr-action-marker-layout .attention-pr-actions {
-  grid-column: 6;
+  grid-column: 5;
 }
 
 .attention-issue-actions {
@@ -2067,7 +2062,7 @@ select:focus-visible {
 }
 
 .attention-pr-signals {
-  grid-column: 4 / 6;
+  grid-column: 3 / 5;
   grid-row: 2;
   display: flex;
   flex-wrap: wrap;
@@ -2075,7 +2070,7 @@ select:focus-visible {
 }
 
 .attention-pr-row.compact-pr-action-marker-layout .attention-pr-signals {
-  grid-column: 4 / 6;
+  grid-column: 3 / 5;
 }
 
 .attention-issue-signals {
@@ -2087,7 +2082,7 @@ select:focus-visible {
 }
 
 .attention-pr-linked-issues {
-  grid-column: 4 / 6;
+  grid-column: 3 / 5;
   grid-row: 3;
   display: flex;
   flex-wrap: wrap;
@@ -2095,7 +2090,7 @@ select:focus-visible {
 }
 
 .attention-pr-row.compact-pr-action-marker-layout .attention-pr-linked-issues {
-  grid-column: 4 / 6;
+  grid-column: 3 / 5;
 }
 
 .attention-issue-linked-pulls {
@@ -2104,49 +2099,6 @@ select:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
-}
-
-.attention-pr-action-marker {
-  grid-column: 3;
-  grid-row: 1;
-  justify-self: start;
-  align-self: center;
-  display: inline-flex;
-  align-items: center;
-  min-height: 0;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.attention-pr-action-marker.empty-action-marker {
-  visibility: hidden;
-}
-
-.attention-pr-action-marker > span {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--marker-border, var(--border));
-  border-radius: 999px;
-  padding: 0.08rem 0.5rem;
-  color: var(--marker-text, var(--muted));
-  background: var(--marker-bg, var(--muted-wash));
-  box-shadow: 0 0 0 1px var(--marker-shadow, rgba(255, 255, 255, 0.08));
-  font-size: 0.68rem;
-  line-height: 1.1;
-}
-
-.attention-pr-action-marker.ready-to-merge {
-  --marker-border: var(--success-border);
-  --marker-bg: var(--success-wash);
-  --marker-text: var(--success);
-  --marker-shadow: rgba(42, 203, 116, 0.12);
-}
-
-.attention-pr-action-marker.needs-review {
-  --marker-border: rgba(116, 85, 221, 0.48);
-  --marker-bg: var(--accent-wash);
-  --marker-text: var(--accent-strong);
-  --marker-shadow: rgba(116, 85, 221, 0.14);
 }
 
 .attention-pr-linked-issues a,
@@ -3576,7 +3528,6 @@ img.avatar-dot {
   .attention-pr-title,
   .attention-pr-row.compact-pr-action-marker-layout .attention-pr-title,
   .attention-issue-title,
-  .attention-pr-action-marker,
   .attention-pr-meta,
   .attention-pr-row.compact-pr-action-marker-layout .attention-pr-meta,
   .attention-issue-meta,

@@ -49,8 +49,7 @@ function PullRequestListItem({
     && lastForcedVisibleChecksRefreshRef.current !== visibleChecksRefreshKey;
   const badge = checksState && checksState !== 'none' ? checkBadgeGlyphs[checksState] : null;
   const isSignedInAuthor = login ? sameLogin(pullRequest.author, login) : false;
-  const actionMarker = rowActionMarker(bucketLabel);
-  const isReadyToMerge = actionMarker?.id === 'ready-to-merge';
+  const isReadyToMerge = bucketLabel === 'Ready to merge';
   const updatedAge = updatedAgeParts(pullRequest.updatedAt);
   const updatedAgeTone = staleUpdatedAgeTone(pullRequest.updatedAt);
   const metadataSignals = rowMetadataDisplaySignals(createAttentionSignals({ pullRequest, reason: '' }));
@@ -108,8 +107,7 @@ function PullRequestListItem({
       className={[
         'attention-pr-row',
         'compact-pr-action-marker-layout content-bounded-action-marker-layout',
-        actionMarker ? 'has-action-marker' : undefined,
-        actionMarker ? `${actionMarker.id}-entry` : undefined,
+        isReadyToMerge ? 'ready-to-merge-entry' : undefined,
         isSignedInAuthor ? 'signed-in-user-entry signed-in-user-entry-full-bleed' : undefined,
         isReadyToMerge ? 'ready-to-merge-entry-full-bleed' : undefined,
       ].filter(Boolean).join(' ')}
@@ -144,17 +142,6 @@ function PullRequestListItem({
         >
           {pullRequest.repository}
         </a>
-      </span>
-      <span
-        className={[
-          'attention-pr-action-marker',
-          'first-row-action-marker',
-          'row-height-neutral-action-marker',
-          actionMarker ? actionMarker.id : 'empty-action-marker',
-        ].join(' ')}
-        aria-hidden={actionMarker ? undefined : true}
-      >
-        {actionMarker && <span>{actionMarker.label}</span>}
       </span>
       <a
         className="attention-pr-title"
@@ -209,17 +196,6 @@ function PullRequestListItem({
       )}
     </article>
   );
-}
-
-function rowActionMarker(bucketLabel: string) {
-  switch (bucketLabel) {
-    case 'Ready to merge':
-      return { id: 'ready-to-merge', label: 'Ready to merge' };
-    case 'Needs review':
-      return { id: 'needs-review', label: 'Needs review' };
-    default:
-      return null;
-  }
 }
 
 function repositoryUrl(repository: string) {

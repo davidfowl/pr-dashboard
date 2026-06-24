@@ -101,7 +101,7 @@ describe('App navigation', () => {
     await unmountApp(root);
   });
 
-  it('renders ready-to-merge as a row marker instead of a signal pill', async () => {
+  it('keeps ready-to-merge row emphasis without rendering an action marker', async () => {
     window.history.replaceState(null, '', '/');
     vi.stubGlobal('fetch', createFetchMock({ readyToMerge: true }));
     const { root } = await renderApp();
@@ -114,17 +114,14 @@ describe('App navigation', () => {
     expect(readyRow?.classList.contains('ready-to-merge-entry-full-bleed')).toBe(true);
     expect(readyRow?.classList.contains('compact-pr-action-marker-layout')).toBe(true);
     expect(readyRow?.classList.contains('content-bounded-action-marker-layout')).toBe(true);
-    expect(readyRow?.classList.contains('has-action-marker')).toBe(true);
-    const readyMarker = readyRow?.querySelector('.attention-pr-action-marker');
-    expect(readyMarker?.classList.contains('first-row-action-marker')).toBe(true);
-    expect(readyMarker?.classList.contains('row-height-neutral-action-marker')).toBe(true);
-    expect(readyMarker?.textContent).toBe('Ready to merge');
+    expect(readyRow?.classList.contains('has-action-marker')).toBe(false);
+    expect(readyRow?.querySelector('.attention-pr-action-marker')).toBeNull();
     expect(readyRow?.querySelector('.attention-pr-signals')?.textContent).not.toContain('Ready to merge');
 
     await unmountApp(root);
   });
 
-  it('renders needs-review as a row marker instead of a signal pill', async () => {
+  it('does not render needs-review as a row marker', async () => {
     window.history.replaceState(null, '', '/');
     vi.stubGlobal('fetch', createFetchMock());
     const { root } = await renderApp();
@@ -132,17 +129,16 @@ describe('App navigation', () => {
     await waitFor(() => {
       expect(document.body.textContent).toContain('Needs review');
     });
-    const needsReviewRow = document.querySelector('.attention-pr-row.needs-review-entry');
+    const needsReviewRow = pullRequestRow('Fix dashboard navigation');
     expect(needsReviewRow).not.toBeNull();
-    expect(needsReviewRow?.classList.contains('compact-pr-action-marker-layout')).toBe(true);
-    expect(needsReviewRow?.classList.contains('has-action-marker')).toBe(true);
-    expect(needsReviewRow?.querySelector('.attention-pr-action-marker')?.textContent).toBe('Needs review');
-    expect(needsReviewRow?.querySelector('.attention-pr-signals')?.textContent).not.toContain('Needs review');
+    expect(needsReviewRow.classList.contains('needs-review-entry')).toBe(false);
+    expect(needsReviewRow.classList.contains('has-action-marker')).toBe(false);
+    expect(needsReviewRow.querySelector('.attention-pr-action-marker')).toBeNull();
 
     await unmountApp(root);
   });
 
-  it('renders the action marker slot on every pull request row', async () => {
+  it('keeps pull request rows out of the action marker grid', async () => {
     window.history.replaceState(null, '', '/');
     vi.stubGlobal('fetch', createFetchMock({
       readyToMerge: true,
@@ -171,16 +167,10 @@ describe('App navigation', () => {
     });
     const rows = Array.from(document.querySelectorAll('.attention-pr-row'));
     expect(rows.length).toBeGreaterThanOrEqual(2);
-    for (const row of rows) {
-      expect(row.classList.contains('compact-pr-action-marker-layout')).toBe(true);
-      expect(row.querySelector('.attention-pr-action-marker')).not.toBeNull();
-    }
+    expect(rows.some((row) => row.classList.contains('has-action-marker'))).toBe(false);
     const normalRow = rows.find((row) => row.textContent?.includes('Author response row'));
     expect(normalRow?.classList.contains('has-action-marker')).toBe(false);
-    const emptyMarker = normalRow?.querySelector('.attention-pr-action-marker.empty-action-marker');
-    expect(emptyMarker).not.toBeNull();
-    expect(emptyMarker?.getAttribute('aria-hidden')).toBe('true');
-    expect(emptyMarker?.textContent).toBe('');
+    expect(normalRow?.querySelector('.attention-pr-action-marker')).toBeNull();
 
     await unmountApp(root);
   });
