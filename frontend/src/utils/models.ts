@@ -771,7 +771,7 @@ function hasCopilotFeedback(pullRequest: PullRequestSummary) {
     && pullRequest.review.unresolvedThreadCount > 0;
 }
 
-function isChecksFailing(pullRequest: PullRequestSummary) {
+export function isChecksFailing(pullRequest: PullRequestSummary) {
   return pullRequest.checks?.state === 'failure';
 }
 

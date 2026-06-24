@@ -1,15 +1,15 @@
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { dayMs } from '../../constants';
 import type {
   AttentionBucket,
-  AttentionItem,
   DeveloperPullRequestCount,
   PickItem,
   PullRequestSummary,
   VisiblePullRequestHandler,
 } from '../../types';
 import { colorForText, formatCount, formatRelative } from '../../utils/format';
+import { computeFocusItems } from './focusQueue';
+import type { FocusItem } from './focusQueue';
 import GitHubAvatar from '../GitHubAvatar';
 import HelpTooltip from '../HelpTooltip';
 import LoadingBadge from '../LoadingBadge';
@@ -32,28 +32,9 @@ type QueueOverviewProps = {
   visibleChecksRefreshKey: number;
 };
 
-type FocusItem = AttentionItem & {
-  bucketLabel: string;
-  bucketTone: AttentionBucket['tone'];
-};
-
 const pullRequestListLimit = 10;
-const focusAgeLimitMs = 14 * dayMs;
-const queueOverviewHelp = 'Needs attention picks each PR from its highest-priority action lane, keeps only PRs opened in the last 14 days, and hides standalone non-review lanes like docs, automation, community, drafts, merge conflicts, Copilot feedback, and stalled.';
-const needsAttentionHelp = 'Stalled means quiet for 7+ days. It is not shown as a standalone top-queue lane, but a stalled PR still appears here when it also needs review, CI fixes, author response, or merge.';
-const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Copilot feedback', 'Merge conflicts']);
-const disqualifyingFocusBucketLabels = new Set(['Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Copilot feedback', 'Merge conflicts']);
-const focusBucketRanks = new Map([
-  ['Regression', -2],
-  ['CI failing', -1],
-  ['Approved but aging', 0],
-  ['Re-review needed', 1],
-  ['Ready to merge', 2],
-  ['Author response', 3],
-  ['Needs review', 4],
-  ['Quick wins', 5],
-  ['Review started', 6],
-]);
+const queueOverviewHelp = 'Needs attention picks each PR from its highest-priority action lane, keeps only PRs opened in the last 14 days, excludes any PR with failing CI (so it reappears once checks are green), and hides standalone non-review lanes like docs, automation, community, drafts, merge conflicts, Copilot feedback, and stalled.';
+const needsAttentionHelp = 'Stalled means quiet for 7+ days. It is not shown as a standalone top-queue lane, but a stalled PR still appears here when it also needs review, author response, or merge. PRs with failing CI are excluded until their checks are green again.';
 
 function QueueOverview({
   counts,
@@ -70,21 +51,10 @@ function QueueOverview({
 }: QueueOverviewProps) {
   const [showAllCoreMembers, setShowAllCoreMembers] = useState(false);
 
-  const focusItems = useMemo<FocusItem[]>(() => {
-    const blockedKeys = blockedFocusKeys(attentionBuckets);
-    return dedupeFocusItems(
-      attentionBuckets
-        .filter((bucket) => !excludedFocusBucketLabels.has(bucket.label))
-        .flatMap((bucket) =>
-          bucket.items.map((item) => ({
-            ...item,
-            bucketLabel: bucket.label,
-            bucketTone: bucket.tone,
-          }))),
-      blockedKeys,
-    )
-      .filter((item) => isWithinFocusAgeLimit(item.pullRequest));
-  }, [attentionBuckets]);
+  const focusItems = useMemo<FocusItem[]>(
+    () => computeFocusItems(attentionBuckets),
+    [attentionBuckets],
+  );
 
   const coreOpenCount = counts.reduce((total, count) => total + count.openPullRequestCount, 0);
   const activeCoreCounts = counts.filter((count) => count.openPullRequestCount > 0);
@@ -258,44 +228,6 @@ function QueueOverview({
       )}
     </section>
   );
-}
-
-function isWithinFocusAgeLimit(pullRequest: PullRequestSummary) {
-  return Date.now() - new Date(pullRequest.createdAt).getTime() <= focusAgeLimitMs;
-}
-
-function blockedFocusKeys(buckets: AttentionBucket[]) {
-  return new Set(
-    buckets
-      .filter((bucket) => disqualifyingFocusBucketLabels.has(bucket.label))
-      .flatMap((bucket) => bucket.items.map((item) => pullRequestKey(item.pullRequest))),
-  );
-}
-
-function dedupeFocusItems(items: FocusItem[], blockedKeys: Set<string>) {
-  const itemsByPullRequest = new Map<string, FocusItem>();
-
-  for (const item of items) {
-    const key = pullRequestKey(item.pullRequest);
-    if (blockedKeys.has(key)) {
-      continue;
-    }
-
-    const existing = itemsByPullRequest.get(key);
-    if (!existing || focusBucketRank(item.bucketLabel) < focusBucketRank(existing.bucketLabel)) {
-      itemsByPullRequest.set(key, item);
-    }
-  }
-
-  return [...itemsByPullRequest.values()];
-}
-
-function focusBucketRank(label: string) {
-  return focusBucketRanks.get(label) ?? Number.MAX_SAFE_INTEGER;
-}
-
-function pullRequestKey(pullRequest: PullRequestSummary) {
-  return `${pullRequest.repository.toLowerCase()}#${pullRequest.number}`;
 }
 
 export default QueueOverview;
