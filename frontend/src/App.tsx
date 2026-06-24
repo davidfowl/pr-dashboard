@@ -169,6 +169,7 @@ function App() {
     milestoneInput: initialShipWeekRouteParams.milestoneInput,
     releaseBranchInput: initialShipWeekRouteParams.releaseBranchInput,
   });
+  const initializedRef = useRef(false);
 
   const selectedTitle = selectedPullRequest
     ? `#${selectedPullRequest.number} ${selectedPullRequest.title}`
@@ -211,6 +212,11 @@ function App() {
   );
 
   useEffect(() => {
+    if (initializedRef.current) {
+      return;
+    }
+
+    initializedRef.current = true;
     void loadAuthStatus();
     if (dashboardMode === 'ship') {
       const params = shipWeekRefreshParamsRef.current;

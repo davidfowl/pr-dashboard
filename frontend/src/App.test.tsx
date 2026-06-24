@@ -438,6 +438,27 @@ describe('App navigation', () => {
 
     await unmountApp(root);
   });
+
+  it('does not abort the active issues load during direct issues mode startup', async () => {
+    window.history.replaceState(null, '', '/?mode=issues');
+    const fetchMock = createFetchMock({
+      issues: [createIssue({
+        title: 'Loaded focus issue',
+        labels: ['regression'],
+      })],
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Loaded focus issue');
+    });
+
+    const issueRequests = requestUrls(fetchMock, '/api/github/issues/focus');
+    expect(issueRequests).toHaveLength(5);
+
+    await unmountApp(root);
+  });
 });
 
 type FetchMockOptions = {
