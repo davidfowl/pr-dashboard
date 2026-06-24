@@ -433,6 +433,22 @@ sealed partial class GitHubClient(
         return user.Login;
     }
 
+    // Resolves the authenticated user's numeric id and login from GitHub's /user endpoint.
+    // Used only as a development fallback when there is no OAuth cookie principal to read the
+    // id/login claims from; production reads them from the cookie without an extra call.
+    public async Task<NotificationUser?> GetCurrentUserIdentityAsync(CancellationToken cancellationToken)
+    {
+        var user = await SendGitHubRequestAsync(
+            "user",
+            GitHubJsonSerializerContext.Default.GitHubActorDto,
+            GitHubRequestAuthorization.Token,
+            cancellationToken);
+
+        return user is { Id: > 0, Login: { Length: > 0 } login }
+            ? new NotificationUser(user.Id.Value, login)
+            : null;
+    }
+
     public async Task<IReadOnlyList<PullRequestSummary>> GetPullRequestsAsync(
         RepositoryName repositoryName,
         string state,

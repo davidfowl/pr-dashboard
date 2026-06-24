@@ -51,6 +51,49 @@ A waiting PR with unresolved threads is treated as waiting on the author: it sho
 
 Logged-out users read pull request data only from the shared public cache for repositories in `GitHubCacheWarmup:Repositories`. Configure `GITHUB_PUBLIC_CACHE_TOKEN` or `GitHubCacheWarmup:PublicCacheToken` with a server-owned fine-grained PAT or GitHub App token so the backend can verify allowlisted public visibility and refresh that cache without using anonymous quota or user tokens. Public cache entries and last-good snapshots are persisted in the Aspire-managed `github-cache` Blob container, which runs as Azurite locally and Azure Blob Storage when published. Local Azurite uses an Aspire data volume so cache snapshots survive container recreation; use the `clear-cache` resource command when you need to reset the local public cache.
 
+## Notifications (PWA + Web Push)
+
+The dashboard is an installable PWA that can deliver Web Push notifications when you are
+added as a requested reviewer on an open PR in a watched repository — even when the app is
+closed.
+
+- **Install**: in a desktop Chromium browser use the install icon in the address bar; on
+  Android use the browser "Install app" prompt. On **iOS/Safari, Web Push only works after
+  you add the app to the Home Screen** ("Share → Add to Home Screen"); the in-app panel
+  detects this and shows install guidance until then.
+- **Enable**: sign in with GitHub, then use the **Notifications** panel in the footer to
+  grant permission and subscribe. Toggle the `review_requested` preference or send a test
+  push from there. v1 only fires for `review_requested`; additional triggers are planned.
+- **Single replica**: while notifications are enabled the server runs as exactly one replica
+  (`MinReplicas = MaxReplicas = 1`) so the in-process detector is a single writer for the
+  per-user dedupe state. Horizontal scaling needs single-leader election (e.g. an Azure Blob
+  lease) and is intentionally out of scope for v1.
+
+### VAPID keys
+
+Web Push is signed with a one-time VAPID key pair and is **opt-in**: if keys are absent the
+server treats push as disabled and every push path no-ops, so local development without keys
+keeps working. Generate a key pair once (for example with `npx web-push generate-vapid-keys`,
+which emits base64url `publicKey`/`privateKey` values), then configure:
+
+- `WebPush:Enabled` = `true`
+- `WebPush:PublicKey` = the base64url public key (shipped to the browser)
+- `WebPush:PrivateKey` = the base64url private key (**secret**)
+- `WebPush:Subject` = a `mailto:` or `https` contact URL
+- `WebPush:KeyId` = optional key id/version; lets the client detect a rotation and re-subscribe
+
+For local development, store these with user-secrets on the **Server** project:
+
+```bash
+dotnet user-secrets --project pr-timeline-app.Server set "WebPush:Enabled" "true"
+dotnet user-secrets --project pr-timeline-app.Server set "WebPush:PublicKey" "<public-key>"
+dotnet user-secrets --project pr-timeline-app.Server set "WebPush:PrivateKey" "<private-key>"
+dotnet user-secrets --project pr-timeline-app.Server set "WebPush:Subject" "mailto:you@example.com"
+```
+
+Regenerating the dev key pair invalidates existing local subscriptions; re-subscribe from
+the Notifications panel afterward.
+
 ## Build and lint
 
 ```bash
@@ -84,6 +127,10 @@ export Azure__Location=<azure-region>
 export Azure__ResourceGroup=<resource-group>
 export Parameters__github_client_id=<oauth-app-client-id>
 export Parameters__github_client_secret=<oauth-app-client-secret>
+export Parameters__web_push_public_key=<vapid-public-key>
+export Parameters__web_push_private_key=<vapid-private-key>
+export Parameters__web_push_subject=mailto:you@example.com
+export Parameters__web_push_key_id=<vapid-key-id>
 
 aspire deploy
 ```

@@ -4,12 +4,16 @@ builder.AddServiceDefaults();
 
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
-builder.AddAzureBlobContainerClient(GitHubPublicCacheStore.ConnectionName);
+builder.AddKeyedAzureBlobContainerClient(GitHubPublicCacheStore.ConnectionName);
+builder.AddKeyedAzureBlobContainerClient(BlobNotificationStore.ConnectionName);
 builder.Services.Configure<GitHubCacheWarmupOptions>(
     builder.Configuration.GetSection(GitHubCacheWarmupOptions.SectionName));
+builder.Services.Configure<WebPushOptions>(
+    builder.Configuration.GetSection(WebPushOptions.SectionName));
 builder.Services.Configure<GitHubReviewPolicyOptions>(
     builder.Configuration.GetSection(GitHubReviewPolicyOptions.SectionName));
 builder.Services.AddGitHubApiServices(builder.Environment);
+builder.Services.AddNotificationServices();
 
 var app = builder.Build();
 
@@ -23,6 +27,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapGitHubAuthRoutes();
 app.MapGitHubPullRequestRoutes();
+app.MapNotificationRoutes();
 app.MapGet("/api/app-info", (IConfiguration configuration) =>
 {
     var commitSha = configuration["GIT_COMMIT_SHA"]?.Trim() is { Length: > 0 } configuredCommitSha

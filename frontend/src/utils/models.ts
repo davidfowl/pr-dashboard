@@ -40,6 +40,7 @@ import { dedupeSignals } from './signals';
 
 const approvedAgingMs = 2 * dayMs;
 const communityWaitMs = 12 * hourMs;
+const focusAgeLimitMs = 14 * dayMs;
 const stalledPullRequestMs = 7 * dayMs;
 const quickWinLineThreshold = 80;
 const quickWinFileThreshold = 3;
@@ -408,6 +409,27 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
   }
 
   return buckets.filter((bucket) => bucket.items.length > 0);
+}
+
+export function isPullRequestWithinFocusAgeLimit(pullRequest: PullRequestSummary, bucketLabel: string) {
+  return ageMs(pullRequestFocusActivityAt(pullRequest, bucketLabel)) <= focusAgeLimitMs;
+}
+
+export function pullRequestFocusActivityAt(pullRequest: PullRequestSummary, bucketLabel: string) {
+  switch (bucketLabel) {
+    case approvedButAgingBucketLabel:
+    case 'Ready to merge':
+      return reviewActivityAt(pullRequest);
+    case 'Re-review needed':
+      return reReviewActivityAt(pullRequest);
+    case 'Author response':
+    case 'Review started':
+      return reviewedActivityAt(pullRequest);
+    case 'CI failing':
+      return ciActivityAt(pullRequest);
+    default:
+      return pullRequest.updatedAt;
+  }
 }
 
 export function createFocusIssueBuckets(issues: ShipWeekIssueSummary[]): AttentionIssueBucket[] {
@@ -1058,20 +1080,75 @@ function escapeRegExp(value: string) {
 }
 
 function oldFirstSignal(pullRequest: PullRequestSummary): AttentionSignal | null {
-  const openAge = ageMs(pullRequest.createdAt);
-  if (openAge >= 14 * dayMs) {
+  const activityAge = ageMs(pullRequestAgingReferenceAt(pullRequest));
+  if (activityAge >= focusAgeLimitMs) {
     return { label: 'review debt', tone: 'danger' };
   }
 
-  if (openAge >= 7 * dayMs) {
+  if (activityAge >= 7 * dayMs) {
     return { label: 'old first', tone: 'warning' };
   }
 
-  if (openAge < 12 * hourMs) {
+  if (activityAge < 12 * hourMs) {
     return { label: 'newer', tone: 'muted' };
   }
 
   return null;
+}
+
+function pullRequestAgingReferenceAt(pullRequest: PullRequestSummary) {
+  if (isChecksFailing(pullRequest)) {
+    return ciActivityAt(pullRequest);
+  }
+
+  if (pullRequest.review.state === 'approved') {
+    return reviewActivityAt(pullRequest);
+  }
+
+  if (needsReReview(pullRequest)) {
+    return reReviewActivityAt(pullRequest);
+  }
+
+  if (pullRequest.review.state === 'reviewed' || pullRequest.review.state === 'changes_requested') {
+    return reviewedActivityAt(pullRequest);
+  }
+
+  return pullRequest.updatedAt;
+}
+
+function reviewActivityAt(pullRequest: PullRequestSummary) {
+  return latestDate(pullRequest.review.lastApprovedAt, pullRequest.review.lastReviewedAt) ?? pullRequest.updatedAt;
+}
+
+function reReviewActivityAt(pullRequest: PullRequestSummary) {
+  return pullRequest.lastCommitAt ?? pullRequest.review.lastReviewedAt ?? pullRequest.updatedAt;
+}
+
+function reviewedActivityAt(pullRequest: PullRequestSummary) {
+  return pullRequest.review.lastReviewedAt ?? pullRequest.updatedAt;
+}
+
+function ciActivityAt(pullRequest: PullRequestSummary) {
+  return latestDate(pullRequest.checks.completedAt, pullRequest.lastCommitAt) ?? pullRequest.updatedAt;
+}
+
+function latestDate(...values: (string | null | undefined)[]) {
+  let latestValue: string | null = null;
+  let latestTime = Number.NEGATIVE_INFINITY;
+
+  for (const value of values) {
+    if (value == null) {
+      continue;
+    }
+
+    const time = new Date(value).getTime();
+    if (time > latestTime) {
+      latestValue = value;
+      latestTime = time;
+    }
+  }
+
+  return latestValue;
 }
 
 function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {

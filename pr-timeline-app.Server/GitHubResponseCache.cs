@@ -8,6 +8,7 @@ using Azure;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
 
 // Cache lookups need an explicit Found flag so callers can distinguish a missing entry
 // from a cached default/null value after deserialization.
@@ -145,7 +146,7 @@ sealed class GitHubPublicCacheStore
 
     public GitHubPublicCacheStore(
         IMemoryCache memoryCache,
-        BlobContainerClient blobContainer)
+        [FromKeyedServices(ConnectionName)] BlobContainerClient blobContainer)
     {
         this.memoryCache = memoryCache;
         this.blobContainer = blobContainer;
