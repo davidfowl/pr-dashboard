@@ -24,6 +24,9 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
 
         Assert.NotNull(authStatus);
         Assert.False(authStatus.Authenticated);
+        Assert.Equal(IsGitHubOAuthConfigured(), authStatus.Configured);
+        Assert.Equal(IsGitHubOAuthConfigured(), authStatus.CanLogin);
+        Assert.Null(authStatus.Source);
         Assert.Null(authStatus.Login);
         Assert.NotEmpty(authStatus.Message);
     }
@@ -51,6 +54,15 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
         Assert.NotNull(appInfo);
         Assert.NotEmpty(appInfo.CommitSha);
         Assert.NotEmpty(appInfo.ShortCommitSha);
+        Assert.Equal(appInfo.CommitSha[..Math.Min(7, appInfo.CommitSha.Length)], appInfo.ShortCommitSha);
+        if (appInfo.CommitSha == "local")
+        {
+            Assert.Null(appInfo.CommitUrl);
+        }
+        else
+        {
+            Assert.Equal($"https://github.com/davidfowl/pr-dashboard/commit/{appInfo.CommitSha}", appInfo.CommitUrl);
+        }
     }
 
     [Fact]
@@ -101,10 +113,15 @@ public sealed class GitHubApiSmokeTests(AppHostFixture fixture) : IClassFixture<
         return fixture.Client;
     }
 
+    private static bool IsGitHubOAuthConfigured() =>
+        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GITHUB_CLIENT_ID"))
+        && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("GITHUB_CLIENT_SECRET"));
+
     private sealed record AuthStatusSmokeResponse(
         bool Authenticated,
         bool Configured,
         bool CanLogin,
+        string? Source,
         string? Login,
         string Message);
 

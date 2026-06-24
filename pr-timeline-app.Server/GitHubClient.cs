@@ -974,7 +974,7 @@ sealed partial class GitHubClient(
                 .Concat(ctiTeamIssuesTask.Result)
                 .Where(issue => issue.PullRequest is null)
                 .GroupBy(issue => issue.Number)
-                .Select(group => group.First())
+                .Select(group => group.OrderByDescending(issue => issue.UpdatedAt).First())
                 .OrderByDescending(issue => issue.UpdatedAt)
                 .ToArray();
             var linkedOpenPullRequestsByIssue = await GetLinkedOpenPullRequestsByFocusIssueAsync(
@@ -1741,13 +1741,13 @@ sealed partial class GitHubClient(
                 cancellationToken);
             if (!response.IsSuccessStatusCode)
             {
-                    return [];
+                return [];
             }
 
             var payload = await response.Content.ReadFromJsonAsync(
                 GitHubJsonSerializerContext.Default.GitHubLinkedPullRequestsResponseDto,
                 cancellationToken);
-                return payload?.Data?.Nodes ?? [];
+            return payload?.Data?.Nodes ?? [];
         }
         finally
         {
