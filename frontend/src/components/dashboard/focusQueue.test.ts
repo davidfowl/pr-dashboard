@@ -78,6 +78,20 @@ describe('computeFocusItems', () => {
     expect(focusNumbers).toContain(3);
   });
 
+  it('excludes a failing PR even when it qualifies for a high-priority lane', () => {
+    const failing = pr(20, 'failure');
+    const green = pr(21, 'success');
+
+    // Both PRs sit only in a high-priority lane (not in the CI failing bucket), so the
+    // checks filter — not the label exclusion — is the only thing that can drop the failing one.
+    const buckets: AttentionBucket[] = [bucket('Ready to merge', [failing, green])];
+
+    const focusNumbers = computeFocusItems(buckets).map((item) => item.pullRequest.number);
+
+    expect(focusNumbers).not.toContain(20);
+    expect(focusNumbers).toContain(21);
+  });
+
   it('does not surface PRs solely from the CI failing lane', () => {
     const failing = pr(10, 'failure');
     const buckets: AttentionBucket[] = [bucket('CI failing', [failing])];

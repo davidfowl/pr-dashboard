@@ -12,7 +12,6 @@ const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'Docs', 'Communit
 const disqualifyingFocusBucketLabels = new Set(['Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Copilot feedback', 'Merge conflicts']);
 const focusBucketRanks = new Map([
   ['Regression', -2],
-  ['CI failing', -1],
   ['Approved but aging', 0],
   ['Re-review needed', 1],
   ['Ready to merge', 2],
