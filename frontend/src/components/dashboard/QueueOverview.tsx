@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { dayMs } from '../../constants';
 import type {
   AttentionBucket,
   AttentionItem,
@@ -10,6 +9,7 @@ import type {
   VisiblePullRequestHandler,
 } from '../../types';
 import { colorForText, formatCount, formatRelative } from '../../utils/format';
+import { isPullRequestWithinFocusAgeLimit } from '../../utils/models';
 import GitHubAvatar from '../GitHubAvatar';
 import HelpTooltip from '../HelpTooltip';
 import LoadingBadge from '../LoadingBadge';
@@ -38,9 +38,8 @@ type FocusItem = AttentionItem & {
 };
 
 const pullRequestListLimit = 10;
-const focusAgeLimitMs = 14 * dayMs;
-const queueOverviewHelp = 'Needs attention picks each PR from its highest-priority action lane, keeps only PRs opened in the last 14 days, and hides standalone non-review lanes like docs, automation, community, drafts, merge conflicts, Copilot feedback, and stalled.';
-const needsAttentionHelp = 'Stalled means quiet for 7+ days. It is not shown as a standalone top-queue lane, but a stalled PR still appears here when it also needs review, CI fixes, author response, or merge.';
+const queueOverviewHelp = 'Needs attention is the focused action queue: each PR appears once under its highest-priority actionable lane when that lane has fresh activity. Activity is lane-specific, such as the latest approval/review for merge lanes, the newest commit for re-review, CI completion for failing checks, or the PR update time for review-needed work.';
+const needsAttentionHelp = 'Being in Needs attention means the PR has an actionable reason for someone to review, fix CI, respond, or merge, and that reason was refreshed in the last 14 days. Standalone signal lanes like stalled, docs, automation, community, drafts, merge conflicts, and Copilot feedback stay out of this top queue.';
 const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Copilot feedback', 'Merge conflicts']);
 const disqualifyingFocusBucketLabels = new Set(['Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Copilot feedback', 'Merge conflicts']);
 const focusBucketRanks = new Map([
@@ -83,7 +82,7 @@ function QueueOverview({
           }))),
       blockedKeys,
     )
-      .filter((item) => isWithinFocusAgeLimit(item.pullRequest));
+      .filter((item) => isPullRequestWithinFocusAgeLimit(item.pullRequest, item.bucketLabel));
   }, [attentionBuckets]);
 
   const coreOpenCount = counts.reduce((total, count) => total + count.openPullRequestCount, 0);
@@ -162,11 +161,11 @@ function QueueOverview({
       <div className="section-title-row">
         <p className="eyebrow">Queue overview</p>
         <div className="section-title-heading">
-          <h3>One queue across repos: recent PRs first, bucket details one click away.</h3>
+          <h3>One focused action queue across repos, with lane details one click away.</h3>
           <HelpTooltip label={queueOverviewHelp} />
         </div>
         <p className="board-guidance">
-          Needs attention shows primary action lanes; hover the help icon for the exact include/exclude rules.
+          Needs attention shows one actionable row per PR; age is measured from the lane activity, not the date opened.
         </p>
       </div>
 
@@ -187,7 +186,7 @@ function QueueOverview({
             />
           </div>
         </div>
-        <p>Actionable PRs across the loaded repositories.</p>
+        <p>PRs with recent action-relevant activity that need someone to review, fix CI, respond, or merge.</p>
 
         {loading && !hasLoaded && focusItems.length === 0 ? (
           <LoadingCardPlaceholders label="Loading review queue cards" />
@@ -202,7 +201,7 @@ function QueueOverview({
               },
             }))}
             limit={pullRequestListLimit}
-            emptyState={loading ? 'Loading review queue...' : 'No recent non-automation PRs need attention in the current results.'}
+            emptyState={loading ? 'Loading review queue...' : 'No PRs with recent action-relevant activity need attention in the current results.'}
             onSelectPullRequest={onSelectPullRequest}
             onVisiblePullRequest={onVisiblePullRequest}
             visibleChecksRefreshKey={visibleChecksRefreshKey}
@@ -258,10 +257,6 @@ function QueueOverview({
       )}
     </section>
   );
-}
-
-function isWithinFocusAgeLimit(pullRequest: PullRequestSummary) {
-  return Date.now() - new Date(pullRequest.createdAt).getTime() <= focusAgeLimitMs;
 }
 
 function blockedFocusKeys(buckets: AttentionBucket[]) {
