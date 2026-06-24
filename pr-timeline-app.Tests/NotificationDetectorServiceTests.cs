@@ -32,14 +32,14 @@ public sealed class ReviewRequestDetectionTests
     [Fact]
     public void EventKeyAndDeepLinkFollowConventions()
     {
-        Assert.Equal("review_requested:microsoft/aspire#101", ReviewRequestDetection.EventKey("microsoft/aspire", 101));
-        Assert.Equal("/#pr/microsoft%2Faspire/101", ReviewRequestDetection.DeepLink("microsoft/aspire", 101));
+        Assert.Equal("review_requested:microsoft/aspire#101", ReviewRequestDetection.EventKey("Microsoft/Aspire", 101));
+        Assert.Equal("/#pr/microsoft%2Faspire/101", ReviewRequestDetection.DeepLink("Microsoft/Aspire", 101));
     }
 
     [Fact]
     public void TryGetRepositoryRecoversSlug()
     {
-        Assert.True(ReviewRequestDetection.TryGetRepository("review_requested:microsoft/aspire#101", out var repo));
+        Assert.True(ReviewRequestDetection.TryGetRepository("review_requested:Microsoft/Aspire#101", out var repo));
         Assert.Equal("microsoft/aspire", repo);
         Assert.False(ReviewRequestDetection.TryGetRepository("something_else:foo#1", out _));
     }
@@ -58,11 +58,12 @@ public sealed class ReviewRequestDetectionTests
         };
 
         var detected = ReviewRequestDetection
-            .DetectForRepository("o/r", pullRequests, subscribers)
+            .DetectForRepository("O/R", pullRequests, subscribers)
             .ToList();
 
         Assert.Single(detected);
         Assert.Equal(7, detected[0].UserId);
+        Assert.Equal("o/r", detected[0].Repository);
         Assert.Equal(1, detected[0].Number);
         Assert.Equal("/#pr/o%2Fr/1", detected[0].Url);
     }
@@ -176,6 +177,39 @@ public sealed class NotificationDetectorServiceTests
 
         var state = await store.GetStateAsync(1, TestContext.Current.CancellationToken);
         Assert.True(state.State.Events.ContainsKey(ReviewRequestDetection.EventKey("o/r", 5)));
+    }
+
+    [Fact]
+    public async Task ExistingMixedCaseStateMigratesWithoutDuplicateNotification()
+    {
+        var store = new InMemoryNotificationStore();
+        var sender = new FakePushSender();
+        var service = CreateService(store, sender, new TestTimeProvider());
+
+        var subs = new[] { Subscription() };
+        await store.UpsertSubscriptionAsync(1, subs[0], TestContext.Current.CancellationToken);
+        await store.UpdateStateAsync(1, state =>
+        {
+            state.Events["review_requested:O/R#5"] = new NotificationEventState
+            {
+                Fingerprint = ReviewRequestDetection.RequestedFingerprint,
+                LastNotifiedAt = DateTimeOffset.UnixEpoch
+            };
+            return true;
+        }, TestContext.Current.CancellationToken);
+
+        await service.ProcessUserAsync(
+            1,
+            subs,
+            [Candidate(1, "o/r", 5)],
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "o/r" },
+            new DetectorCycleStats(),
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(sender.Sent);
+        var state = await store.GetStateAsync(1, TestContext.Current.CancellationToken);
+        Assert.True(state.State.Events.ContainsKey(ReviewRequestDetection.EventKey("o/r", 5)));
+        Assert.False(state.State.Events.ContainsKey("review_requested:O/R#5"));
     }
 
     [Fact]

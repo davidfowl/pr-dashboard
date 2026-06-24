@@ -15,13 +15,16 @@ static class ReviewRequestDetection
     // is no longer requested) lets a later re-request notify again.
     public const string RequestedFingerprint = "requested";
 
+    public static string NormalizeRepository(string repository) =>
+        repository.Trim().ToLowerInvariant();
+
     public static string EventKey(string repository, int number) =>
-        $"{EventPrefix}:{repository}#{number}";
+        $"{EventPrefix}:{NormalizeRepository(repository)}#{number}";
 
     // Deep link consumed by the SW/app router. Matches the `#pr/<owner%2Frepo>/<number>`
     // convention used by the frontend (App.tsx parseDetailHash).
     public static string DeepLink(string repository, int number) =>
-        $"/#pr/{Uri.EscapeDataString(repository)}/{number}";
+        $"/#pr/{Uri.EscapeDataString(NormalizeRepository(repository))}/{number}";
 
     // Recovers the repository slug from an event key so stale state for scanned repos can be
     // pruned. Returns false for keys that aren't review_requested events.
@@ -40,7 +43,7 @@ static class ReviewRequestDetection
             return false;
         }
 
-        repository = eventKey[prefix.Length..hashIndex];
+        repository = NormalizeRepository(eventKey[prefix.Length..hashIndex]);
         return repository.Length > 0;
     }
 
@@ -51,6 +54,7 @@ static class ReviewRequestDetection
         IReadOnlyList<PullRequestSummary> pullRequests,
         IReadOnlySet<long> subscribedUserIds)
     {
+        var normalizedRepository = NormalizeRepository(repository);
         foreach (var pullRequest in pullRequests)
         {
             if (pullRequest.Draft
@@ -65,10 +69,10 @@ static class ReviewRequestDetection
                 {
                     yield return new DetectedReviewRequest(
                         reviewerId,
-                        repository,
+                        normalizedRepository,
                         pullRequest.Number,
                         pullRequest.Title,
-                        DeepLink(repository, pullRequest.Number));
+                        DeepLink(normalizedRepository, pullRequest.Number));
                 }
             }
         }

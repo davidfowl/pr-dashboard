@@ -194,8 +194,9 @@ sealed class NotificationDetectorService(
 
         // Read current state to decide which candidates are genuinely new (not yet notified).
         var existing = (await store.GetStateAsync(userId, cancellationToken)).State.Events;
+        var existingKeys = existing.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var newCandidates = distinctCandidates
-            .Where(candidate => !existing.ContainsKey(ReviewRequestDetection.EventKey(candidate.Repository, candidate.Number)))
+            .Where(candidate => !existingKeys.Contains(ReviewRequestDetection.EventKey(candidate.Repository, candidate.Number)))
             .ToList();
 
         // Send first, then persist state only for events that actually delivered, so a transient
@@ -229,6 +230,25 @@ sealed class NotificationDetectorService(
                     LastNotifiedAt = now
                 };
                 changed = true;
+            }
+
+            // Migrate pre-normalization keys (same repo/PR but different casing) without
+            // re-sending a notification. Future cycles then use the stable canonical key.
+            foreach (var key in currentKeys)
+            {
+                if (state.Events.ContainsKey(key))
+                {
+                    continue;
+                }
+
+                var existingKey = state.Events.Keys
+                    .FirstOrDefault(candidate => string.Equals(candidate, key, StringComparison.OrdinalIgnoreCase));
+                if (existingKey is not null)
+                {
+                    state.Events[key] = state.Events[existingKey];
+                    state.Events.Remove(existingKey);
+                    changed = true;
+                }
             }
 
             // Prune entries for repos we scanned this cycle where the user is no longer a
