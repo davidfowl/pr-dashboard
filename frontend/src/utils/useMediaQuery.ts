@@ -22,8 +22,16 @@ export function useMediaQuery(query: string): boolean {
     const onChange = () => setMatches(mql.matches);
 
     onChange();
-    mql.addEventListener('change', onChange);
-    return () => mql.removeEventListener('change', onChange);
+
+    // Safari/iOS < 14 only expose the deprecated addListener/removeListener.
+    // Fall back to those so the effect never throws and takes down the app.
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', onChange);
+      return () => mql.removeEventListener('change', onChange);
+    }
+
+    mql.addListener(onChange);
+    return () => mql.removeListener(onChange);
   }, [query]);
 
   return matches;

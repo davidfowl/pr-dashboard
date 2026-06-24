@@ -2,11 +2,11 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 import type { AuthStatus, DashboardMode } from '../types';
-import { useMediaQuery } from '../utils/useMediaQuery';
 import GitHubAvatar from './GitHubAvatar';
 import NotificationSettings from './NotificationSettings';
 
 type MobileNavProps = {
+  isMobile: boolean;
   dashboardMode: DashboardMode;
   authStatus: AuthStatus | null;
   loginLoading: boolean;
@@ -70,6 +70,7 @@ function modeLabel(mode: DashboardMode): string {
 }
 
 function MobileNav({
+  isMobile,
   dashboardMode,
   authStatus,
   loginLoading,
@@ -78,7 +79,6 @@ function MobileNav({
   onLogin,
   onLogout,
 }: MobileNavProps) {
-  const isMobile = useMediaQuery('(max-width: 720px)');
   const [open, setOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -86,15 +86,14 @@ function MobileNav({
 
   const authenticated = authStatus?.authenticated === true;
 
-  const close = useCallback(() => setOpen(false), []);
-
   // Close + restore focus to the hamburger when the drawer is dismissed.
   const dismiss = useCallback(() => {
     setOpen(false);
     triggerRef.current?.focus();
   }, []);
 
-  // Lock body scroll, wire Escape, and move focus into the drawer while open.
+  // Lock body scroll, wire Escape, trap Tab focus inside the drawer, and move
+  // focus into the drawer while open.
   useEffect(() => {
     if (!open) {
       return;
@@ -103,17 +102,52 @@ function MobileNav({
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
 
+    const focusableSelector =
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+    const getFocusable = () =>
+      Array.from(drawerRef.current?.querySelectorAll<HTMLElement>(focusableSelector) ?? []).filter(
+        (el) => el.offsetParent !== null || el === document.activeElement,
+      );
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         dismiss();
+        return;
+      }
+
+      if (event.key !== 'Tab') {
+        return;
+      }
+
+      // Keep Tab/Shift+Tab cycling within the drawer so focus can't reach the
+      // obscured background content behind the modal overlay.
+      const focusable = getFocusable();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        drawerRef.current?.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      const inDrawer = active ? drawerRef.current?.contains(active) === true : false;
+
+      if (event.shiftKey) {
+        if (!inDrawer || active === first) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (!inDrawer || active === last) {
+        event.preventDefault();
+        first.focus();
       }
     };
     window.addEventListener('keydown', onKeyDown);
 
     // Focus the first focusable control in the drawer.
-    const focusTarget = drawerRef.current?.querySelector<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-    );
+    const focusTarget = drawerRef.current?.querySelector<HTMLElement>(focusableSelector);
     focusTarget?.focus();
 
     return () => {
@@ -136,7 +170,7 @@ function MobileNav({
 
   const handleMode = (mode: DashboardMode) => {
     onSwitchMode(mode);
-    close();
+    dismiss();
   };
 
   return (
@@ -173,6 +207,7 @@ function MobileNav({
               role="dialog"
               aria-modal="true"
               aria-label="Menu"
+              tabIndex={-1}
             >
               <div className="mobile-drawer-head">
                 <span className="mobile-drawer-title">Menu</span>

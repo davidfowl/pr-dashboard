@@ -1109,6 +1109,7 @@ function App() {
   return (
     <div className="app-shell" style={{ '--repo-accent': repoAccent } as CSSProperties}>
       <MobileNav
+        isMobile={isMobileNav}
         dashboardMode={dashboardMode}
         authStatus={authStatus}
         loginLoading={loginLoading}
