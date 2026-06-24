@@ -280,9 +280,10 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
-    public async Task AuthenticatedAllowlistedRepositoryDoesNotUsePublicBaselineBeforeTokenLoad()
+    public async Task AuthenticatedAllowlistedRepositoryUsesPublicSnapshotBeforeTokenLoad()
     {
         var cache = new MemoryCache(new MemoryCacheOptions());
+        var publicCacheStore = new GitHubPublicCacheStore(cache);
         var requests = new ConcurrentQueue<(string Path, string? Token)>();
         var route = (HttpRequestMessage request, CancellationToken _) =>
         {
@@ -302,12 +303,12 @@ public sealed class GitHubClientTests
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
             });
         };
-        var warmupClient = CreateClientFromRequests(route, cache, "token-a");
+        var warmupClient = CreateClientFromRequests(route, cache, "token-a", publicCacheStore: publicCacheStore);
         await warmupClient.TryPrewarmPublicPullRequestsAsync(
             new RepositoryName("example", "repo"),
             "open",
             TestContext.Current.CancellationToken);
-        var authenticatedClient = CreateClientFromRequests(route, cache, "token-a");
+        var authenticatedClient = CreateClientFromRequests(route, cache, "token-a", publicCacheStore: publicCacheStore);
 
         var pullRequests = await authenticatedClient.GetPullRequestsAsync(
             new RepositoryName("example", "repo"),
@@ -315,9 +316,9 @@ public sealed class GitHubClientTests
             false,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal("Token enriched list", Assert.Single(pullRequests).Title);
-        Assert.Contains(requests, request => request.Token == "token-a" && request.Path.Contains("/reviews", StringComparison.Ordinal));
-        Assert.Contains(requests, request => request.Token == "token-a" && request.Path == "repos/example/repo/pulls/1");
+        Assert.Equal("Public baseline", Assert.Single(pullRequests).Title);
+        Assert.DoesNotContain(requests, request => request.Token == "token-a" && request.Path.Contains("/reviews", StringComparison.Ordinal));
+        Assert.DoesNotContain(requests, request => request.Token == "token-a" && request.Path == "repos/example/repo/pulls/1");
     }
 
     [Fact]
@@ -570,10 +571,10 @@ public sealed class GitHubClientTests
             false,
             TestContext.Current.CancellationToken));
 
-        Assert.Equal("Token A list", secondStream[0].Title);
+        Assert.Equal("Token A list", Assert.Single(secondStream).Title);
         Assert.Equal("waiting", secondStream[0].Review.State);
         Assert.Equal("none", secondStream[0].Checks.State);
-        Assert.Contains(secondStream.Skip(1), pullRequest => pullRequest.Title == "Token B live");
+        Assert.DoesNotContain(requests, request => request.Token == "token-b");
         Assert.Contains(requests, request => request.Path == "repos/example/repo" && request.Token is null);
         Assert.DoesNotContain(requests, request => request.Token == "public-cache-token");
     }

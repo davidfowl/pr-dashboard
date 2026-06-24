@@ -120,6 +120,9 @@ function DashboardView({
     || (!shipModeActive && !issuesModeActive && pullRequests.length > 0)
     || (issuesModeActive && issues.length > 0)
     || (shipModeActive && shipWeek !== null);
+  const visibleRefreshLoading = refreshing && !hasLoadedData;
+  const visiblePullsLoading = pullsLoading && !hasLoadedData;
+  const visibleIssuesLoading = issuesLoading && !hasLoadedData;
   const displayedLastUpdatedAt = lastUpdatedAt
     ?? (!shipModeActive && !issuesModeActive && pullRequests.length > 0
       ? getLatestFetchedAt(pullRequests)
@@ -150,8 +153,8 @@ function DashboardView({
             Auto-refreshes about every {autoRefreshCadence} using cached data.
           </p>
         </div>
-        <button type="button" onClick={onRefresh} disabled={refreshing}>
-          {refreshing ? (hasLoadedData ? 'Refreshing...' : 'Loading...') : 'Refresh now'}
+        <button type="button" onClick={onRefresh} disabled={visibleRefreshLoading}>
+          {visibleRefreshLoading ? 'Loading...' : 'Refresh now'}
         </button>
       </section>
 
@@ -181,7 +184,7 @@ function DashboardView({
           ) : issuesModeActive ? (
             <IssuesOverview
               issueBuckets={issueBuckets}
-              loading={issuesLoading}
+              loading={visibleIssuesLoading}
               hasLoaded={hasLoadedData}
               selectedBucketId={selectedBucketId}
               onSelectBucket={onSelectBucket}
@@ -192,7 +195,7 @@ function DashboardView({
               counts={developerPullRequestCounts}
               attentionBuckets={attentionBuckets}
               forMeItems={forMeItems}
-              loading={pullsLoading}
+              loading={visiblePullsLoading}
               hasLoaded={hasLoadedData}
               selectedBucketId={selectedBucketId}
               login={login}
@@ -209,10 +212,10 @@ function DashboardView({
         dashboardMode={dashboardMode}
         repo={repo}
         state={state}
-        pullsLoading={pullsLoading}
+        pullsLoading={visiblePullsLoading}
         pullRequests={pullRequests}
         error={error}
-        issuesLoading={issuesLoading}
+        issuesLoading={visibleIssuesLoading}
         issues={issues}
         issuesError={issuesError}
         shipWeekRepo={shipWeekRepo}

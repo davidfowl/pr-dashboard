@@ -77,6 +77,24 @@ sealed partial class GitHubClient(
             CacheOnly: false);
     }
 
+    private async Task<RepositoryCacheScopeSelection> GetPullRequestListCacheScopeSelectionAsync(
+        RepositoryName repositoryName,
+        bool forceRefresh,
+        CancellationToken cancellationToken)
+    {
+        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        if (!forceRefresh && scopeSelection.SharedFallbackScope is { } sharedFallbackScope)
+        {
+            return new RepositoryCacheScopeSelection(
+                sharedFallbackScope,
+                SharedFallbackScope: null,
+                Refresh: false,
+                CacheOnly: true);
+        }
+
+        return scopeSelection;
+    }
+
     private async Task<GitHubCacheScope?> GetSharedFallbackScopeAsync(
         RepositoryName repositoryName,
         CancellationToken cancellationToken)
@@ -466,7 +484,7 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         CancellationToken cancellationToken)
     {
-        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        var scopeSelection = await GetPullRequestListCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
         return await GetPullRequestsAsync(
             repositoryName,
             state,
@@ -589,7 +607,7 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        var scopeSelection = await GetPullRequestListCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
         var scope = scopeSelection.Scope;
         var cacheKey = CreateRepositoryCacheKey(
             scope,

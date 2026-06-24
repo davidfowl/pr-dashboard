@@ -383,7 +383,8 @@ describe('App navigation', () => {
 
     expect(document.body.textContent).not.toContain('List has not loaded yet.');
     expect(document.body.textContent).toContain('List updated');
-    expect(document.body.textContent).toContain('Refreshing');
+    expect(document.body.textContent).not.toContain('Refreshing');
+    expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
 
     await unmountApp(root);
   });
@@ -406,7 +407,8 @@ describe('App navigation', () => {
       expect(document.body.textContent).toContain('Live baseline row');
       expect(document.body.textContent).not.toContain('Live enriched row');
     });
-    expect((getButton('Refreshing...') as HTMLButtonElement).disabled).toBe(true);
+    expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
+    expect(document.body.textContent).not.toContain('Refreshing');
 
     await act(async () => {
       liveRefresh.resolve();
