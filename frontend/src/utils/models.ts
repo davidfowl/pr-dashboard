@@ -915,6 +915,14 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
     signals.push({ label: 'merge conflicts', tone: 'danger' });
   }
 
+  const progress = reviewProgressSignal(pullRequest);
+  // Approval progress should survive card-level signal limits; other review progress can stay
+  // with the lower-priority metadata below.
+  const prioritizeProgress = progress?.tone === 'success' && pullRequest.review.approvalCount > 0;
+  if (progress && prioritizeProgress) {
+    signals.push(progress);
+  }
+
   if (targetsCurrentRelease(pullRequest)) {
     signals.push({ label: `release ${currentRelease}`, tone: 'danger' });
   }
@@ -978,8 +986,7 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
     tone: Date.now() - new Date(pullRequest.createdAt).getTime() >= 7 * dayMs ? 'warning' : 'muted',
   });
 
-  const progress = reviewProgressSignal(pullRequest);
-  if (progress) {
+  if (progress && !prioritizeProgress) {
     signals.push(progress);
   }
 
