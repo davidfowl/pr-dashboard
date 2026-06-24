@@ -116,7 +116,14 @@ function DashboardView({
   const shipModeActive = dashboardMode === 'ship';
   const issuesModeActive = dashboardMode === 'issues';
   const refreshing = shipModeActive ? shipWeekLoading : issuesModeActive ? issuesLoading : pullsLoading;
-  const hasLoadedData = lastUpdatedAt !== null;
+  const hasLoadedData = lastUpdatedAt !== null
+    || (!shipModeActive && !issuesModeActive && pullRequests.length > 0)
+    || (issuesModeActive && issues.length > 0)
+    || (shipModeActive && shipWeek !== null);
+  const displayedLastUpdatedAt = lastUpdatedAt
+    ?? (!shipModeActive && !issuesModeActive && pullRequests.length > 0
+      ? getLatestFetchedAt(pullRequests)
+      : null);
   const autoRefreshCadence = formatDuration(autoRefreshIntervalMs);
   const dataTitle = shipModeActive
     ? 'Ship mode data'
@@ -136,8 +143,8 @@ function DashboardView({
           <p className="eyebrow">Refresh</p>
           <h2>{dataTitle}</h2>
           <p>
-            {lastUpdatedAt
-              ? `List updated ${formatRelative(lastUpdatedAt)} at ${formatTime(lastUpdatedAt)}.`
+            {displayedLastUpdatedAt
+              ? `List updated ${formatRelative(displayedLastUpdatedAt)} at ${formatTime(displayedLastUpdatedAt)}.`
               : 'List has not loaded yet.'}
             {' '}
             Auto-refreshes about every {autoRefreshCadence} using cached data.
@@ -225,3 +232,10 @@ function DashboardView({
 }
 
 export default DashboardView;
+
+function getLatestFetchedAt(pullRequests: PullRequestSummary[]) {
+  return pullRequests
+    .map((pullRequest) => pullRequest.fetchedAt)
+    .filter(Boolean)
+    .sort((first, second) => new Date(second).getTime() - new Date(first).getTime())[0] ?? null;
+}

@@ -12,7 +12,7 @@ type ActEnvironment = typeof globalThis & {
 
 (globalThis as ActEnvironment).IS_REACT_ACT_ENVIRONMENT = true;
 
-describe('PullRequestListItem metadata signals', () => {
+describe('PullRequestListItem metadata', () => {
   let root: ReturnType<typeof createRoot> | null = null;
 
   afterEach(async () => {
@@ -25,7 +25,7 @@ describe('PullRequestListItem metadata signals', () => {
     document.body.innerHTML = '';
   });
 
-  it('keeps generic age/status-age semantics visible in metadata instead of pills', async () => {
+  it('does not show generic age/status-age semantics in the metadata column', async () => {
     await renderPullRequests([
       pullRequest({
         number: 1,
@@ -61,15 +61,15 @@ describe('PullRequestListItem metadata signals', () => {
     ]);
 
     expect(rowSignals('Approved age metadata')).not.toContain('approved ');
-    expect(rowMeta('Approved age metadata')).toContain('approved ');
+    expect(rowMeta('Approved age metadata')).not.toContain('approved ');
 
     expect(rowSignals('Old first metadata')).not.toContain('old first');
     expect(rowSignals('Old first metadata')).not.toContain('open ');
-    expect(rowMeta('Old first metadata')).toContain('old first');
-    expect(rowMeta('Old first metadata')).toContain('open ');
+    expect(rowMeta('Old first metadata')).not.toContain('old first');
+    expect(rowMeta('Old first metadata')).not.toContain('open ');
 
     expect(rowSignals('Review debt metadata')).not.toContain('review debt');
-    expect(rowMeta('Review debt metadata')).toContain('review debt');
+    expect(rowMeta('Review debt metadata')).not.toContain('review debt');
   });
 
   async function renderPullRequests(pullRequests: PullRequestSummary[]) {

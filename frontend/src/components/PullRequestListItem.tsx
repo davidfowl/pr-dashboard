@@ -1,15 +1,13 @@
 import { useEffect, useRef } from 'react';
 import { dayMs } from '../constants';
 import type {
-  AttentionSignal,
   CheckState,
   LinkedIssueSummary,
   PullRequestSummary,
   VisiblePullRequestHandler,
 } from '../types';
 import { formatRelative } from '../utils/format';
-import { createAttentionSignals, sameLogin } from '../utils/models';
-import { rowMetadataDisplaySignals } from '../utils/rowMetadataSignals';
+import { sameLogin } from '../utils/models';
 import PullRequestSignalPills from './PullRequestSignalPills';
 import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
 
@@ -52,7 +50,10 @@ function PullRequestListItem({
   const isReadyToMerge = bucketLabel === 'Ready to merge';
   const updatedAge = updatedAgeParts(pullRequest.updatedAt);
   const updatedAgeTone = staleUpdatedAgeTone(pullRequest.updatedAt);
-  const metadataSignals = rowMetadataDisplaySignals(createAttentionSignals({ pullRequest, reason: '' }));
+  const leadingSignals = [
+    ...(isSignedInAuthor ? [{ label: 'Yours', tone: 'accent' as const }] : []),
+    ...(signalProps?.leadingSignals ?? []),
+  ];
   const badgeTitle = badge
     ? `${badge.label}${pullRequest.checks?.failingChecks?.length
       ? ` · ${pullRequest.checks.failingChecks.map((failing) => failing.name).join(', ')}`
@@ -153,20 +154,16 @@ function PullRequestListItem({
         {pullRequest.title}
       </a>
       <span className="attention-pr-meta">
-        {pullRequest.author} · updated{' '}
-        <span className={`attention-pr-updated-age${updatedAgeTone ? ` age-tone-${updatedAgeTone}` : ''}`}>
-          {updatedAge.value}
+        <span className="attention-pr-author" title={pullRequest.author}>
+          {pullRequest.author}
         </span>
-        {updatedAge.suffix && ` ${updatedAge.suffix}`}
-        {metadataSignals.map((signal) => (
-          <span
-            key={signal.label}
-            className={rowMetadataClassName(signal)}
-          >
-            {` · ${signal.label}`}
+        <span className="attention-pr-updated">
+          {' · updated '}
+          <span className={`attention-pr-updated-age${updatedAgeTone ? ` age-tone-${updatedAgeTone}` : ''}`}>
+            {updatedAge.value}
           </span>
-        ))}
-        {isSignedInAuthor && <span className="signed-in-user-badge">Yours</span>}
+          {updatedAge.suffix && ` ${updatedAge.suffix}`}
+        </span>
       </span>
       <div className="attention-pr-actions">
         <button
@@ -178,7 +175,11 @@ function PullRequestListItem({
           View timeline
         </button>
       </div>
-      <PullRequestSignalPills pullRequest={pullRequest} {...signalProps} />
+      <PullRequestSignalPills
+        pullRequest={pullRequest}
+        {...signalProps}
+        leadingSignals={leadingSignals}
+      />
       {linkedIssues.length > 0 && (
         <span className="attention-pr-linked-issues" aria-label="Linked issues">
           {linkedIssues.slice(0, 3).map((issue) => (
@@ -217,15 +218,6 @@ function staleUpdatedAgeTone(value: string) {
     return 'warning';
   }
   return null;
-}
-
-function rowMetadataTone(signal: AttentionSignal) {
-  return signal.tone === 'warning' || signal.tone === 'danger' ? signal.tone : null;
-}
-
-function rowMetadataClassName(signal: AttentionSignal) {
-  const tone = rowMetadataTone(signal);
-  return `attention-pr-row-metadata-signal${tone ? ` age-tone-${tone}` : ''}`;
 }
 
 export default PullRequestListItem;

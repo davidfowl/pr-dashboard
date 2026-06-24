@@ -95,8 +95,31 @@ describe('App navigation', () => {
     });
     const signedInRow = document.querySelector('.attention-pr-row.signed-in-user-entry');
     const metaBadge = signedInRow?.querySelector('.attention-pr-meta .signed-in-user-badge');
-    expect(metaBadge?.textContent).toBe('Yours');
+    const signalsBadge = Array.from(signedInRow?.querySelectorAll('.attention-pr-signals .attention-signal') ?? [])
+      .find((signal) => signal.textContent === 'Yours');
+    expect(metaBadge).toBeNull();
+    expect(signalsBadge?.textContent).toBe('Yours');
     expect(signedInRow?.classList.contains('signed-in-user-entry-full-bleed')).toBe(true);
+
+    await unmountApp(root);
+  });
+
+  it('keeps long author metadata readable without clipping the updated age', async () => {
+    window.history.replaceState(null, '', '/');
+    vi.stubGlobal('fetch', createFetchMock({
+      author: 'maddymontaquila/copilot',
+    }));
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('maddymontaquila/copilot');
+    });
+
+    const row = pullRequestRow('Fix dashboard navigation');
+    const meta = row.querySelector('.attention-pr-meta');
+    expect(meta?.querySelector('.attention-pr-author')?.textContent).toBe('maddymontaquila/copilot');
+    expect(meta?.textContent).toContain('updated');
+    expect(meta?.querySelector('.attention-pr-updated-age')?.textContent).toBeTruthy();
 
     await unmountApp(root);
   });
@@ -213,7 +236,7 @@ describe('App navigation', () => {
     await unmountApp(root);
   });
 
-  it('moves approved, open, and old-first computed age semantics into row metadata', async () => {
+  it('keeps approved, open, and old-first computed age semantics out of row metadata', async () => {
     window.history.replaceState(null, '', '/');
     vi.stubGlobal('fetch', createFetchMock({
       createdAt: daysAgo(16),
@@ -221,7 +244,7 @@ describe('App navigation', () => {
       extraPullRequests: [
         createPullRequest('success', {
           number: 102,
-          title: 'Approved metadata row',
+          title: 'Approved signal row',
           htmlUrl: 'https://github.com/microsoft/aspire/pull/102',
           createdAt: daysAgo(10),
           updatedAt: daysAgo(1),
@@ -240,7 +263,7 @@ describe('App navigation', () => {
         }),
         createPullRequest('none', {
           number: 103,
-          title: 'Old first metadata row',
+          title: 'Old first signal row',
           htmlUrl: 'https://github.com/microsoft/aspire/pull/103',
           createdAt: daysAgo(8),
           updatedAt: daysAgo(8),
@@ -252,20 +275,20 @@ describe('App navigation', () => {
     const { root } = await renderApp();
 
     await waitFor(() => {
-      expect(document.body.textContent).toContain('Old first metadata row');
+      expect(document.body.textContent).toContain('Old first signal row');
     });
 
-    const approvedRow = pullRequestRow('Approved metadata row');
+    const approvedRow = pullRequestRow('Approved signal row');
     expect(approvedRow.querySelector('.attention-pr-signals')?.textContent).not.toContain('approved ');
-    expect(approvedRow.querySelector('.attention-pr-meta')?.textContent).toContain('approved ');
+    expect(approvedRow.querySelector('.attention-pr-meta')?.textContent).not.toContain('approved ');
 
-    const oldFirstRow = pullRequestRow('Old first metadata row');
+    const oldFirstRow = pullRequestRow('Old first signal row');
     const oldFirstSignals = oldFirstRow.querySelector('.attention-pr-signals')?.textContent ?? '';
     const oldFirstMeta = oldFirstRow.querySelector('.attention-pr-meta')?.textContent ?? '';
     expect(oldFirstSignals).not.toContain('old first');
     expect(oldFirstSignals).not.toContain('open ');
-    expect(oldFirstMeta).toContain('old first');
-    expect(oldFirstMeta).toContain('open ');
+    expect(oldFirstMeta).not.toContain('old first');
+    expect(oldFirstMeta).not.toContain('open ');
     await unmountApp(root);
   });
 
@@ -337,6 +360,23 @@ describe('App navigation', () => {
     await waitFor(() => {
       expect(checksRequestUrls(fetchMock).some((url) => url.searchParams.get('refresh') === 'true')).toBe(true);
     });
+
+    await unmountApp(root);
+  });
+
+  it('marks the review list loaded once streamed rows are visible even if a repo stream is still open', async () => {
+    window.history.replaceState(null, '', '/');
+    const neverCompletes = createDeferred<void>();
+    vi.stubGlobal('fetch', createPartialInitialLoadFetchMock(neverCompletes.promise));
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Quick streamed row');
+    });
+
+    expect(document.body.textContent).not.toContain('List has not loaded yet.');
+    expect(document.body.textContent).toContain('List updated');
+    expect(document.body.textContent).toContain('Refreshing');
 
     await unmountApp(root);
   });
@@ -787,6 +827,71 @@ function createStalePreservingRefreshFetchMock(liveRefresh: Promise<void>) {
           headSha: pullRequest.headSha ?? '',
           checks: pullRequest.checks,
         })),
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createPartialInitialLoadFetchMock(openStream: Promise<void>) {
+  const streamed = createPullRequest('success', {
+    title: 'Quick streamed row',
+    updatedAt: '2026-01-03T00:00:00Z',
+  });
+
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/github/pulls/stream') {
+      if (url.searchParams.get('repo') === streamed.repository) {
+        return jsonLinesStreamResponse([createStreamItem(streamed)], openStream, []);
+      }
+
+      return jsonLinesResponse([]);
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: streamed.repository,
+        pullRequests: [{
+          number: streamed.number,
+          headSha: streamed.headSha ?? '',
+          checks: streamed.checks,
+        }],
       });
     }
 
