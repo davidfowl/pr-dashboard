@@ -52,6 +52,8 @@ The Copilot review bot's reviews are filtered out of a PR's human review state, 
 
 A waiting PR with unresolved threads is treated as waiting on the author: it shows an `address feedback` action, moves to a **Copilot feedback** bucket, and is kept out of the **Needs attention** focus queue. The extra GraphQL call is bounded to waiting PRs the bot actually reviewed.
 
+Any PR whose head commit has failing checks is also kept out of the **Needs attention** focus queue (pending checks are fine). The author still sees it in the standalone **CI failing** bucket, and it reappears in Needs attention once its checks are green — nudging the team to keep CI passing.
+
 ## Production public cache
 
 Logged-out users read pull request data only from the shared public cache for repositories in `GitHubCacheWarmup:Repositories`. Configure `GITHUB_PUBLIC_CACHE_TOKEN` or `GitHubCacheWarmup:PublicCacheToken` with a server-owned fine-grained PAT or GitHub App token so the backend can verify allowlisted public visibility and refresh that cache without using anonymous quota or user tokens. Public cache entries and last-good snapshots are persisted in the Aspire-managed `github-cache` Blob container, which runs as Azurite locally and Azure Blob Storage when published. Local Azurite uses an Aspire data volume so cache snapshots survive container recreation; use the `clear-cache` resource command when you need to reset the local public cache.

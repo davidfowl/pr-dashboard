@@ -2,14 +2,14 @@ import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type {
   AttentionBucket,
-  AttentionItem,
   DeveloperPullRequestCount,
   PickItem,
   PullRequestSummary,
   VisiblePullRequestHandler,
 } from '../../types';
 import { colorForText, formatCount, formatRelative } from '../../utils/format';
-import { isPullRequestWithinFocusAgeLimit } from '../../utils/models';
+import { computeFocusItems } from './focusQueue';
+import type { FocusItem } from './focusQueue';
 import GitHubAvatar from '../GitHubAvatar';
 import HelpTooltip from '../HelpTooltip';
 import LoadingBadge from '../LoadingBadge';
@@ -17,6 +17,7 @@ import LoadingCardPlaceholders from '../LoadingCardPlaceholders';
 import LoadingMetric from '../LoadingMetric';
 import PullRequestList from '../PullRequestList';
 import AttentionBoard from './AttentionBoard';
+import FocusExclusionDialog from './FocusExclusionDialog';
 
 type QueueOverviewProps = {
   counts: DeveloperPullRequestCount[];
@@ -32,27 +33,9 @@ type QueueOverviewProps = {
   visibleChecksRefreshKey: number;
 };
 
-type FocusItem = AttentionItem & {
-  bucketLabel: string;
-  bucketTone: AttentionBucket['tone'];
-};
-
 const pullRequestListLimit = 10;
-const queueOverviewHelp = 'Needs attention is the focused action queue: each PR appears once under its highest-priority actionable lane when that lane has fresh activity. Activity is lane-specific, such as the latest approval/review for merge lanes, the newest commit for re-review, CI completion for failing checks, or the PR update time for review-needed work.';
-const needsAttentionHelp = 'Being in Needs attention means the PR has an actionable reason for someone to review, fix CI, respond, or merge, and that reason was refreshed in the last 14 days. Standalone signal lanes like stalled, docs, automation, community, drafts, merge conflicts, and Copilot feedback stay out of this top queue.';
-const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Copilot feedback', 'Merge conflicts']);
-const disqualifyingFocusBucketLabels = new Set(['Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Copilot feedback', 'Merge conflicts']);
-const focusBucketRanks = new Map([
-  ['Regression', -2],
-  ['CI failing', -1],
-  ['Approved but aging', 0],
-  ['Re-review needed', 1],
-  ['Ready to merge', 2],
-  ['Author response', 3],
-  ['Needs review', 4],
-  ['Quick wins', 5],
-  ['Review started', 6],
-]);
+const queueOverviewHelp = 'Needs attention is the focused action queue: each PR appears once under its highest-priority actionable lane when that lane has fresh activity. Activity is lane-specific, such as the latest approval/review for merge lanes, the newest commit for re-review, or the PR update time for review-needed work. PRs with failing CI are excluded until their checks are green again.';
+const needsAttentionHelp = 'Being in Needs attention means the PR has an actionable reason for someone to review, respond, or merge, and that reason was refreshed in the last 14 days. PRs with failing CI are excluded until their checks pass, and standalone signal lanes like stalled, docs, automation, community, drafts, merge conflicts, and Copilot feedback stay out of this top queue.';
 
 function QueueOverview({
   counts,
@@ -68,22 +51,12 @@ function QueueOverview({
   visibleChecksRefreshKey,
 }: QueueOverviewProps) {
   const [showAllCoreMembers, setShowAllCoreMembers] = useState(false);
+  const [showFilterInfo, setShowFilterInfo] = useState(false);
 
-  const focusItems = useMemo<FocusItem[]>(() => {
-    const blockedKeys = blockedFocusKeys(attentionBuckets);
-    return dedupeFocusItems(
-      attentionBuckets
-        .filter((bucket) => !excludedFocusBucketLabels.has(bucket.label))
-        .flatMap((bucket) =>
-          bucket.items.map((item) => ({
-            ...item,
-            bucketLabel: bucket.label,
-            bucketTone: bucket.tone,
-          }))),
-      blockedKeys,
-    )
-      .filter((item) => isPullRequestWithinFocusAgeLimit(item.pullRequest, item.bucketLabel));
-  }, [attentionBuckets]);
+  const focusItems = useMemo<FocusItem[]>(
+    () => computeFocusItems(attentionBuckets),
+    [attentionBuckets],
+  );
 
   const coreOpenCount = counts.reduce((total, count) => total + count.openPullRequestCount, 0);
   const activeCoreCounts = counts.filter((count) => count.openPullRequestCount > 0);
@@ -186,7 +159,18 @@ function QueueOverview({
             />
           </div>
         </div>
-        <p>PRs with recent action-relevant activity that need someone to review, fix CI, respond, or merge.</p>
+        <p>PRs with recent action-relevant activity that need someone to review, respond, or merge.</p>
+        <p className="focus-info-note">
+          Not finding the PR you were looking for?{' '}
+          <button
+            type="button"
+            className="focus-info-trigger"
+            onClick={() => setShowFilterInfo(true)}
+          >
+            See why it might be filtered out
+          </button>
+        </p>
+        <FocusExclusionDialog open={showFilterInfo} onClose={() => setShowFilterInfo(false)} />
 
         {loading && !hasLoaded && focusItems.length === 0 ? (
           <LoadingCardPlaceholders label="Loading review queue cards" />
@@ -259,40 +243,6 @@ function QueueOverview({
       )}
     </section>
   );
-}
-
-function blockedFocusKeys(buckets: AttentionBucket[]) {
-  return new Set(
-    buckets
-      .filter((bucket) => disqualifyingFocusBucketLabels.has(bucket.label))
-      .flatMap((bucket) => bucket.items.map((item) => pullRequestKey(item.pullRequest))),
-  );
-}
-
-function dedupeFocusItems(items: FocusItem[], blockedKeys: Set<string>) {
-  const itemsByPullRequest = new Map<string, FocusItem>();
-
-  for (const item of items) {
-    const key = pullRequestKey(item.pullRequest);
-    if (blockedKeys.has(key)) {
-      continue;
-    }
-
-    const existing = itemsByPullRequest.get(key);
-    if (!existing || focusBucketRank(item.bucketLabel) < focusBucketRank(existing.bucketLabel)) {
-      itemsByPullRequest.set(key, item);
-    }
-  }
-
-  return [...itemsByPullRequest.values()];
-}
-
-function focusBucketRank(label: string) {
-  return focusBucketRanks.get(label) ?? Number.MAX_SAFE_INTEGER;
-}
-
-function pullRequestKey(pullRequest: PullRequestSummary) {
-  return `${pullRequest.repository.toLowerCase()}#${pullRequest.number}`;
 }
 
 export default QueueOverview;

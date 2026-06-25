@@ -6,6 +6,7 @@ import {
   fetchVapidPublicKey,
   getPreferences,
   isIos,
+  isMobileDevice,
   isPushSupported,
   isStandalone,
   savePreferences,
@@ -17,6 +18,10 @@ import {
 
 type NotificationSettingsProps = {
   authStatus: AuthStatus | null;
+  // 'bell' renders the desktop bell button + anchored popover. 'inline' renders
+  // the settings body directly (used inside the mobile nav drawer) so nothing
+  // gets clipped off-screen.
+  variant?: 'bell' | 'inline';
 };
 
 type Status = { kind: 'idle' | 'success' | 'error'; text: string };
@@ -122,12 +127,59 @@ function Switch({ on, disabled, label, onClick }: SwitchProps) {
   );
 }
 
-function NotificationSettings({ authStatus }: NotificationSettingsProps) {
+// A cross-platform nudge shown on phones/tablets that aren't installed to the
+// Home Screen yet. On iOS this is required for push to work at all; on Android
+// it's recommended for a reliable, native-feeling experience. The "How?"
+// disclosure keeps the steps for both platforms one tap away.
+function InstallNote({ required }: { required?: boolean }) {
+  return (
+    <div className="notif-install">
+      <div className="notif-install-head">
+        <span className="notif-install-icon" aria-hidden="true">📲</span>
+        <span className="notif-install-title">
+          {required
+            ? 'Install as an app to enable notifications'
+            : 'Install as an app for reliable notifications'}
+        </span>
+      </div>
+      <p className="notif-install-copy">
+        {required
+          ? 'On iPhone and iPad, push notifications only work when this dashboard is added to your Home Screen and opened from there.'
+          : 'For reliable notifications, add this dashboard to your Home Screen, then open it from there.'}
+      </p>
+      <details className="notif-install-how">
+        <summary>How?</summary>
+        <div className="notif-install-platform">
+          <span className="notif-install-platform-name">iPhone / iPad (Safari)</span>
+          <ol>
+            <li>Tap the Share button.</li>
+            <li>Choose “Add to Home Screen”.</li>
+            <li>Open the app from your Home Screen.</li>
+          </ol>
+        </div>
+        <div className="notif-install-platform">
+          <span className="notif-install-platform-name">Android (Chrome)</span>
+          <ol>
+            <li>Open the ⋮ menu.</li>
+            <li>Tap “Install app” or “Add to Home screen”.</li>
+            <li>Open the installed app.</li>
+          </ol>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function NotificationSettings({ authStatus, variant = 'bell' }: NotificationSettingsProps) {
   const authenticated = authStatus?.authenticated === true;
   const login = authStatus?.login ?? '';
 
   const [supported] = useState(isPushSupported);
   const [iosNeedsInstall] = useState(() => isIos() && !isStandalone());
+  // On Android (and other mobile) push can work in-browser, but we still nudge
+  // toward installing for a consistent, reliable experience. Shown above the
+  // working controls rather than replacing them.
+  const [mobileNeedsInstall] = useState(() => isMobileDevice() && !isStandalone());
   const [serverKey, setServerKey] = useState<{ publicKey: string; keyId: string } | null>(null);
   const [serverChecked, setServerChecked] = useState(false);
   const [serverEnabled, setServerEnabled] = useState(false);
@@ -359,12 +411,7 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
   } else if (!supported) {
     body = <p className="notif-hint">This browser doesn’t support push notifications.</p>;
   } else if (iosNeedsInstall) {
-    body = (
-      <p className="notif-hint">
-        On iPhone or iPad, add this app to your Home Screen (Share → Add to Home Screen), then open it
-        from there to enable notifications.
-      </p>
-    );
+    body = <InstallNote required />;
   } else if (serverChecked && !serverEnabled) {
     body = <p className="notif-hint">Push notifications aren’t configured on this server yet.</p>;
   } else if (permission === 'denied') {
@@ -376,6 +423,7 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
   } else {
     body = (
       <>
+        {mobileNeedsInstall && <InstallNote />}
         <div className="notif-master">
           <span className="notif-master-label">
             <span className="notif-master-title">Enabled on this device</span>
@@ -427,6 +475,21 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
     );
   }
 
+  const statusLine = status.kind !== 'idle' && (
+    <p className={`notif-status ${status.kind}`} role={status.kind === 'error' ? 'alert' : 'status'}>
+      {status.text}
+    </p>
+  );
+
+  if (variant === 'inline') {
+    return (
+      <div className="notif-inline">
+        {body}
+        {statusLine}
+      </div>
+    );
+  }
+
   return (
     <div className="notif-bell-wrap">
       <button
@@ -461,11 +524,7 @@ function NotificationSettings({ authStatus }: NotificationSettingsProps) {
               )}
             </div>
             {body}
-            {status.kind !== 'idle' && (
-              <p className={`notif-status ${status.kind}`} role={status.kind === 'error' ? 'alert' : 'status'}>
-                {status.text}
-              </p>
-            )}
+            {statusLine}
           </div>,
           document.body,
         )}
