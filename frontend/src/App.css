@@ -1719,6 +1719,137 @@ select:focus-visible {
   font-size: 0.72rem;
 }
 
+.focus-panel p.focus-info-note {
+  margin-top: 0.35rem;
+}
+
+.focus-info-trigger {
+  appearance: none;
+  -webkit-appearance: none;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-strong);
+  font-size: inherit;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.focus-info-trigger:hover,
+.focus-info-trigger:focus-visible {
+  color: var(--text);
+}
+
+.focus-info-trigger:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.focus-info-dialog {
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 4rem);
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  color: var(--text);
+  background: var(--panel-strong);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+}
+
+.focus-info-dialog::backdrop {
+  background: rgba(10, 8, 24, 0.62);
+  backdrop-filter: blur(4px);
+}
+
+.focus-info-dialog-body {
+  padding: 1.1rem 1.25rem 1.25rem;
+}
+
+.focus-info-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.focus-info-dialog-header h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.95rem;
+  font-weight: 900;
+}
+
+.focus-info-dialog-close {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 0 0 auto;
+  width: 1.6rem;
+  height: 1.6rem;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0;
+  color: var(--muted);
+  background: var(--surface-sunken);
+  cursor: pointer;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.focus-info-dialog-close:hover,
+.focus-info-dialog-close:focus-visible {
+  border-color: var(--accent-strong);
+  color: var(--text);
+  background: var(--accent-wash);
+  outline: none;
+}
+
+.focus-info-dialog-intro {
+  margin: 0.65rem 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.focus-info-reasons {
+  margin: 0.85rem 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.focus-info-reasons li {
+  display: grid;
+  gap: 0.15rem;
+  padding-left: 0.8rem;
+  border-left: 2px solid var(--accent-wash);
+}
+
+.focus-info-reasons strong {
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.focus-info-reasons span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.focus-info-dialog-footnote {
+  margin: 0.95rem 0 0;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-style: italic;
+}
+
 .tile-drilldown {
   display: grid;
   gap: 0.75rem;
