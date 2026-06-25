@@ -24,6 +24,10 @@ describe('pull request row layout CSS', () => {
   it('does not define PR action marker styles', () => {
     expect(css).not.toContain('attention-pr-action-marker');
   });
+
+  it('keeps emphasized attention card text bold', () => {
+    expect(cssDeclaration(ruleBody('.attention-card p em'), 'font-weight')).toBe('800');
+  });
 });
 
 function gridTemplateColumnsFor(selector: string) {

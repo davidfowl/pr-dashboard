@@ -41,7 +41,7 @@ public static class AgentSchemaRoutes
                     ],
                     ApiEndpoints:
                     [
-                        new("GET", "/api/github/pulls/stream?repo={owner}/{repo}&state=open", "Stream pull request summaries for one repository."),
+                        new("GET", "/api/github/pulls/stream?repo={owner}/{repo}&state=open&refresh=true", "Stream pull request summaries for one repository. Set refresh=true to force live GitHub refresh when authenticated. Items with isStale=true are cached overlays and should not be treated as final. A stream is complete only after an item with isComplete=true; if the stream ends without isComplete, keep prior/live data marked incomplete."),
                         new("GET", "/api/github/pulls?repo={owner}/{repo}&state=open", "Return pull request summaries for one repository."),
                         new("GET", "/api/github/pulls/{number}/timeline?repo={owner}/{repo}", "Return activity, checks, mergeability, and triage detail for one pull request.")
                     ],

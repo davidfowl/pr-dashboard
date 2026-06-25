@@ -85,7 +85,11 @@ public sealed class GitHubApiSmokeTests(ServerSmokeFixture fixture) : IClassFixt
         Assert.Contains(schema.Modes, mode =>
             mode.Id == "review"
             && mode.UseCases.Any(useCase => useCase.Contains("pull requests", StringComparison.OrdinalIgnoreCase))
-            && mode.ApiEndpoints.Any(endpoint => endpoint.Path.Contains("/api/github/pulls/stream", StringComparison.Ordinal)));
+            && mode.ApiEndpoints.Any(endpoint =>
+                endpoint.Path.Contains("/api/github/pulls/stream", StringComparison.Ordinal)
+                && endpoint.Description.Contains("isStale", StringComparison.Ordinal)
+                && endpoint.Description.Contains("isComplete", StringComparison.Ordinal)
+                && endpoint.Description.Contains("refresh=true", StringComparison.Ordinal)));
         Assert.Contains(schema.Modes, mode => mode.Id == "issues");
         Assert.Contains(schema.Modes, mode =>
             mode.Id == "ship"
@@ -184,7 +188,7 @@ public sealed class GitHubApiSmokeTests(ServerSmokeFixture fixture) : IClassFixt
         IReadOnlyList<string> UseCases,
         IReadOnlyList<AgentApiEndpointSchemaSmokeResponse> ApiEndpoints);
 
-    private sealed record AgentApiEndpointSchemaSmokeResponse(string Path);
+    private sealed record AgentApiEndpointSchemaSmokeResponse(string Path, string Description);
 
     private sealed record AgentDiscoverySchemaSmokeResponse(IReadOnlyList<string> SchemaUrls);
 

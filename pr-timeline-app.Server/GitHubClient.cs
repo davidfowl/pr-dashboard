@@ -77,24 +77,6 @@ sealed partial class GitHubClient(
             CacheOnly: false);
     }
 
-    private async Task<RepositoryCacheScopeSelection> GetPullRequestListCacheScopeSelectionAsync(
-        RepositoryName repositoryName,
-        bool forceRefresh,
-        CancellationToken cancellationToken)
-    {
-        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
-        if (!forceRefresh && scopeSelection.SharedFallbackScope is { } sharedFallbackScope)
-        {
-            return new RepositoryCacheScopeSelection(
-                sharedFallbackScope,
-                SharedFallbackScope: null,
-                Refresh: false,
-                CacheOnly: true);
-        }
-
-        return scopeSelection;
-    }
-
     private async Task<GitHubCacheScope?> GetSharedFallbackScopeAsync(
         RepositoryName repositoryName,
         CancellationToken cancellationToken)
@@ -484,7 +466,7 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         CancellationToken cancellationToken)
     {
-        var scopeSelection = await GetPullRequestListCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
         return await GetPullRequestsAsync(
             repositoryName,
             state,
@@ -607,7 +589,7 @@ sealed partial class GitHubClient(
         bool forceRefresh,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var scopeSelection = await GetPullRequestListCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
         var scope = scopeSelection.Scope;
         var cacheKey = CreateRepositoryCacheKey(
             scope,
@@ -1309,8 +1291,14 @@ sealed partial class GitHubClient(
             repositoryName,
             "pulls",
             state);
-        await SetLastGoodAsync(publicCacheKey, pullRequests, cancellationToken);
-        await SetCacheEntryAsync(publicCacheKey, pullRequests, CacheDurationForScope(publicScope), cancellationToken);
+        var publicPullRequests = pullRequests
+            .Select(pullRequest => pullRequest with
+            {
+                Checks = ChecksStatus.None
+            })
+            .ToArray();
+        await SetLastGoodAsync(publicCacheKey, publicPullRequests, cancellationToken);
+        await SetCacheEntryAsync(publicCacheKey, publicPullRequests, CacheDurationForScope(publicScope), cancellationToken);
         await publicCacheStore.TrackAsync(repositoryName, publicCacheKey, cancellationToken);
     }
 
@@ -1560,14 +1548,16 @@ sealed partial class GitHubClient(
         IReadOnlyList<GitHubPullRequestDto> pullRequestDtos)
         => pullRequestDtos
             .GroupBy(pullRequest => pullRequest.Number)
-            .Select(group => CreatePullRequestBaselineSummary(group.First()))
+            .Select(group => CreatePullRequestBaselineSummary(group.First()) with
+            {
+                Checks = ChecksStatus.None
+            })
             .ToArray();
 
     private static PullRequestSummary CreatePullRequestBaselineSummary(GitHubPullRequestDto pullRequest) =>
         PullRequestSummary.FromDto(pullRequest) with
         {
-            FetchedAt = DateTimeOffset.UtcNow,
-            Checks = ChecksStatus.None
+            FetchedAt = DateTimeOffset.UtcNow
         };
 
     private static PullRequestSummary CreateStalePreservingLiveBaseline(
@@ -1583,7 +1573,9 @@ sealed partial class GitHubClient(
             LastCommitAt = stalePullRequest.LastCommitAt,
             MergeableState = liveBaseline.MergeableState ?? stalePullRequest.MergeableState,
             Review = stalePullRequest.Review,
-            Checks = stalePullRequest.Checks
+            Checks = string.Equals(stalePullRequest.HeadSha, liveBaseline.HeadSha, StringComparison.Ordinal)
+                ? stalePullRequest.Checks
+                : liveBaseline.Checks
         };
 
     private static IReadOnlySet<int>? MergeableStateEnrichmentNumbers(

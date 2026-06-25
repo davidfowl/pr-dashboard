@@ -1792,6 +1792,12 @@ select:focus-visible {
   font-weight: 800;
 }
 
+.dashboard-refresh-status {
+  margin-top: 0.35rem;
+  color: var(--accent-blue);
+  font-weight: 800;
+}
+
 .bucket-limit-note {
   margin: 0.4rem 0 0;
   color: var(--accent-strong);

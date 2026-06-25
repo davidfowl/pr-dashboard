@@ -389,6 +389,120 @@ describe('App navigation', () => {
     await unmountApp(root);
   });
 
+  it('explains stale rows during cold boot while live data is still refreshing', async () => {
+    window.history.replaceState(null, '', '/');
+    const liveRefresh = createDeferred<void>();
+    vi.stubGlobal('fetch', createStaleInitialLoadFetchMock(liveRefresh.promise));
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Old cached row');
+    });
+    expect(getButton('Refreshing...')).not.toBeNull();
+    expect(document.body.textContent).toContain('Showing cached rows while live GitHub data refreshes.');
+    expect(document.querySelector('.focus-panel .loading-badge')?.textContent).toBe('Refreshing');
+
+    await act(async () => {
+      liveRefresh.resolve();
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Fresh live row');
+      expect(document.body.textContent).not.toContain('Old cached row');
+    });
+    expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
+    expect(document.body.textContent).not.toContain('Showing cached rows while live GitHub data refreshes.');
+    expect(document.querySelector('.focus-panel .loading-badge')).toBeNull();
+
+    await unmountApp(root);
+  });
+
+  it('keeps auto-refresh quiet until stale rows arrive', async () => {
+    window.history.replaceState(null, '', '/');
+    vi.useFakeTimers();
+    const autoRefresh = createDeferred<void>();
+    const fetchMock = createAutoRefreshWithoutStaleFetchMock(autoRefresh.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitForWithTimers(() => {
+      expect(document.body.textContent).toContain('Cached auto-refresh row');
+      expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6 * 60_000);
+    });
+
+    await waitForWithTimers(() => {
+      expect(streamRequestUrls(fetchMock).some((url) => url.searchParams.get('refresh') === 'true')).toBe(true);
+    });
+    expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
+    expect(document.body.textContent).not.toContain('Showing cached rows while live GitHub data refreshes.');
+    expect(document.querySelector('.focus-panel .loading-badge')).toBeNull();
+
+    await act(async () => {
+      autoRefresh.resolve();
+    });
+
+    await waitForWithTimers(() => {
+      expect(document.body.textContent).toContain('Live auto-refresh row');
+    });
+
+    await unmountApp(root);
+  });
+
+  it('keeps stale rows labeled when live refresh ends before completion', async () => {
+    window.history.replaceState(null, '', '/');
+    const fetchMock = createIncompleteStaleRefreshFetchMock();
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Cached incomplete row');
+      expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    await clickButton('Refresh now');
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Stale incomplete row');
+    });
+    expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
+    expect(document.body.textContent).toContain('Showing cached rows because live GitHub data did not finish refreshing.');
+    expect(document.querySelector('.focus-panel .loading-badge')).toBeNull();
+
+    await clickButton('Sign out');
+
+    await waitFor(() => {
+      expect(document.body.textContent).not.toContain('Showing cached rows because live GitHub data did not finish refreshing.');
+    });
+
+    await unmountApp(root);
+  });
+
+  it('does not label all repos stale when only a different repo emits stale rows', async () => {
+    window.history.replaceState(null, '', '/');
+    const fetchMock = createCrossRepoIncompleteRefreshFetchMock();
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Cached first repo row');
+      expect(document.body.textContent).toContain('Cached second repo row');
+      expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    await clickButton('Refresh now');
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Live first repo row');
+    });
+    expect(document.body.textContent).not.toContain('Showing cached rows because live GitHub data did not finish refreshing.');
+
+    await unmountApp(root);
+  });
+
   it('keeps stale-preserving live baseline rows out of the finalized rendered list', async () => {
     window.history.replaceState(null, '', '/');
     const liveRefresh = createDeferred<void>();
@@ -402,13 +516,16 @@ describe('App navigation', () => {
     });
 
     await clickButton('Refresh now');
+    expect(getButton('Refreshing...')).not.toBeNull();
+    expect(document.body.textContent).toContain('Showing cached rows while live GitHub data refreshes.');
 
     await waitFor(() => {
       expect(document.body.textContent).toContain('Live baseline row');
       expect(document.body.textContent).not.toContain('Live enriched row');
     });
-    expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
-    expect(document.body.textContent).not.toContain('Refreshing');
+    expect(pullRequestRow('Live baseline row').querySelector('.attention-pr-check-badge')?.getAttribute('aria-label')).toBe('CI passed');
+    expect(getButton('Refreshing...')).not.toBeNull();
+    expect(document.body.textContent).toContain('Showing cached rows while live GitHub data refreshes.');
 
     await act(async () => {
       liveRefresh.resolve();
@@ -419,6 +536,8 @@ describe('App navigation', () => {
       expect(document.body.textContent).not.toContain('Cached enriched row');
       expect(document.body.textContent).not.toContain('Live baseline row');
     });
+    expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
+    expect(document.body.textContent).not.toContain('Showing cached rows while live GitHub data refreshes.');
 
     await unmountApp(root);
   });
@@ -603,6 +722,10 @@ function createFetchMock(options: FetchMockOptions = {}) {
       });
     }
 
+    if (url.pathname === '/api/github/logout') {
+      return jsonResponse({ ok: true });
+    }
+
     if (url.pathname === '/api/github/pulls/stream') {
       if (url.searchParams.get('label')) {
         return jsonLinesResponse((options.docsPullRequests ?? [])
@@ -712,6 +835,10 @@ function createHardRefreshFetchMock(liveRefresh: Promise<void>) {
         commitSha: 'test',
         shortCommitSha: 'test',
       });
+    }
+
+    if (url.pathname === '/api/github/logout') {
+      return jsonResponse({ ok: true });
     }
 
     if (url.pathname === '/api/github/pulls/stream') {
@@ -908,6 +1035,344 @@ function createPartialInitialLoadFetchMock(openStream: Promise<void>) {
           headSha: streamed.headSha ?? '',
           checks: streamed.checks,
         }],
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createStaleInitialLoadFetchMock(liveRefresh: Promise<void>) {
+  const stale = createPullRequest('unknown', {
+    title: 'Old cached row',
+    updatedAt: '2026-01-01T00:00:00Z',
+  });
+  const live = createPullRequest('success', {
+    title: 'Fresh live row',
+    updatedAt: '2026-01-03T00:00:00Z',
+  });
+
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/github/pulls/stream') {
+      if (url.searchParams.get('repo') === stale.repository) {
+        return jsonLinesStreamResponse(
+          [createStreamItem(stale, { isStale: true })],
+          liveRefresh,
+          [
+            createStreamItem(live),
+            { repository: live.repository, isComplete: true },
+          ],
+        );
+      }
+
+      return jsonLinesResponse([]);
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: stale.repository,
+        pullRequests: [stale, live].map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createAutoRefreshWithoutStaleFetchMock(liveRefresh: Promise<void>) {
+  const cached = createPullRequest('success', {
+    title: 'Cached auto-refresh row',
+    updatedAt: '2026-01-01T00:00:00Z',
+  });
+  const live = createPullRequest('success', {
+    title: 'Live auto-refresh row',
+    updatedAt: '2026-01-03T00:00:00Z',
+  });
+
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/github/pulls/stream') {
+      if (url.searchParams.get('repo') === cached.repository) {
+        if (url.searchParams.get('refresh') === 'true') {
+          return jsonLinesStreamResponse(
+            [],
+            liveRefresh,
+            [
+              createStreamItem(live),
+              { repository: live.repository, isComplete: true },
+            ],
+          );
+        }
+
+        return jsonLinesResponse([createStreamItem(cached), { repository: cached.repository, isComplete: true }]);
+      }
+
+      return jsonLinesResponse([]);
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: cached.repository,
+        pullRequests: [cached, live].map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createIncompleteStaleRefreshFetchMock() {
+  const cached = createPullRequest('success', {
+    title: 'Cached incomplete row',
+    updatedAt: '2026-01-01T00:00:00Z',
+  });
+  const stale = createPullRequest('unknown', {
+    title: 'Stale incomplete row',
+    updatedAt: '2026-01-02T00:00:00Z',
+  });
+
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/github/logout') {
+      return jsonResponse({ ok: true });
+    }
+
+    if (url.pathname === '/api/github/pulls/stream') {
+      if (url.searchParams.get('repo') === cached.repository) {
+        if (url.searchParams.get('refresh') === 'true') {
+          return jsonLinesResponse([createStreamItem(stale, { isStale: true })]);
+        }
+
+        return jsonLinesResponse([createStreamItem(cached), { repository: cached.repository, isComplete: true }]);
+      }
+
+      return jsonLinesResponse([]);
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: cached.repository,
+        pullRequests: [cached, stale].map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createCrossRepoIncompleteRefreshFetchMock() {
+  const firstRepoCached = createPullRequest('success', {
+    repository: 'microsoft/aspire',
+    title: 'Cached first repo row',
+    updatedAt: '2026-01-01T00:00:00Z',
+  });
+  const firstRepoStale = createPullRequest('unknown', {
+    repository: 'microsoft/aspire',
+    title: 'Stale first repo row',
+    updatedAt: '2026-01-02T00:00:00Z',
+  });
+  const firstRepoLive = createPullRequest('success', {
+    repository: 'microsoft/aspire',
+    title: 'Live first repo row',
+    updatedAt: '2026-01-03T00:00:00Z',
+  });
+  const secondRepoCached = createPullRequest('success', {
+    repository: 'microsoft/aspire.dev',
+    title: 'Cached second repo row',
+    htmlUrl: 'https://github.com/microsoft/aspire.dev/pull/101',
+    updatedAt: '2026-01-01T00:00:00Z',
+  });
+
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/github/pulls/stream') {
+      const repo = url.searchParams.get('repo');
+      if (repo === firstRepoCached.repository) {
+        if (url.searchParams.get('refresh') === 'true') {
+          return jsonLinesResponse([
+            createStreamItem(firstRepoStale, { isStale: true }),
+            createStreamItem(firstRepoLive),
+            { repository: firstRepoLive.repository, isComplete: true },
+          ]);
+        }
+
+        return jsonLinesResponse([
+          createStreamItem(firstRepoCached),
+          { repository: firstRepoCached.repository, isComplete: true },
+        ]);
+      }
+
+      if (repo === secondRepoCached.repository) {
+        if (url.searchParams.get('refresh') === 'true') {
+          return jsonLinesResponse([]);
+        }
+
+        return jsonLinesResponse([
+          createStreamItem(secondRepoCached),
+          { repository: secondRepoCached.repository, isComplete: true },
+        ]);
+      }
+
+      return jsonLinesResponse([]);
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: url.searchParams.get('repo') ?? firstRepoCached.repository,
+        pullRequests: [firstRepoCached, firstRepoStale, firstRepoLive, secondRepoCached].map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
       });
     }
 
@@ -1181,6 +1646,9 @@ type AppFetchMock =
   | ReturnType<typeof createFetchMock>
   | ReturnType<typeof createHardRefreshFetchMock>
   | ReturnType<typeof createStalePreservingRefreshFetchMock>
+  | ReturnType<typeof createAutoRefreshWithoutStaleFetchMock>
+  | ReturnType<typeof createIncompleteStaleRefreshFetchMock>
+  | ReturnType<typeof createCrossRepoIncompleteRefreshFetchMock>
   | ReturnType<typeof createDelayedVisibleChecksFetchMock>;
 
 function checksRequestUrls(fetchMock: AppFetchMock) {
@@ -1231,6 +1699,23 @@ async function waitFor(assertion: () => void, timeoutMs = 1_000) {
       lastError = err;
       await act(async () => {
         await new Promise((resolve) => window.setTimeout(resolve, 10));
+      });
+    }
+  }
+
+  throw lastError;
+}
+
+async function waitForWithTimers(assertion: () => void, timeoutMs = 1_000) {
+  let lastError: unknown;
+  for (let elapsed = 0; elapsed < timeoutMs; elapsed += 10) {
+    try {
+      assertion();
+      return;
+    } catch (err) {
+      lastError = err;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10);
       });
     }
   }

@@ -16,12 +16,14 @@ type StreamPullRequestsOptions = {
 export type StreamPullRequestsResult = {
   pullRequests: PullRequestSummary[];
   completed: boolean;
+  hadStaleRows: boolean;
 };
 
 export async function streamPullRequests(url: string, options: StreamPullRequestsOptions = {}) {
   const displayedPullRequests: PullRequestSummary[] = [];
   const livePullRequests: PullRequestSummary[] = [];
   let completed = false;
+  let hadStaleRows = false;
   const response = await fetch(url, { signal: options.signal });
 
   await readJsonLines<PullRequestStreamItem>(response, (item) => {
@@ -42,6 +44,8 @@ export async function streamPullRequests(url: string, options: StreamPullRequest
     displayedPullRequests.push(pullRequest);
     if (!item.isStale) {
       livePullRequests.push(pullRequest);
+    } else {
+      hadStaleRows = true;
     }
     options.onPullRequest?.(pullRequest, item);
   });
@@ -49,6 +53,7 @@ export async function streamPullRequests(url: string, options: StreamPullRequest
   return {
     pullRequests: completed ? livePullRequests : displayedPullRequests,
     completed,
+    hadStaleRows,
   };
 }
 

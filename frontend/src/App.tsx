@@ -39,6 +39,7 @@ import {
   replacePullRequestsByUpdatedAt,
   upsertManyByUpdatedAt,
   upsertPullRequestByUpdatedAt,
+  upsertPullRequestsByUpdatedAt,
 } from './utils/pullRequests';
 import {
   createActivityModel,
@@ -74,7 +75,10 @@ type VisibleChecksRequestItem = {
 type LoadOptions = {
   forceRefresh?: boolean;
   preserveResults?: boolean;
+  showRefreshFeedback?: boolean;
 };
+
+type ReviewRefreshState = 'idle' | 'refreshing' | 'incomplete';
 
 type ReviewRefreshParams = {
   repositoryInput: string;
@@ -126,6 +130,7 @@ function App() {
   const [issuesLoading, setIssuesLoading] = useState(false);
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [shipWeekLoading, setShipWeekLoading] = useState(false);
+  const [reviewRefreshState, setReviewRefreshState] = useState<ReviewRefreshState>('idle');
   const [shipWeekSectionLoading, setShipWeekSectionLoading] = useState<ShipWeekLoadingState>(emptyShipWeekLoadingState);
   const [visibleChecksRefreshKey, setVisibleChecksRefreshKey] = useState(0);
   const [loginLoading, setLoginLoading] = useState(false);
@@ -422,6 +427,7 @@ function App() {
       setPullRequests([]);
       setIssues([]);
       setIssuesError(null);
+      setReviewRefreshState('idle');
       setReviewLastUpdatedAt(null);
       setIssuesLastUpdatedAt(null);
       setShipWeek(null);
@@ -447,6 +453,9 @@ function App() {
     let clearPendingStreamBatch: (() => void) | null = null;
 
     setPullsLoading(true);
+    let nextReviewRefreshState: ReviewRefreshState = 'idle';
+
+    setReviewRefreshState(options.showRefreshFeedback ? 'refreshing' : 'idle');
     setError(null);
     beginVisibleChecksRequestScope();
     beginForceVisibleChecksRefresh(options);
@@ -487,7 +496,7 @@ function App() {
 
         const pullRequestsToPublish = pendingStreamPullRequests.splice(0);
         setPullRequests((currentPullRequests) =>
-          upsertManyByUpdatedAt(currentPullRequests, pullRequestsToPublish));
+          upsertPullRequestsByUpdatedAt(currentPullRequests, pullRequestsToPublish));
       };
       const scheduleStreamBatch = (pullRequest: PullRequestSummary) => {
         pendingStreamPullRequests.push(pullRequest);
@@ -506,11 +515,14 @@ function App() {
 
         return streamPullRequests(`/api/github/pulls/stream?${query}`, {
           signal: abortController.signal,
-          onPullRequest: (pullRequest) => {
+          onPullRequest: (pullRequest, streamItem) => {
             if (!isCurrentLoad()) {
               return;
             }
 
+            if (streamItem.isStale) {
+              setReviewRefreshState('refreshing');
+            }
             scheduleStreamBatch(pullRequest);
           },
         });
@@ -526,6 +538,9 @@ function App() {
         const streamedPullRequests = pullRequestResults.flatMap((result) => result.pullRequests);
         setPullRequests((currentPullRequests) => replacePullRequestsByUpdatedAt(currentPullRequests, streamedPullRequests));
         setReviewLastUpdatedAt(getReviewLastUpdatedAt(replacePullRequestsByUpdatedAt([], streamedPullRequests)));
+        nextReviewRefreshState = pullRequestResults.some((result) => !result.completed && result.hadStaleRows)
+          ? 'incomplete'
+          : 'idle';
       }
     } catch (err) {
       clearPendingStreamBatch?.();
@@ -543,6 +558,7 @@ function App() {
     } finally {
       if (isCurrentLoad()) {
         setPullsLoading(false);
+        setReviewRefreshState(nextReviewRefreshState);
         load.finish();
       }
     }
@@ -1014,6 +1030,7 @@ function App() {
       void loadPullRequests(repo.trim(), state, {
         forceRefresh,
         preserveResults: true,
+        showRefreshFeedback: true,
       });
     }
   }
@@ -1237,6 +1254,7 @@ function App() {
             showShipWeekSnapshotDownload={showShipWeekSnapshotDownload}
             shipWeekSnapshotRef={shipWeekSnapshotRef}
             selectedBucketId={selectedBucketId}
+            reviewRefreshState={reviewRefreshState}
             lastUpdatedAt={dashboardMode === 'ship'
               ? shipWeekLastUpdatedAt
               : dashboardMode === 'issues'

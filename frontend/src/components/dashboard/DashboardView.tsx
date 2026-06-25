@@ -46,6 +46,7 @@ type DashboardViewProps = {
   showShipWeekSnapshotDownload: boolean;
   shipWeekSnapshotRef: RefObject<HTMLElement | null>;
   selectedBucketId: string;
+  reviewRefreshState: 'idle' | 'refreshing' | 'incomplete';
   lastUpdatedAt: string | null;
   autoRefreshIntervalMs: number;
   login?: string;
@@ -94,6 +95,7 @@ function DashboardView({
   showShipWeekSnapshotDownload,
   shipWeekSnapshotRef,
   selectedBucketId,
+  reviewRefreshState,
   lastUpdatedAt,
   autoRefreshIntervalMs,
   login,
@@ -121,7 +123,10 @@ function DashboardView({
     || (issuesModeActive && issues.length > 0)
     || (shipModeActive && shipWeek !== null);
   const visibleRefreshLoading = refreshing && !hasLoadedData;
-  const visiblePullsLoading = pullsLoading && !hasLoadedData;
+  const reviewRefreshActive = !shipModeActive && !issuesModeActive && reviewRefreshState === 'refreshing';
+  const refreshButtonLoading = visibleRefreshLoading
+    || reviewRefreshActive;
+  const visiblePullsLoading = pullsLoading && (!hasLoadedData || reviewRefreshActive);
   const visibleIssuesLoading = issuesLoading && !hasLoadedData;
   const displayedLastUpdatedAt = lastUpdatedAt
     ?? (!shipModeActive && !issuesModeActive && pullRequests.length > 0
@@ -133,6 +138,13 @@ function DashboardView({
     : issuesModeActive
       ? 'Issue focus data'
       : 'Review queue data';
+  const refreshStatus = !shipModeActive && !issuesModeActive
+    ? reviewRefreshState === 'refreshing'
+      ? 'Showing cached rows while live GitHub data refreshes.'
+      : reviewRefreshState === 'incomplete'
+        ? 'Showing cached rows because live GitHub data did not finish refreshing.'
+        : null
+    : null;
   const showQueuePanel = shipModeActive
     || (issuesModeActive
       ? issuesLoading || issues.length > 0 || issueBuckets.length > 0
@@ -152,9 +164,14 @@ function DashboardView({
             {' '}
             Auto-refreshes about every {autoRefreshCadence} using cached data.
           </p>
+          {refreshStatus && (
+            <p className="dashboard-refresh-status" role="status">
+              {refreshStatus}
+            </p>
+          )}
         </div>
-        <button type="button" onClick={onRefresh} disabled={visibleRefreshLoading}>
-          {visibleRefreshLoading ? 'Loading...' : 'Refresh now'}
+        <button type="button" onClick={onRefresh} disabled={refreshButtonLoading}>
+          {refreshButtonLoading ? (hasLoadedData ? 'Refreshing...' : 'Loading...') : 'Refresh now'}
         </button>
       </section>
 
