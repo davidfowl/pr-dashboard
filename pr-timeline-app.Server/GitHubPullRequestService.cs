@@ -7,6 +7,20 @@ sealed class GitHubPullRequestService(GitHubClient gitHub)
         CancellationToken cancellationToken) =>
         gitHub.GetPullRequestsAsync(repositoryName, state, forceRefresh, cancellationToken);
 
+    public Task<IReadOnlyList<PullRequestSummary>> GetPullRequestsGraphQlAsync(
+        RepositoryName repositoryName,
+        string state,
+        bool forceRefresh,
+        CancellationToken cancellationToken) =>
+        gitHub.GetPullRequestsGraphQlAsync(repositoryName, state, forceRefresh, cancellationToken);
+
+    public Task<PullRequestListResponse> GetPullRequestsGraphQlSnapshotAsync(
+        RepositoryName repositoryName,
+        string state,
+        bool forceRefresh,
+        CancellationToken cancellationToken) =>
+        gitHub.GetPullRequestsGraphQlSnapshotAsync(repositoryName, state, forceRefresh, cancellationToken);
+
     public IAsyncEnumerable<PullRequestSummary> StreamPullRequestsAsync(
         RepositoryName repositoryName,
         string state,

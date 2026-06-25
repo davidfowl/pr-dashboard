@@ -10,7 +10,7 @@ import type {
   CheckState,
   PullRequestChecksRequest,
   PullRequestChecksResponse,
-  PullRequestStreamItem,
+  PullRequestListResponse,
   PullRequestSummary,
   ShipWeekResponse,
   TimelineResponse,
@@ -53,7 +53,7 @@ describe('App navigation', () => {
     await unmountApp(root);
   });
 
-  it('force-refreshes visible checks even when loaded CI state is preserved', async () => {
+  it('uses live PR-list refresh without forcing visible checks', async () => {
     window.history.replaceState(null, '', '/');
     const fetchMock = createFetchMock({
       authenticated: true,
@@ -70,17 +70,49 @@ describe('App navigation', () => {
       expect(document.body.textContent).toContain('octocat');
       expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
     });
+    expect(document.body.textContent).toMatch(/Loaded in \d+ms \(5 GraphQL requests\)\./);
+
+    const initialPullListRequestCount = pullRequestListUrls(fetchMock).length;
 
     await clickButton('Refresh now');
-
     await waitFor(() => {
-      expect(checksRequestUrls(fetchMock).some((url) => url.searchParams.get('refresh') === 'true')).toBe(true);
+      expect(pullRequestListUrls(fetchMock).length).toBeGreaterThan(initialPullListRequestCount);
     });
+    expect(pullRequestListUrls(fetchMock).some((url) => url.searchParams.get('refresh') === 'true')).toBe(true);
+    expect(checksRequestUrls(fetchMock).some((url) => url.searchParams.has('refresh'))).toBe(false);
 
     await unmountApp(root);
   });
 
-  it('force-refreshes rows that become visible after an earlier checks refresh flush', async () => {
+  it('skips the checks fan-out when the PR-list already carries CI status', async () => {
+    window.history.replaceState(null, '', '/');
+    const fetchMock = createFetchMock({
+      authenticated: true,
+      checksState: 'success',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('octocat');
+      expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    // The GraphQL list now resolves checks inline, so no follow-up /pulls/checks request fires.
+    expect(checksRequestUrls(fetchMock)).toEqual([]);
+
+    const initialPullListRequestCount = pullRequestListUrls(fetchMock).length;
+    await clickButton('Refresh now');
+    await waitFor(() => {
+      expect(pullRequestListUrls(fetchMock).length).toBeGreaterThan(initialPullListRequestCount);
+    });
+    // A manual refresh re-fetches the list (which carries fresh checks) without a separate checks call.
+    expect(checksRequestUrls(fetchMock)).toEqual([]);
+
+    await unmountApp(root);
+  });
+
+  it('does not force-refresh rows that become visible after a live PR-list refresh', async () => {
     window.history.replaceState(null, '', '/');
     const observers = installIntersectionObserverMock();
     const fetchMock = createDelayedVisibleChecksFetchMock();
@@ -93,31 +125,51 @@ describe('App navigation', () => {
       expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
     });
 
+    const initialPullListRequestCount = pullRequestListUrls(fetchMock).length;
     await clickButton('Refresh now');
     await waitFor(() => {
-      expect(observers.length).toBeGreaterThan(1);
+      expect(pullRequestListUrls(fetchMock).length).toBeGreaterThan(initialPullListRequestCount);
     });
 
     await act(async () => {
-      observers[0].trigger();
-    });
-    await waitFor(() => {
-      expect(refreshChecksRequestNumbers(fetchMock).length).toBeGreaterThan(0);
-    });
-
-    await act(async () => {
-      for (const observer of observers.slice(1)) {
+      for (const observer of observers) {
         observer.trigger();
       }
     });
+    expect(refreshChecksRequestNumbers(fetchMock)).toEqual([]);
+
+    await unmountApp(root);
+  });
+
+  it('loads last-good rows immediately on F5 and swaps after the background refresh finishes', async () => {
+    window.history.replaceState(null, '', '/');
+    const liveRefresh = createDeferred<void>();
+    const fetchMock = createInitialStaleSnapshotFetchMock(liveRefresh.promise);
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
     await waitFor(() => {
-      expect(new Set(refreshChecksRequestNumbers(fetchMock))).toEqual(new Set([101, 102]));
+      expect(document.body.textContent).toContain('Last-good row');
+      expect(document.body.textContent).toContain('Showing cached data while checking GitHub for updates.');
+      expect(document.body.textContent).toMatch(/Shown in \d+ms; still refreshing \(\d+ GraphQL requests\)\./);
+      expect((getButton('Refreshing...') as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    await act(async () => {
+      liveRefresh.resolve();
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Fresh row');
+      expect(document.body.textContent).not.toContain('Last-good row');
+      expect(document.body.textContent).not.toContain('Showing cached data while checking GitHub for updates.');
+      expect(document.body.textContent).toMatch(/Shown in \d+ms; settled in \d+ms \(\d+ GraphQL requests\)\./);
     });
 
     await unmountApp(root);
   });
 
-  it('keeps cached rows visible during hard refresh and finalizes only completed live rows', async () => {
+  it('keeps cached rows visible during live refresh and swaps when live rows finish loading', async () => {
     window.history.replaceState(null, '', '/');
     const liveRefresh = createDeferred<void>();
     const fetchMock = createHardRefreshFetchMock(liveRefresh.promise);
@@ -134,10 +186,10 @@ describe('App navigation', () => {
     await clickButton('Refresh now');
 
     await waitFor(() => {
-      expect(document.body.textContent).toContain('Stale-only cached row');
+      expect(document.body.textContent).toContain('Cached row');
       expect(document.body.textContent).not.toContain('Live refreshed row');
     });
-    expect(streamRequestUrls(fetchMock).some((url) => url.searchParams.get('refresh') === 'true')).toBe(true);
+    expect(pullRequestListUrls(fetchMock).some((url) => url.searchParams.get('refresh') === 'true')).toBe(true);
 
     await act(async () => {
       liveRefresh.resolve();
@@ -145,16 +197,14 @@ describe('App navigation', () => {
 
     await waitFor(() => {
       expect(document.body.textContent).toContain('Live refreshed row');
-      expect(document.body.textContent).not.toContain('Stale-only cached row');
+      expect(document.body.textContent).not.toContain('Cached row');
     });
-    await waitFor(() => {
-      expect(checksRequestUrls(fetchMock).some((url) => url.searchParams.get('refresh') === 'true')).toBe(true);
-    });
+    expect(checksRequestUrls(fetchMock).some((url) => url.searchParams.has('refresh'))).toBe(false);
 
     await unmountApp(root);
   });
 
-  it('keeps stale-preserving live baseline rows out of the finalized rendered list', async () => {
+  it('keeps current rows visible until the enriched refresh result is ready', async () => {
     window.history.replaceState(null, '', '/');
     const liveRefresh = createDeferred<void>();
     const fetchMock = createStalePreservingRefreshFetchMock(liveRefresh.promise);
@@ -169,7 +219,7 @@ describe('App navigation', () => {
     await clickButton('Refresh now');
 
     await waitFor(() => {
-      expect(document.body.textContent).toContain('Live baseline row');
+      expect(document.body.textContent).toContain('Cached enriched row');
       expect(document.body.textContent).not.toContain('Live enriched row');
     });
     expect((getButton('Refreshing...') as HTMLButtonElement).disabled).toBe(true);
@@ -181,7 +231,6 @@ describe('App navigation', () => {
     await waitFor(() => {
       expect(document.body.textContent).toContain('Live enriched row');
       expect(document.body.textContent).not.toContain('Cached enriched row');
-      expect(document.body.textContent).not.toContain('Live baseline row');
     });
 
     await unmountApp(root);
@@ -229,7 +278,6 @@ type FetchMockOptions = {
 function createFetchMock(options: FetchMockOptions = {}) {
   let authenticated = options.authenticated ?? false;
   const pullRequest = createPullRequest(options.checksState ?? 'none');
-  const streamItem = createStreamItem(pullRequest);
 
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(input.toString(), window.location.origin);
@@ -255,13 +303,16 @@ function createFetchMock(options: FetchMockOptions = {}) {
       });
     }
 
-    if (url.pathname === '/api/github/pulls/stream') {
+    if (url.pathname === '/api/github/pulls/graphql') {
       if (url.searchParams.get('label')) {
-        return jsonLinesResponse([]);
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? pullRequest.repository, []));
       }
 
       const repository = url.searchParams.get('repo');
-      return jsonLinesResponse(repository === pullRequest.repository ? [streamItem] : []);
+      return jsonResponse(pullRequestList(
+        repository ?? pullRequest.repository,
+        repository === pullRequest.repository ? [pullRequest] : [],
+      ));
     }
 
     if (url.pathname === '/api/github/pulls/101/timeline') {
@@ -332,16 +383,11 @@ function createHardRefreshFetchMock(liveRefresh: Promise<void>) {
     title: 'Cached row',
     updatedAt: '2026-01-01T00:00:00Z',
   });
-  const staleOnly = createPullRequest('success', {
-    number: 102,
-    title: 'Stale-only cached row',
-    htmlUrl: 'https://github.com/microsoft/aspire/pull/102',
-    updatedAt: '2026-01-02T00:00:00Z',
-  });
   const live = createPullRequest('success', {
     title: 'Live refreshed row',
     updatedAt: '2026-01-03T00:00:00Z',
   });
+  let pullListRequestCount = 0;
 
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(input.toString(), window.location.origin);
@@ -362,27 +408,36 @@ function createHardRefreshFetchMock(liveRefresh: Promise<void>) {
       });
     }
 
-    if (url.pathname === '/api/github/pulls/stream') {
+    if (url.pathname === '/api/github/pulls/graphql') {
       if (url.searchParams.get('label')) {
-        return jsonLinesResponse([]);
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? cached.repository, []));
       }
 
       if (url.searchParams.get('repo') !== cached.repository) {
-        return jsonLinesResponse([]);
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? cached.repository, []));
       }
 
       if (url.searchParams.get('refresh') === 'true') {
-        return jsonLinesStreamResponse(
-          [createStreamItem(staleOnly, { isStale: true })],
-          liveRefresh,
-          [
-            createStreamItem(live),
-            { repository: live.repository, isComplete: true },
-          ],
-        );
+        await liveRefresh;
+        return jsonResponse(pullRequestList(cached.repository, [live]));
       }
 
-      return jsonLinesResponse([createStreamItem(cached)]);
+      pullListRequestCount += 1;
+      if (pullListRequestCount === 1) {
+        return jsonResponse(pullRequestList(cached.repository, [cached]));
+      }
+
+      if (pullListRequestCount === 2) {
+        return jsonResponse(pullRequestList(cached.repository, [cached], {
+          source: 'last-good',
+          stale: true,
+          refreshInProgress: true,
+          refreshQueued: true,
+        }));
+      }
+
+      await liveRefresh;
+      return jsonResponse(pullRequestList(cached.repository, [live]));
     }
 
     if (url.pathname === '/api/github/pulls/checks') {
@@ -395,11 +450,96 @@ function createHardRefreshFetchMock(liveRefresh: Promise<void>) {
             checks: cached.checks,
           },
           {
-            number: staleOnly.number,
-            headSha: staleOnly.headSha ?? '',
-            checks: staleOnly.checks,
+            number: live.number,
+            headSha: live.headSha ?? '',
+            checks: live.checks,
           },
         ],
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createInitialStaleSnapshotFetchMock(liveRefresh: Promise<void>) {
+  const lastGood = createPullRequest('success', {
+    title: 'Last-good row',
+    updatedAt: '2026-01-01T00:00:00Z',
+  });
+  const fresh = createPullRequest('success', {
+    title: 'Fresh row',
+    updatedAt: '2026-01-03T00:00:00Z',
+  });
+  let pullListRequestCount = 0;
+
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/github/pulls/graphql') {
+      if (url.searchParams.get('label')) {
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? lastGood.repository, []));
+      }
+
+      if (url.searchParams.get('repo') !== lastGood.repository) {
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? lastGood.repository, []));
+      }
+
+      pullListRequestCount += 1;
+      if (pullListRequestCount === 1) {
+        return jsonResponse(pullRequestList(lastGood.repository, [lastGood], {
+          source: 'last-good',
+          stale: true,
+          refreshInProgress: true,
+          refreshQueued: true,
+        }));
+      }
+
+      await liveRefresh;
+      return jsonResponse(pullRequestList(lastGood.repository, [fresh]));
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: lastGood.repository,
+        pullRequests: [lastGood, fresh].map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
       });
     }
 
@@ -429,14 +569,11 @@ function createStalePreservingRefreshFetchMock(liveRefresh: Promise<void>) {
     title: 'Cached enriched row',
     updatedAt: '2026-01-01T00:00:00Z',
   });
-  const liveBaseline = createPullRequest('unknown', {
-    title: 'Live baseline row',
-    updatedAt: '2026-01-03T00:00:00Z',
-  });
   const liveEnriched = createPullRequest('success', {
     title: 'Live enriched row',
     updatedAt: '2026-01-03T00:00:00Z',
   });
+  let pullListRequestCount = 0;
 
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(input.toString(), window.location.origin);
@@ -457,36 +594,42 @@ function createStalePreservingRefreshFetchMock(liveRefresh: Promise<void>) {
       });
     }
 
-    if (url.pathname === '/api/github/pulls/stream') {
+    if (url.pathname === '/api/github/pulls/graphql') {
       if (url.searchParams.get('label')) {
-        return jsonLinesResponse([]);
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? cached.repository, []));
       }
 
       if (url.searchParams.get('repo') !== cached.repository) {
-        return jsonLinesResponse([]);
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? cached.repository, []));
       }
 
       if (url.searchParams.get('refresh') === 'true') {
-        return jsonLinesStreamResponse(
-          [
-            createStreamItem(cached, { isStale: true }),
-            createStreamItem(liveBaseline, { isStale: true }),
-          ],
-          liveRefresh,
-          [
-            createStreamItem(liveEnriched),
-            { repository: liveEnriched.repository, isComplete: true },
-          ],
-        );
+        await liveRefresh;
+        return jsonResponse(pullRequestList(cached.repository, [liveEnriched]));
       }
 
-      return jsonLinesResponse([createStreamItem(cached)]);
+      pullListRequestCount += 1;
+      if (pullListRequestCount === 1) {
+        return jsonResponse(pullRequestList(cached.repository, [cached]));
+      }
+
+      if (pullListRequestCount === 2) {
+        return jsonResponse(pullRequestList(cached.repository, [cached], {
+          source: 'last-good',
+          stale: true,
+          refreshInProgress: true,
+          refreshQueued: true,
+        }));
+      }
+
+      await liveRefresh;
+      return jsonResponse(pullRequestList(cached.repository, [liveEnriched]));
     }
 
     if (url.pathname === '/api/github/pulls/checks') {
       return jsonResponse<PullRequestChecksResponse>({
         repository: cached.repository,
-        pullRequests: [cached, liveBaseline, liveEnriched].map((pullRequest) => ({
+        pullRequests: [cached, liveEnriched].map((pullRequest) => ({
           number: pullRequest.number,
           headSha: pullRequest.headSha ?? '',
           checks: pullRequest.checks,
@@ -545,16 +688,15 @@ function createDelayedVisibleChecksFetchMock() {
       });
     }
 
-    if (url.pathname === '/api/github/pulls/stream') {
+    if (url.pathname === '/api/github/pulls/graphql') {
       if (url.searchParams.get('label')) {
-        return jsonLinesResponse([]);
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? pullRequests[0].repository, []));
       }
 
-      return jsonLinesResponse(
-        url.searchParams.get('repo') === pullRequests[0].repository
-          ? pullRequests.map((pullRequest) => createStreamItem(pullRequest))
-          : [],
-      );
+      return jsonResponse(pullRequestList(
+        url.searchParams.get('repo') ?? pullRequests[0].repository,
+        url.searchParams.get('repo') === pullRequests[0].repository ? pullRequests : [],
+      ));
     }
 
     if (url.pathname === '/api/github/pulls/checks') {
@@ -650,17 +792,6 @@ function withoutRepository(pullRequest: PullRequestSummary): Omit<PullRequestSum
   return rest;
 }
 
-function createStreamItem(
-  pullRequest: PullRequestSummary,
-  options: Pick<PullRequestStreamItem, 'isStale'> = {},
-): PullRequestStreamItem {
-  return {
-    repository: pullRequest.repository,
-    pullRequest: withoutRepository(pullRequest),
-    ...options,
-  };
-}
-
 function jsonResponse<T>(body: T, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
@@ -668,34 +799,25 @@ function jsonResponse<T>(body: T, status = 200) {
   });
 }
 
-function jsonLinesResponse<T>(items: T[]) {
-  return new Response(items.map((item) => JSON.stringify(item)).join('\n'), {
-    headers: { 'Content-Type': 'application/x-ndjson' },
-  });
-}
-
-function jsonLinesStreamResponse<T>(beforeWait: T[], wait: Promise<void>, afterWait: T[]) {
-  const encoder = new TextEncoder();
-  return new Response(new ReadableStream({
-    async start(controller) {
-      enqueueJsonLines(controller, encoder, beforeWait);
-      await wait;
-      enqueueJsonLines(controller, encoder, afterWait);
-      controller.close();
-    },
-  }), {
-    headers: { 'Content-Type': 'application/x-ndjson' },
-  });
-}
-
-function enqueueJsonLines<T>(
-  controller: ReadableStreamDefaultController<Uint8Array>,
-  encoder: TextEncoder,
-  items: T[],
-) {
-  for (const item of items) {
-    controller.enqueue(encoder.encode(`${JSON.stringify(item)}\n`));
-  }
+function pullRequestList(
+  repository: string,
+  pullRequests: PullRequestSummary[],
+  snapshot?: Partial<NonNullable<PullRequestListResponse['snapshot']>>,
+): PullRequestListResponse {
+  return {
+    repository,
+    pullRequests: pullRequests.map(withoutRepository),
+    snapshot: snapshot
+      ? {
+          source: 'fresh-cache',
+          fetchedAt: pullRequests[0]?.fetchedAt ?? new Date().toISOString(),
+          stale: false,
+          refreshInProgress: false,
+          refreshQueued: false,
+          ...snapshot,
+        }
+      : undefined,
+  };
 }
 
 async function renderApp() {
@@ -733,6 +855,7 @@ function getButton(name: string) {
 type AppFetchMock =
   | ReturnType<typeof createFetchMock>
   | ReturnType<typeof createHardRefreshFetchMock>
+  | ReturnType<typeof createInitialStaleSnapshotFetchMock>
   | ReturnType<typeof createStalePreservingRefreshFetchMock>
   | ReturnType<typeof createDelayedVisibleChecksFetchMock>;
 
@@ -755,8 +878,8 @@ function refreshChecksRequestNumbers(fetchMock: AppFetchMock) {
   });
 }
 
-function streamRequestUrls(fetchMock: ReturnType<typeof createHardRefreshFetchMock>) {
-  return requestUrls(fetchMock, '/api/github/pulls/stream');
+function pullRequestListUrls(fetchMock: AppFetchMock) {
+  return requestUrls(fetchMock, '/api/github/pulls/graphql');
 }
 
 function requestUrls(fetchMock: AppFetchMock, pathname: string) {

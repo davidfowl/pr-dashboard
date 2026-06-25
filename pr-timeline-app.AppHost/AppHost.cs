@@ -69,7 +69,8 @@ if (builder.Configuration.GetValue("IncludeFrontend", true))
 {
     var webfrontend = builder.AddViteApp("webfrontend", "../frontend")
         .WithReference(server)
-        .WaitFor(server);
+        .WaitFor(server)
+        .WithBrowserLogs();
 
     if (builder.ExecutionContext.IsRunMode)
     {

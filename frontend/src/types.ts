@@ -90,13 +90,23 @@ export type ChecksStatus = {
 export type PullRequestListResponse = {
   repository: string;
   pullRequests: Omit<PullRequestSummary, 'repository'>[];
+  snapshot?: PullRequestListSnapshot | null;
 };
 
-export type PullRequestStreamItem = {
-  repository: string;
-  pullRequest?: Omit<PullRequestSummary, 'repository'> | null;
-  isStale?: boolean;
-  isComplete?: boolean;
+export type PullRequestListSnapshot = {
+  source: 'fresh-cache' | 'last-good' | 'live' | 'shared-cache' | string;
+  fetchedAt: string;
+  stale: boolean;
+  refreshInProgress: boolean;
+  refreshQueued: boolean;
+  error?: string | null;
+};
+
+export type ReviewLoadPerfStats = {
+  firstRowsMs: number;
+  settledMs: number | null;
+  requestCount: number;
+  staleSnapshotCount: number;
 };
 
 export type VisiblePullRequestOptions = {
