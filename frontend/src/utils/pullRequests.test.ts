@@ -184,6 +184,7 @@ function pullRequest({ checksState: checksStateOverride, ...overrides }: PullReq
       changesRequestedCount: 0,
       commentedReviewCount: 0,
       unresolvedThreadCount: 0,
+      requiresConversationResolution: false,
     },
     checks: {
       state: checksState,

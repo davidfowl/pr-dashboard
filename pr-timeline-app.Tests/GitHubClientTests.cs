@@ -2317,6 +2317,7 @@ public sealed class GitHubClientTests
                   }
                 ]
                 """),
+            "graphql" => Json("{}"),
             _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
         });
 
@@ -2380,10 +2381,11 @@ public sealed class GitHubClientTests
         var pullRequest = Assert.Single(pullRequests);
         Assert.Equal("approved", pullRequest.Review.State);
         Assert.Equal(2, pullRequest.Review.UnresolvedThreadCount);
+        Assert.True(pullRequest.Review.RequiresConversationResolution);
     }
 
     [Fact]
-    public async Task PullListSkipsUnresolvedThreadFetchForUnapprovedPullRequests()
+    public async Task PullListSkipsUnresolvedThreadFetchForChangesRequestedPullRequests()
     {
         var graphqlRequested = false;
         var client = CreateClient(path =>
@@ -2403,7 +2405,7 @@ public sealed class GitHubClientTests
                     [
                       {
                         "user": { "login": "reviewer" },
-                        "state": "COMMENTED",
+                        "state": "CHANGES_REQUESTED",
                         "submitted_at": "2026-01-02T00:00:00Z"
                       }
                     ]
@@ -2420,8 +2422,10 @@ public sealed class GitHubClientTests
             false,
             TestContext.Current.CancellationToken);
 
+        // Changes-requested PRs are already author-blocked (the "Author response" lane), so the
+        // unresolved-thread count adds nothing and the extra GraphQL call is skipped.
         var pullRequest = Assert.Single(pullRequests);
-        Assert.Equal("reviewed", pullRequest.Review.State);
+        Assert.Equal("changes_requested", pullRequest.Review.State);
         Assert.Equal(0, pullRequest.Review.UnresolvedThreadCount);
         Assert.False(graphqlRequested);
     }
@@ -2675,35 +2679,42 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
-    public async Task PullListSkipsUnresolvedThreadFetchWhenRepositoryNotEnrolled()
+    public async Task PullListCountsUnresolvedThreadsButDoesNotRequireResolutionWhenRepositoryNotEnrolled()
     {
-        var graphqlRequested = false;
         var client = CreateClient(
-            path =>
+            path => path switch
             {
-                if (path == "graphql")
-                {
-                    graphqlRequested = true;
-                    return Json("{}");
-                }
-
-                return path switch
-                {
-                    "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
-                        PullRequestsJson([PullRequestJson(1, title: "Approved work")])),
-                    "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
-                        """
-                        [
-                          {
-                            "user": { "login": "reviewer" },
-                            "state": "APPROVED",
-                            "submitted_at": "2026-01-02T00:00:00Z"
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    PullRequestsJson([PullRequestJson(1, title: "Approved work")])),
+                "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                    """
+                    [
+                      {
+                        "user": { "login": "reviewer" },
+                        "state": "APPROVED",
+                        "submitted_at": "2026-01-02T00:00:00Z"
+                      }
+                    ]
+                    """),
+                "graphql" => Json(
+                    """
+                    {
+                      "data": {
+                        "repository": {
+                          "pullRequest": {
+                            "reviewThreads": {
+                              "nodes": [
+                                { "isResolved": false },
+                                { "isResolved": false }
+                              ]
+                            }
                           }
-                        ]
-                        """),
-                    "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
-                    _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
-                };
+                        }
+                      }
+                    }
+                    """),
+                "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
             },
             CreateReviewPolicyOptions());
 
@@ -2713,10 +2724,12 @@ public sealed class GitHubClientTests
             false,
             TestContext.Current.CancellationToken);
 
+        // Unresolved feedback surfaces in every repo, but only repos enrolled in
+        // RequireConversationResolution flag it as a merge blocker.
         var pullRequest = Assert.Single(pullRequests);
         Assert.Equal("approved", pullRequest.Review.State);
-        Assert.Equal(0, pullRequest.Review.UnresolvedThreadCount);
-        Assert.False(graphqlRequested);
+        Assert.Equal(2, pullRequest.Review.UnresolvedThreadCount);
+        Assert.False(pullRequest.Review.RequiresConversationResolution);
     }
 
     [Fact]
@@ -2768,6 +2781,57 @@ public sealed class GitHubClientTests
         var pullRequest = Assert.Single(pullRequests);
         Assert.Equal("waiting", pullRequest.Review.State);
         Assert.Equal(2, pullRequest.Review.UnresolvedThreadCount);
+    }
+
+    [Fact]
+    public async Task PullListCountsUnresolvedThreadsForReviewedPullRequests()
+    {
+        var client = CreateClient(path => path switch
+        {
+            "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                PullRequestsJson([PullRequestJson(1, title: "Commented work")])),
+            "repos/example/repo/pulls/1/reviews?per_page=100" => Json(
+                """
+                [
+                  {
+                    "user": { "login": "reviewer" },
+                    "state": "COMMENTED",
+                    "submitted_at": "2026-01-02T00:00:00Z"
+                  }
+                ]
+                """),
+            "repos/example/repo/pulls/1/commits?per_page=100" => Json("[]"),
+            "graphql" => Json(
+                """
+                {
+                  "data": {
+                    "repository": {
+                      "pullRequest": {
+                        "reviewThreads": {
+                          "nodes": [
+                            { "isResolved": false }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+                """),
+            "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+            _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+        });
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        // A commented (reviewed) PR with open threads surfaces unresolved feedback so it drops out
+        // of the reviewer queue until the author resolves it.
+        var pullRequest = Assert.Single(pullRequests);
+        Assert.Equal("reviewed", pullRequest.Review.State);
+        Assert.Equal(1, pullRequest.Review.UnresolvedThreadCount);
     }
 
     [Fact]

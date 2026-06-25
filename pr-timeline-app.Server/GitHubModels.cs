@@ -281,7 +281,8 @@ record ReviewStatus(
     int CommentedReviewCount,
     DateTimeOffset? LastApprovedAt,
     DateTimeOffset? LastReviewedAt,
-    int UnresolvedThreadCount = 0)
+    int UnresolvedThreadCount = 0,
+    bool RequiresConversationResolution = false)
 {
     public static ReviewStatus Waiting { get; } = new(
         State: "waiting",

@@ -624,6 +624,7 @@ function createPullRequest(
       changesRequestedCount: 0,
       commentedReviewCount: 0,
       unresolvedThreadCount: 0,
+      requiresConversationResolution: false,
     },
     checks: checksStatus(checksState),
     ...overrides,

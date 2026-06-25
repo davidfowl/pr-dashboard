@@ -44,6 +44,7 @@ function pr(number: number, checksState: CheckState): PullRequestSummary {
       changesRequestedCount: 0,
       commentedReviewCount: 0,
       unresolvedThreadCount: 0,
+      requiresConversationResolution: false,
     },
     checks: checks(checksState),
   };
@@ -95,6 +96,31 @@ describe('computeFocusItems', () => {
   it('does not surface PRs solely from the CI failing lane', () => {
     const failing = pr(10, 'failure');
     const buckets: AttentionBucket[] = [bucket('CI failing', [failing])];
+
+    expect(computeFocusItems(buckets)).toHaveLength(0);
+  });
+
+  it('excludes a PR with unresolved feedback even when it also qualifies for a high-priority lane', () => {
+    // A reviewed/approved PR with open review threads lands in "Unresolved feedback" and can also
+    // appear in a reviewer lane (e.g. Re-review needed / Ready to merge). It is author-blocked, so
+    // it must be kept out of Needs attention regardless of the other lane.
+    const blocked = pr(30, 'success');
+    const clean = pr(31, 'success');
+
+    const buckets: AttentionBucket[] = [
+      bucket('Re-review needed', [blocked, clean]),
+      bucket('Unresolved feedback', [blocked]),
+    ];
+
+    const focusNumbers = computeFocusItems(buckets).map((item) => item.pullRequest.number);
+
+    expect(focusNumbers).not.toContain(30);
+    expect(focusNumbers).toContain(31);
+  });
+
+  it('does not surface PRs solely from the Unresolved feedback lane', () => {
+    const blocked = pr(40, 'success');
+    const buckets: AttentionBucket[] = [bucket('Unresolved feedback', [blocked])];
 
     expect(computeFocusItems(buckets)).toHaveLength(0);
   });
