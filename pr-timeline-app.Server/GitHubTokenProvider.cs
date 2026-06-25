@@ -165,6 +165,8 @@ sealed class GitHubTokenProvider
             catch (TimeoutException)
             {
                 process.Kill(entireProcessTree: true);
+                await ObserveProcessOutputTaskAsync(stdoutTask);
+                await ObserveProcessOutputTaskAsync(stderrTask);
                 return GitHubCliTokenResult.TimedOut();
             }
 
@@ -178,6 +180,23 @@ sealed class GitHubTokenProvider
             return string.IsNullOrWhiteSpace(stdout)
                 ? GitHubCliTokenResult.Failed(process.ExitCode, "gh auth token returned an empty token.")
                 : GitHubCliTokenResult.Success(stdout);
+        }
+    }
+
+    private static async Task ObserveProcessOutputTaskAsync(Task<string> outputTask)
+    {
+        try
+        {
+            _ = await outputTask;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (IOException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
         }
     }
 

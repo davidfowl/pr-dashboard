@@ -1,6 +1,7 @@
+const invariantCountLabels = new Set(['shown']);
+
 export function formatCount(count: number, singular: string, plural = `${singular}s`) {
-  const invariantLabels = new Set(['shown']);
-  const label = count === 1 || invariantLabels.has(singular) ? singular : plural;
+  const label = count === 1 || invariantCountLabels.has(singular) ? singular : plural;
   return `${count.toLocaleString()} ${label}`;
 }
 

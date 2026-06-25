@@ -1,10 +1,12 @@
 public static class AgentSchemaRoutes
 {
+    private const string AgentSchemaContentType = "application/pr-dashboard-agent-schema+json";
+
     public static IEndpointRouteBuilder MapAgentSchemaRoutes(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet("/api/agents/schema", () => Results.Ok(CreateSchema()));
-        endpoints.MapGet("/api/agents/schema.json", () => Results.Ok(CreateSchema()));
-        endpoints.MapGet("/.well-known/pr-dashboard-agent-schema", () => Results.Ok(CreateSchema()));
+        endpoints.MapGet("/api/agents/schema", () => Results.Json(CreateSchema(), contentType: AgentSchemaContentType));
+        endpoints.MapGet("/api/agents/schema.json", () => Results.Json(CreateSchema(), contentType: AgentSchemaContentType));
+        endpoints.MapGet("/.well-known/pr-dashboard-agent-schema", () => Results.Json(CreateSchema(), contentType: AgentSchemaContentType));
 
         return endpoints;
     }

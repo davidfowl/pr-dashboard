@@ -78,6 +78,7 @@ public sealed class GitHubApiSmokeTests(ServerSmokeFixture fixture) : IClassFixt
         using var response = await client.GetAsync("/api/agents/schema", cancellationToken);
 
         response.EnsureSuccessStatusCode();
+        Assert.Equal("application/pr-dashboard-agent-schema+json", response.Content.Headers.ContentType?.MediaType);
         var schema = await response.Content.ReadFromJsonAsync<AgentSchemaSmokeResponse>(cancellationToken);
 
         Assert.NotNull(schema);
@@ -104,6 +105,7 @@ public sealed class GitHubApiSmokeTests(ServerSmokeFixture fixture) : IClassFixt
         using var response = await client.GetAsync("/.well-known/pr-dashboard-agent-schema", cancellationToken);
 
         response.EnsureSuccessStatusCode();
+        Assert.Equal("application/pr-dashboard-agent-schema+json", response.Content.Headers.ContentType?.MediaType);
         var schema = await response.Content.ReadFromJsonAsync<AgentSchemaSmokeResponse>(cancellationToken);
 
         Assert.NotNull(schema);
