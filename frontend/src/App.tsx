@@ -33,7 +33,7 @@ import type {
 } from './types';
 import { colorForText } from './utils/format';
 import { readJson } from './utils/http';
-import { beginAbortableLoad } from './utils/loadLifecycle';
+import { beginAbortableLoad, cancelAbortableLoad } from './utils/loadLifecycle';
 import {
   streamPullRequests,
   replacePullRequestsByUpdatedAt,
@@ -414,7 +414,6 @@ function App() {
 
   async function logoutGitHub() {
     setError(null);
-    cancelVisibleChecksRequests();
 
     try {
       const response = await fetch('/api/github/logout', {
@@ -424,6 +423,10 @@ function App() {
       });
       await readJson(response);
       await loadAuthStatus();
+      cancelAbortableLoad(pullRequestsLoadVersionRef, pullRequestsAbortControllerRef);
+      cancelAbortableLoad(issuesLoadVersionRef, issuesAbortControllerRef);
+      cancelAbortableLoad(shipWeekLoadVersionRef, shipWeekAbortControllerRef);
+      cancelVisibleChecksRequests();
       setPullRequests([]);
       setIssues([]);
       setIssuesError(null);
@@ -439,6 +442,10 @@ function App() {
       setTimelineItems([]);
       setTimelineStats(null);
       setMergeableState(null);
+      setPullsLoading(false);
+      setIssuesLoading(false);
+      setShipWeekLoading(false);
+      setTimelineLoading(false);
       setViewMode('dashboard');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to sign out.');

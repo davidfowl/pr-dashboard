@@ -481,6 +481,70 @@ describe('App navigation', () => {
     await unmountApp(root);
   });
 
+  it('does not let an in-flight pull request stream repopulate rows after logout', async () => {
+    window.history.replaceState(null, '', '/');
+    const streamCompletion = createDeferred<void>();
+    vi.stubGlobal('fetch', createLogoutStreamRaceFetchMock(streamCompletion.promise));
+    const { root } = await renderApp();
+
+    await waitFor(() => getButton('Sign out'));
+    await clickButton('Sign out');
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Sign in');
+      expect(document.body.textContent).not.toContain('Live logout race row');
+    });
+
+    await act(async () => {
+      streamCompletion.resolve();
+      await streamCompletion.promise;
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+    });
+
+    expect(document.body.textContent).toContain('Sign in');
+    expect(document.body.textContent).not.toContain('Live logout race row');
+
+    await unmountApp(root);
+  });
+
+  it('does not let a refresh started during pending logout repopulate rows', async () => {
+    window.history.replaceState(null, '', '/');
+    const logoutCompletion = createDeferred<void>();
+    const refreshCompletion = createDeferred<void>();
+    vi.stubGlobal('fetch', createPendingLogoutRefreshRaceFetchMock(
+      logoutCompletion.promise,
+      refreshCompletion.promise,
+    ));
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Initial logout row');
+      expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    await clickButton('Sign out');
+    await clickButton('Refresh now');
+
+    await act(async () => {
+      logoutCompletion.resolve();
+      await logoutCompletion.promise;
+    });
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Sign in');
+      expect(document.body.textContent).not.toContain('Live pending logout refresh row');
+    });
+
+    await act(async () => {
+      refreshCompletion.resolve();
+      await refreshCompletion.promise;
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+    });
+
+    expect(document.body.textContent).toContain('Sign in');
+    expect(document.body.textContent).not.toContain('Live pending logout refresh row');
+
+    await unmountApp(root);
+  });
+
   it('does not label all repos stale when only a different repo emits stale rows', async () => {
     window.history.replaceState(null, '', '/');
     const fetchMock = createCrossRepoIncompleteRefreshFetchMock();
@@ -1264,6 +1328,177 @@ function createIncompleteStaleRefreshFetchMock() {
       return jsonResponse<PullRequestChecksResponse>({
         repository: cached.repository,
         pullRequests: [cached, stale].map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createLogoutStreamRaceFetchMock(streamCompletion: Promise<void>) {
+  let authenticated = true;
+  const live = createPullRequest('success', {
+    title: 'Live logout race row',
+    updatedAt: '2026-01-03T00:00:00Z',
+  });
+
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated,
+        configured: true,
+        canLogin: true,
+        login: authenticated ? 'octocat' : undefined,
+        message: authenticated ? 'Signed in.' : 'Signed out.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/github/logout') {
+      authenticated = false;
+      return jsonResponse({ ok: true });
+    }
+
+    if (url.pathname === '/api/github/pulls/stream') {
+      if (url.searchParams.get('repo') === live.repository) {
+        return jsonLinesStreamResponse(
+          [],
+          streamCompletion,
+          [
+            createStreamItem(live),
+            { repository: live.repository, isComplete: true },
+          ],
+        );
+      }
+
+      return jsonLinesResponse([]);
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: live.repository,
+        pullRequests: [{
+          number: live.number,
+          headSha: live.headSha ?? '',
+          checks: live.checks,
+        }],
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createPendingLogoutRefreshRaceFetchMock(
+  logoutCompletion: Promise<void>,
+  refreshCompletion: Promise<void>,
+) {
+  let authenticated = true;
+  const initial = createPullRequest('success', {
+    title: 'Initial logout row',
+    updatedAt: '2026-01-01T00:00:00Z',
+  });
+  const live = createPullRequest('success', {
+    title: 'Live pending logout refresh row',
+    updatedAt: '2026-01-03T00:00:00Z',
+  });
+
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated,
+        configured: true,
+        canLogin: true,
+        login: authenticated ? 'octocat' : undefined,
+        message: authenticated ? 'Signed in.' : 'Signed out.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/github/logout') {
+      await logoutCompletion;
+      authenticated = false;
+      return jsonResponse({ ok: true });
+    }
+
+    if (url.pathname === '/api/github/pulls/stream') {
+      if (url.searchParams.get('repo') !== initial.repository) {
+        return jsonLinesResponse([]);
+      }
+
+      if (url.searchParams.get('refresh') === 'true') {
+        return jsonLinesStreamResponse(
+          [],
+          refreshCompletion,
+          [
+            createStreamItem(live),
+            { repository: live.repository, isComplete: true },
+          ],
+        );
+      }
+
+      return jsonLinesResponse([
+        createStreamItem(initial),
+        { repository: initial.repository, isComplete: true },
+      ]);
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: initial.repository,
+        pullRequests: [initial, live].map((pullRequest) => ({
           number: pullRequest.number,
           headSha: pullRequest.headSha ?? '',
           checks: pullRequest.checks,
