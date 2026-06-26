@@ -31,7 +31,7 @@ sealed partial class GitHubClient(
         "pullRequests(first:" + PullRequestPageSize + ",after:$after,states:$states,orderBy:{field:$orderField,direction:$orderDirection}){" +
         "pageInfo{hasNextPage endCursor}" +
         "nodes{" +
-        "number title state isDraft author{login databaseId} url createdAt updatedAt " +
+        "number title state isDraft author{login ... on User{databaseId}} url createdAt updatedAt " +
         "labels(first:20){nodes{name}} " +
         "assignees(first:10){nodes{login databaseId}} " +
         "reviewRequests(first:100){nodes{requestedReviewer{__typename ... on User{login databaseId}}}} " +

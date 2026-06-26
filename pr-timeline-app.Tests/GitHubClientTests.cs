@@ -143,6 +143,55 @@ public sealed class GitHubClientTests
         Assert.Equal("none", graphQl.Checks.State);
     }
 
+    [Fact]
+    public async Task GraphQlPullListQuerySelectsAuthorDatabaseIdViaUserInlineFragment()
+    {
+        // databaseId is not a field on the Actor interface (PullRequest.author's type); it only
+        // exists on the concrete User type. Selecting it directly as author{login databaseId} makes
+        // GitHub reject the whole query with "Field 'databaseId' doesn't exist on type 'Actor'", so
+        // it must go through a User inline fragment. The canned-JSON tests can't catch that (no
+        // schema validation), so guard the query shape the client actually sends over the wire.
+        string? capturedQuery = null;
+        var client = CreateClientCapturingRequests(async (request, path, cancellationToken) =>
+        {
+            if (path == "graphql")
+            {
+                var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+                if (body.Contains("PullRequestsForDashboard", StringComparison.Ordinal))
+                {
+                    capturedQuery = body;
+                    return Json(GraphQlPullRequestsResponse(
+                        hasNextPage: false,
+                        endCursor: null,
+                        GraphQlPullRequestNode(
+                            42,
+                            title: "Author selection",
+                            reviewState: "APPROVED",
+                            reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                            lastCommitAt: "2026-01-03T00:00:00Z",
+                            reviewThreadsHasNextPage: false,
+                            reviewThreadsEndCursor: null,
+                            reviewThreadsResolved: [],
+                            authorDatabaseId: 555)));
+                }
+            }
+
+            throw new InvalidOperationException($"Unexpected GitHub request: {path}");
+        });
+
+        _ = await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedQuery);
+        // The schema-invalid form that GitHub rejects must never appear.
+        Assert.DoesNotContain("author{login databaseId}", capturedQuery, StringComparison.Ordinal);
+        // databaseId on author must be selected through a User inline fragment.
+        Assert.Contains("author{login ... on User{databaseId}}", capturedQuery, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("SUCCESS", "success")]
     [InlineData("FAILURE", "failure")]
