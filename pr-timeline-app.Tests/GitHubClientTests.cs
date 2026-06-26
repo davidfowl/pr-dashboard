@@ -244,6 +244,7 @@ public sealed class GitHubClientTests
                     """),
                 "repos/example/repo/commits/abc123/status?per_page=100" when token == "public-cache-token" => Json(
                     """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+                "repos/example/repo/pulls/1/commits?per_page=100" when token == "public-cache-token" => Json("[]"),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
             });
         };
@@ -275,6 +276,68 @@ public sealed class GitHubClientTests
         Assert.Equal("commented", item.Event);
         Assert.Equal("reviewer", item.Actor);
         Assert.All(requests, request => Assert.Equal("public-cache-token", request.Token));
+    }
+
+    [Fact]
+    public async Task TimelineResolvesCommittedEventActorToGitHubLoginFromCommitsApi()
+    {
+        // A "committed" event only carries the raw git author name ("Ankit Jain"). The commits
+        // API maps that commit's SHA to the GitHub login ("radical"), and the timeline must use
+        // the login so the commit is attributed to the same person as their logged-in activity.
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var route = (HttpRequestMessage request, CancellationToken _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            var token = request.Headers.Authorization?.Parameter;
+
+            return Task.FromResult(path switch
+            {
+                "repos/example/repo" when token == "public-cache-token" => Json("""{ "visibility": "public" }"""),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" => Json(
+                    PullRequestsJson([PullRequestJson(1, title: "Public list item", headSha: "abc123")])),
+                "repos/example/repo/pulls/1" when token == "public-cache-token" => Json(
+                    PullRequestJson(1, headSha: "abc123", mergeableState: "clean")),
+                "repos/example/repo/issues/1/timeline?per_page=100" when token == "public-cache-token" => Json(
+                    """
+                    [
+                      {
+                        "event": "committed",
+                        "sha": "c0ffee1",
+                        "author": { "name": "Ankit Jain", "date": "2026-01-02T12:00:00Z" },
+                        "committer": { "name": "Ankit Jain", "date": "2026-01-02T12:00:00Z" }
+                      }
+                    ]
+                    """),
+                "repos/example/repo/pulls/1/commits?per_page=100" when token == "public-cache-token" => Json(
+                    """[ { "sha": "c0ffee1", "author": { "login": "radical", "id": 1472 }, "commit": { "author": { "name": "Ankit Jain" } } } ]"""),
+                "repos/example/repo/commits/abc123/check-runs?filter=latest&per_page=100" when token == "public-cache-token" => Json(
+                    """{ "total_count": 0, "check_runs": [] }"""),
+                "repos/example/repo/commits/abc123/status?per_page=100" when token == "public-cache-token" => Json(
+                    """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
+            });
+        };
+        var warmupClient = CreateClientFromRequests(route, cache, "token-a");
+        await warmupClient.TryPrewarmPublicPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            TestContext.Current.CancellationToken);
+        var readClient = CreateAnonymousClientFromRequests(route, cache);
+        await readClient.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var timeline = await new GitHubPullRequestService(readClient).GetTimelineAsync(
+            new RepositoryName("example", "repo"),
+            1,
+            false,
+            TestContext.Current.CancellationToken);
+
+        var item = Assert.Single(timeline.Items);
+        Assert.Equal("committed", item.Event);
+        Assert.Equal("radical", item.Actor);
     }
 
     [Fact]

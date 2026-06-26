@@ -2849,8 +2849,16 @@ sealed partial class GitHubClient(
                 url = pageResponse.NextUrl;
             }
 
+            // "committed" timeline events only carry the raw git author name, so resolve each
+            // commit's GitHub login from the commits API to keep one person from appearing twice.
+            var commitAuthorLogins = await GetCommitAuthorLoginsByShaAsync(
+                repositoryName,
+                number,
+                scope,
+                cancellationToken);
+
             return items
-                .Select(TimelineItem.FromDto)
+                .Select(item => TimelineItem.FromDto(item, commitAuthorLogins))
                 .OrderBy(item => item.OccurredAt)
                 .ToArray();
         },
@@ -2989,6 +2997,50 @@ sealed partial class GitHubClient(
                 .FirstOrDefault();
         },
             cancellationToken);
+    }
+
+    // Builds a SHA -> GitHub login map from the PR commits API so the timeline can attribute
+    // "committed" events to a GitHub user instead of the raw git author name. Best-effort: any
+    // failure (including 404) yields an empty map and the timeline falls back to git names.
+    private async Task<IReadOnlyDictionary<string, string>> GetCommitAuthorLoginsByShaAsync(
+        RepositoryName repositoryName,
+        int number,
+        GitHubCacheScope scope,
+        CancellationToken cancellationToken)
+    {
+        var loginsBySha = new Dictionary<string, string>(StringComparer.Ordinal);
+        var url = $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}/commits?per_page=100";
+
+        for (var page = 0; page < 3 && url is not null; page++)
+        {
+            GitHubPullRequestCommitDto[] pageCommits;
+
+            try
+            {
+                var pageResponse = await SendGitHubPageAsync(
+                    url,
+                    GitHubJsonSerializerContext.Default.GitHubPullRequestCommitDtoArray,
+                    scope.RequestAuthorization,
+                    cancellationToken);
+                pageCommits = pageResponse.Value;
+                url = pageResponse.NextUrl;
+            }
+            catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+            {
+                break;
+            }
+
+            foreach (var commit in pageCommits)
+            {
+                if (commit.Sha is { Length: > 0 } sha
+                    && commit.Author?.Login is { Length: > 0 } login)
+                {
+                    loginsBySha[sha] = login;
+                }
+            }
+        }
+
+        return loginsBySha;
     }
 
     private async Task<IReadOnlyList<LinkedIssueSummary>> GetLinkedIssuesAsync(

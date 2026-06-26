@@ -162,6 +162,12 @@ record PullRequestSummary(
 
     public IReadOnlyList<long> RequestedReviewerIds { get; init; } = [];
 
+    // GitHub numeric id of the human who owns the PR: the author for a human-authored PR, or the
+    // sole human assignee for a Copilot/bot-authored PR (mirrors ResolveAuthor's attribution).
+    // Used to avoid notifying that human to "review" their own work. Null when no unambiguous
+    // human owner exists (e.g. a bot PR with zero or multiple human assignees).
+    public long? OwnerUserId { get; init; }
+
     public static PullRequestSummary FromDto(GitHubPullRequestDto pullRequest)
     {
         var requestedReviewerLogins = pullRequest.RequestedReviewers
@@ -209,8 +215,29 @@ record PullRequestSummary(
                 .Where(id => id is > 0)
                 .Select(id => id!.Value)
                 .Distinct()
-                .ToArray()
+                .ToArray(),
+            OwnerUserId = ResolveOwnerUserId(pullRequest)
         };
+    }
+
+    // The human who owns the PR, for self-notification suppression. Keep this in lockstep with
+    // ResolveAuthor: a human author owns their own PR; a Copilot/bot-authored PR is owned by its
+    // sole human assignee (ambiguous when there are zero or several, so no owner is returned).
+    private static long? ResolveOwnerUserId(GitHubPullRequestDto pullRequest)
+    {
+        var author = pullRequest.User;
+        if (author is not null && !IsCopilotLogin(author.Login) && author.Id is > 0)
+        {
+            return author.Id;
+        }
+
+        var humanAssigneeIds = (pullRequest.Assignees ?? [])
+            .Where(assignee => !IsCopilotLogin(assignee.Login) && assignee.Id is > 0)
+            .Select(assignee => assignee.Id!.Value)
+            .Distinct()
+            .ToArray();
+
+        return humanAssigneeIds.Length == 1 ? humanAssigneeIds[0] : null;
     }
 
     private static string ResolveAuthor(GitHubPullRequestDto pullRequest)
@@ -524,7 +551,17 @@ record TimelineItem(
     string? Body,
     string? HtmlUrl)
 {
-    public static TimelineItem FromDto(GitHubTimelineItemDto item)
+    public static TimelineItem FromDto(GitHubTimelineItemDto item) =>
+        FromDto(item, commitAuthorLoginsBySha: null);
+
+    // commitAuthorLoginsBySha maps a commit SHA to the GitHub login that authored it. The REST
+    // issues-timeline "committed" event only carries the raw git author name (no login/id), so
+    // without this map a commit surfaces under the git name (e.g. "Ankit Jain") and is counted as
+    // a different person from that same user's logged-in activity (e.g. "radical"). Resolving the
+    // login here collapses them into one participant.
+    public static TimelineItem FromDto(
+        GitHubTimelineItemDto item,
+        IReadOnlyDictionary<string, string>? commitAuthorLoginsBySha)
     {
         var eventName = item.Event ?? "event";
         var occurredAt = item.CreatedAt
@@ -533,9 +570,18 @@ record TimelineItem(
             ?? item.Author?.Date
             ?? item.Committer?.Date
             ?? DateTimeOffset.MinValue;
+
+        string? commitAuthorLogin = null;
+        if (commitAuthorLoginsBySha is not null
+            && item.Sha is { Length: > 0 } sha)
+        {
+            commitAuthorLoginsBySha.TryGetValue(sha, out commitAuthorLogin);
+        }
+
         var actor = item.Actor?.Login
             ?? item.User?.Login
             ?? item.Author?.Login
+            ?? commitAuthorLogin
             ?? item.Author?.Name
             ?? item.Committer?.Login
             ?? item.Committer?.Name
@@ -754,7 +800,14 @@ sealed class GitHubCommitDto
 
 sealed class GitHubPullRequestCommitDto
 {
+    public string? Sha { get; init; }
     public GitHubCommitDto? Commit { get; init; }
+
+    // Top-level author/committer carry the GitHub user (login + id) that GitHub linked to the
+    // commit. The nested Commit.Author/Committer only carry the raw git identity (name/email),
+    // so these are what let us resolve a commit's git name to a GitHub login.
+    public GitHubActorDto? Author { get; init; }
+    public GitHubActorDto? Committer { get; init; }
 }
 
 sealed class GitHubReviewDto
