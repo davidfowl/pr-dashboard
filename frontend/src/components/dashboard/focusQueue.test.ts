@@ -16,7 +16,11 @@ function checks(state: CheckState): PullRequestSummary['checks'] {
   };
 }
 
-function pr(number: number, checksState: CheckState): PullRequestSummary {
+function pr(
+  number: number,
+  checksState: CheckState,
+  reviewOverrides: Partial<PullRequestSummary['review']> = {},
+): PullRequestSummary {
   const now = new Date().toISOString();
   return {
     repository: 'example/repo',
@@ -45,6 +49,7 @@ function pr(number: number, checksState: CheckState): PullRequestSummary {
       commentedReviewCount: 0,
       unresolvedThreadCount: 0,
       requiresConversationResolution: false,
+      ...reviewOverrides,
     },
     checks: checks(checksState),
   };
@@ -104,7 +109,7 @@ describe('computeFocusItems', () => {
     // A reviewed/approved PR with open review threads lands in "Unresolved feedback" and can also
     // appear in a reviewer lane (e.g. Re-review needed / Ready to merge). It is author-blocked, so
     // it must be kept out of Needs attention regardless of the other lane.
-    const blocked = pr(30, 'success');
+    const blocked = pr(30, 'success', { unresolvedThreadCount: 2 });
     const clean = pr(31, 'success');
 
     const buckets: AttentionBucket[] = [
@@ -119,7 +124,7 @@ describe('computeFocusItems', () => {
   });
 
   it('does not surface PRs solely from the Unresolved feedback lane', () => {
-    const blocked = pr(40, 'success');
+    const blocked = pr(40, 'success', { unresolvedThreadCount: 2 });
     const buckets: AttentionBucket[] = [bucket('Unresolved feedback', [blocked])];
 
     expect(computeFocusItems(buckets)).toHaveLength(0);

@@ -293,7 +293,7 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
     },
     {
       label: 'Unresolved feedback',
-      summary: 'PRs with unresolved review threads (human or Copilot) the author still needs to resolve before the PR can move forward.',
+      summary: 'PRs with unresolved review threads (human or Copilot) the author still needs to address.',
       tone: 'danger',
       metric: 'resolve threads',
       items: [],
