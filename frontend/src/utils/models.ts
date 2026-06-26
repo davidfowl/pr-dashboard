@@ -169,7 +169,7 @@ function createPersonalPick(pullRequest: PullRequestSummary, login: string): Pic
     return {
       pullRequest,
       action: personalPickActions.fixCi,
-      reason: `Your PR has ${formatCount(pullRequest.checks.failureCount, 'failing check')} · ${pickReason(pullRequest)}`,
+      reason: `${pullRequest.checks.failureCount > 0 ? `Your PR has ${formatCount(pullRequest.checks.failureCount, 'failing check')}` : 'Your PR is failing CI'} · ${pickReason(pullRequest)}`,
       tone: 'danger',
       personal: true,
     };
@@ -735,8 +735,10 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
       return regressionSignal(pullRequest);
     case approvedButAgingBucketLabel:
       return approvedAt ? `Approved ${formatAge(approvedAt)}` : 'Approved';
-    case 'CI failing':
-      return formatCount(pullRequest.checks?.failureCount ?? 0, 'failing check');
+    case 'CI failing': {
+      const failureCount = pullRequest.checks?.failureCount ?? 0;
+      return failureCount > 0 ? formatCount(failureCount, 'failing check') : 'CI failing';
+    }
     case 'Unresolved feedback':
       return formatCount(pullRequest.review.unresolvedThreadCount, 'unresolved thread');
     case 'Ready to merge':
@@ -1270,7 +1272,9 @@ export function createTriageModel(
     .slice(0, 6);
 
   if (pullRequest.checks?.state === 'success') {
-    signals.push({ label: `CI ${formatCount(pullRequest.checks.successCount, 'check')} pass`, tone: 'success' });
+    const successCount = pullRequest.checks.successCount;
+    const label = successCount > 0 ? `CI ${formatCount(successCount, 'check')} pass` : 'CI passing';
+    signals.push({ label, tone: 'success' });
   }
 
   if (mergeableState === 'dirty') {

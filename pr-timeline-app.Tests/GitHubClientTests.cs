@@ -25,6 +25,691 @@ public sealed class GitHubClientTests
     private static readonly JsonSerializerOptions s_testJsonOptions = new(JsonSerializerDefaults.Web);
 
     [Fact]
+    public async Task GraphQlPullListReturnsRestEquivalentSummaryShape()
+    {
+        var client = CreateClientCapturingRequests(async (request, path, cancellationToken) =>
+        {
+            if (path == "graphql")
+            {
+                var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+                if (body.Contains("PullRequestsForDashboard", StringComparison.Ordinal))
+                {
+                    return Json(GraphQlPullRequestsResponse(
+                        hasNextPage: false,
+                        endCursor: null,
+                        GraphQlPullRequestNode(
+                            42,
+                            title: "GraphQL batching",
+                            reviewState: "CHANGES_REQUESTED",
+                            reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                            lastCommitAt: "2026-01-03T00:00:00Z",
+                            reviewThreadsHasNextPage: false,
+                            reviewThreadsEndCursor: null,
+                            reviewThreadsResolved: [])));
+                }
+            }
+
+            return path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    """
+                    [
+                      {
+                        "number": 42,
+                        "title": "GraphQL batching",
+                        "state": "open",
+                        "body": "Fixes #10",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-02T00:00:00Z",
+                        "draft": false,
+                        "user": { "login": "octocat" },
+                        "html_url": "https://github.com/example/repo/pull/42",
+                        "labels": [{ "name": "enhancement" }],
+                        "assignees": [],
+                        "requested_reviewers": [{ "login": "reviewer", "id": 123 }],
+                        "requested_teams": [],
+                        "milestone": { "title": "13.4" },
+                        "commits": 1,
+                        "additions": 10,
+                        "deletions": 2,
+                        "changed_files": 1,
+                        "head": { "sha": "head-sha", "ref": "feature-42" },
+                        "base": { "ref": "main" },
+                        "mergeable_state": "dirty"
+                      }
+                    ]
+                    """),
+                "repos/example/repo/pulls/42/reviews?per_page=100" => Json(
+                    """
+                    [
+                      {
+                        "user": { "login": "reviewer" },
+                        "state": "CHANGES_REQUESTED",
+                        "submitted_at": "2026-01-02T00:00:00Z"
+                      }
+                    ]
+                    """),
+                "repos/example/repo/pulls/42" => Json(
+                    PullRequestJson(
+                        42,
+                        title: "GraphQL batching",
+                        milestone: "13.4",
+                        headSha: "head-sha",
+                        baseRef: "main",
+                        mergeableState: "dirty")),
+                "repos/example/repo/pulls/42/commits?per_page=100" => Json(
+                    """
+                    [
+                      {
+                        "commit": {
+                          "author": { "date": "2026-01-03T00:00:00Z" },
+                          "committer": { "date": "2026-01-03T00:00:00Z" }
+                        }
+                      }
+                    ]
+                    """),
+                "repos/example/repo/issues/10" => Json(
+                    """
+                    {
+                      "number": 10,
+                      "title": "Tracking issue",
+                      "html_url": "https://github.com/example/repo/issues/10",
+                      "labels": [{ "name": "bug" }],
+                      "milestone": { "title": "13.4" }
+                    }
+                    """),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var rest = Assert.Single(await client.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
+        var graphQl = Assert.Single(await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
+
+        AssertPullRequestSummaryEqual(rest, graphQl, compareChecks: false);
+        Assert.NotEqual(default, graphQl.FetchedAt);
+
+        // The REST list defers CI to a follow-up checks fetch (Unknown), while the GraphQL list now
+        // resolves checks inline from statusCheckRollup. With no rollup in this mock that means None.
+        Assert.Equal("unknown", rest.Checks.State);
+        Assert.Equal("none", graphQl.Checks.State);
+    }
+
+    [Theory]
+    [InlineData("SUCCESS", "success")]
+    [InlineData("FAILURE", "failure")]
+    [InlineData("ERROR", "failure")]
+    [InlineData("PENDING", "pending")]
+    [InlineData("EXPECTED", "pending")]
+    public async Task GraphQlSnapshotResolvesChecksStateInlineWithoutCheckFanout(string rollupState, string expectedState)
+    {
+        // The list query carries only statusCheckRollup.state (enumerating contexts inline timed the
+        // largest repos out), so the inline checks surface the headline state with zeroed counts.
+        var rollup = $$"""{ "state": "{{rollupState}}" }""";
+
+        // The handler throws on any non-GraphQL request, so a passing test proves the PR-list no
+        // longer fans out to the per-PR REST check-runs / status endpoints.
+        var client = CreateClientCapturingRequests((request, path, cancellationToken) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                GraphQlPullRequestNode(
+                    42,
+                    title: "GraphQL inline checks",
+                    reviewState: "CHANGES_REQUESTED",
+                    reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                    lastCommitAt: "2026-01-03T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: [],
+                    statusCheckRollupJson: rollup))));
+        });
+
+        var pullRequest = Assert.Single(await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
+
+        // State drives the dashboard's CI colour/label; per-check counts are filled in on demand by
+        // the detail/timeline path, so the list-level checks intentionally carry zeroed counts.
+        Assert.Equal(expectedState, pullRequest.Checks.State);
+        Assert.Equal(0, pullRequest.Checks.TotalCount);
+        Assert.Empty(pullRequest.Checks.FailingChecks);
+    }
+
+    [Fact]
+    public async Task GraphQlSnapshotTreatsMissingRollupAsNoChecks()
+    {
+        var client = CreateClientCapturingRequests((request, path, cancellationToken) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                GraphQlPullRequestNode(
+                    7,
+                    title: "No CI configured",
+                    reviewState: "CHANGES_REQUESTED",
+                    reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                    lastCommitAt: "2026-01-03T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: []))));
+        });
+
+        var pullRequest = Assert.Single(await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("none", pullRequest.Checks.State);
+        Assert.Empty(pullRequest.Checks.FailingChecks);
+    }
+
+    [Fact]
+    public async Task GraphQlSnapshotKeepsPartialDataWhenAFieldErrorAccompaniesIt()
+    {
+        // GitHub returns a partial `data` payload alongside field-level `errors` when a single PR's
+        // sub-resolver (e.g. statusCheckRollup) times out. The page must still render every PR that
+        // did resolve, with the errored field degrading to "no checks", rather than the whole list
+        // failing. The errored PR's statusCheckRollup is null here to mimic that partial payload.
+        var node = GraphQlPullRequestNode(
+            55,
+            title: "Partial data survives",
+            reviewState: "APPROVED",
+            reviewSubmittedAt: "2026-01-02T00:00:00Z",
+            lastCommitAt: "2026-01-03T00:00:00Z",
+            reviewThreadsHasNextPage: false,
+            reviewThreadsEndCursor: null,
+            reviewThreadsResolved: []);
+
+        var responseWithFieldError =
+            $$"""
+            {
+              "data": {
+                "repository": {
+                  "pullRequests": {
+                    "pageInfo": { "hasNextPage": false, "endCursor": null },
+                    "nodes": [ {{node}} ]
+                  }
+                }
+              },
+              "errors": [
+                {
+                  "type": "SERVICE_TIMEOUT",
+                  "path": ["repository","pullRequests","nodes",0,"commits","nodes",0,"commit","statusCheckRollup"],
+                  "message": "Something went wrong while executing your query."
+                }
+              ]
+            }
+            """;
+
+        var client = CreateClientCapturingRequests((request, path, cancellationToken) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(responseWithFieldError));
+        });
+
+        var pullRequest = Assert.Single(await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(55, pullRequest.Number);
+        // The errored statusCheckRollup degrades to "no checks" for that PR instead of failing the
+        // whole list.
+        Assert.Equal("none", pullRequest.Checks.State);
+    }
+
+    [Fact]
+    public async Task GraphQlSnapshotStillThrowsWhenErrorsCarryNoData()
+    {
+        // A fatal error (bad query, auth, repo not found, top-level rate limit) returns errors with
+        // a null data payload. With nothing usable to render, the request must still surface the
+        // failure rather than silently returning an empty list.
+        var fatalErrorResponse =
+            """
+            {
+              "data": null,
+              "errors": [ { "type": "NOT_FOUND", "message": "Could not resolve to a Repository." } ]
+            }
+            """;
+
+        var client = CreateClientCapturingRequests((request, path, cancellationToken) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(fatalErrorResponse));
+        });
+
+        await Assert.ThrowsAsync<GitHubApiException>(async () => await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("open", "CREATED_AT", "ASC")]
+    [InlineData("closed", "UPDATED_AT", "DESC")]
+    [InlineData("all", "UPDATED_AT", "DESC")]
+    public async Task GraphQlPullListUsesRestOrderingForState(string state, string expectedField, string expectedDirection)
+    {
+        var client = CreateClientCapturingRequests(async (request, path, cancellationToken) =>
+        {
+            Assert.Equal("graphql", path);
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            Assert.Equal(expectedField, GetGraphQlVariable(body, "orderField"));
+            Assert.Equal(expectedDirection, GetGraphQlVariable(body, "orderDirection"));
+            return Json(GraphQlPullRequestsResponse(hasNextPage: false, endCursor: null));
+        });
+
+        var pullRequests = await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            state,
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(pullRequests);
+    }
+
+    [Fact]
+    public async Task GraphQlPullListPagesTopLevelPullRequestsAndOverflowedReviewThreads()
+    {
+        var graphQlBodies = new ConcurrentQueue<string>();
+        var client = CreateClientCapturingRequests(async (request, path, cancellationToken) =>
+        {
+            if (path != "graphql")
+            {
+                throw new InvalidOperationException($"Unexpected GitHub request: {path}");
+            }
+
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            graphQlBodies.Enqueue(body);
+            if (body.Contains("PullRequestsForDashboard", StringComparison.Ordinal))
+            {
+                var after = GetGraphQlVariable(body, "after");
+                return after switch
+                {
+                    null => Json(GraphQlPullRequestsResponse(
+                        hasNextPage: true,
+                        endCursor: "PULL_PAGE_1",
+                        GraphQlPullRequestNode(
+                            1,
+                            title: "First page",
+                            reviewState: "APPROVED",
+                            reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                            lastCommitAt: "2026-01-03T00:00:00Z",
+                            reviewThreadsHasNextPage: true,
+                            reviewThreadsEndCursor: "THREAD_PAGE_1",
+                            reviewThreadsResolved: [true]))),
+                    "PULL_PAGE_1" => Json(GraphQlPullRequestsResponse(
+                        hasNextPage: false,
+                        endCursor: null,
+                        GraphQlPullRequestNode(
+                            2,
+                            title: "Second page",
+                            reviewState: "APPROVED",
+                            reviewSubmittedAt: "2026-01-04T00:00:00Z",
+                            lastCommitAt: "2026-01-05T00:00:00Z",
+                            reviewThreadsHasNextPage: false,
+                            reviewThreadsEndCursor: null,
+                            reviewThreadsResolved: []))),
+                    _ => throw new InvalidOperationException($"Unexpected PR cursor: {after}")
+                };
+            }
+
+            Assert.Equal("THREAD_PAGE_1", GetGraphQlVariable(body, "after"));
+            return Json(ReviewThreadsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                isResolvedValues: [false]));
+        });
+
+        var pullRequests = await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal([1, 2], pullRequests.Select(pullRequest => pullRequest.Number));
+        Assert.Equal(1, pullRequests[0].Review.UnresolvedThreadCount);
+        Assert.Equal(0, pullRequests[1].Review.UnresolvedThreadCount);
+        Assert.Equal(3, graphQlBodies.Count);
+        Assert.Contains(graphQlBodies, body => GetGraphQlVariable(body, "after") == "PULL_PAGE_1");
+        Assert.Contains(graphQlBodies, body => GetGraphQlVariable(body, "after") == "THREAD_PAGE_1");
+    }
+
+    [Fact]
+    public async Task GraphQlSnapshotReturnsLastGoodWhileBackgroundRefreshUpdatesFreshCache()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var graphQlRequests = 0;
+        var backgroundStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseBackground = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = CreateClientFromRequests(async (request, cancellationToken) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            Assert.Equal("graphql", path);
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            Assert.Contains("PullRequestsForDashboard", body);
+            var requestNumber = Interlocked.Increment(ref graphQlRequests);
+            if (requestNumber == 2)
+            {
+                backgroundStarted.SetResult();
+                await releaseBackground.Task.WaitAsync(cancellationToken);
+            }
+
+            return Json(GraphQlPullRequestsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                GraphQlPullRequestNode(
+                    42,
+                    title: requestNumber == 1 ? "Last-good row" : "Fresh row",
+                    reviewState: "APPROVED",
+                    reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                    lastCommitAt: "2026-01-03T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: [])));
+        }, cache, "unit-test-token");
+
+        var first = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("live", first.Snapshot?.Source);
+        Assert.False(first.Snapshot?.Stale);
+        Assert.Equal("Last-good row", Assert.Single(first.PullRequests).Title);
+
+        var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(
+            CreateTokenScopeForTestToken("unit-test-token"),
+            repositoryName,
+            "pulls-graphql",
+            "open");
+        cache.Remove(cacheKey);
+
+        var stale = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("last-good", stale.Snapshot?.Source);
+        Assert.True(stale.Snapshot?.Stale);
+        Assert.True(stale.Snapshot?.RefreshQueued);
+        Assert.True(stale.Snapshot?.RefreshInProgress);
+        Assert.Equal("Last-good row", Assert.Single(stale.PullRequests).Title);
+
+        await backgroundStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var deduped = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+        Assert.False(deduped.Snapshot?.RefreshQueued);
+        Assert.True(deduped.Snapshot?.RefreshInProgress);
+        Assert.Equal(2, Volatile.Read(ref graphQlRequests));
+
+        releaseBackground.SetResult();
+        var fresh = await WaitForFreshGraphQlSnapshotAsync(client, repositoryName, "open");
+        Assert.Equal("fresh-cache", fresh.Snapshot?.Source);
+        Assert.False(fresh.Snapshot?.Stale);
+        Assert.False(fresh.Snapshot?.RefreshInProgress);
+        Assert.Equal("Fresh row", Assert.Single(fresh.PullRequests).Title);
+        Assert.Equal(2, Volatile.Read(ref graphQlRequests));
+    }
+
+    [Fact]
+    public async Task GraphQlSnapshotForceRefreshDoesNotReturnLastGoodWhenLiveRefreshFails()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var graphQlRequests = 0;
+        var client = CreateClientFromRequests((request, _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            Assert.Equal("graphql", path);
+            var requestNumber = Interlocked.Increment(ref graphQlRequests);
+            if (requestNumber == 1)
+            {
+                return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                    hasNextPage: false,
+                    endCursor: null,
+                    GraphQlPullRequestNode(
+                        42,
+                        title: "Last-good row",
+                        reviewState: "APPROVED",
+                        reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                        lastCommitAt: "2026-01-03T00:00:00Z",
+                        reviewThreadsHasNextPage: false,
+                        reviewThreadsEndCursor: null,
+                        reviewThreadsResolved: []))));
+            }
+
+            return Task.FromResult(Json("""{ "message": "GitHub unavailable" }""", HttpStatusCode.ServiceUnavailable));
+        }, cache, "unit-test-token");
+
+        var first = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("Last-good row", Assert.Single(first.PullRequests).Title);
+
+        await Assert.ThrowsAsync<GitHubApiException>(() => client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
+        Assert.Equal(2, Volatile.Read(ref graphQlRequests));
+    }
+
+    [Fact]
+    public async Task GraphQlSnapshotSkipsLastGoodOlderThanMaxStaleAgeAndFetchesLive()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var graphQlRequests = 0;
+        var client = CreateClientFromRequests((request, _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            Assert.Equal("graphql", path);
+            var requestNumber = Interlocked.Increment(ref graphQlRequests);
+            return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                GraphQlPullRequestNode(
+                    42,
+                    title: requestNumber == 1 ? "Stale row" : "Fresh row",
+                    reviewState: "APPROVED",
+                    reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                    lastCommitAt: "2026-01-03T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: []))));
+        }, cache, "unit-test-token");
+
+        var seeded = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("Stale row", Assert.Single(seeded.PullRequests).Title);
+
+        var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(
+            CreateTokenScopeForTestToken("unit-test-token"),
+            repositoryName,
+            "pulls-graphql",
+            "open");
+
+        // Age the last-good snapshot beyond the max stale-display threshold and drop the fresh entry
+        // so the next non-forced load must skip the stale rows and fetch live instead.
+        IReadOnlyList<PullRequestSummary> agedPullRequests = seeded.PullRequests
+            .Select(pullRequest => pullRequest with { FetchedAt = DateTimeOffset.UtcNow.AddHours(-1) })
+            .ToArray();
+        await new GitHubResponseCache(cache, new GitHubPublicCacheStore(cache))
+            .SetAsync(
+                $"last-good:{cacheKey}",
+                agedPullRequests,
+                TimeSpan.FromHours(24),
+                TestContext.Current.CancellationToken);
+        cache.Remove(cacheKey);
+
+        var refreshed = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("live", refreshed.Snapshot?.Source);
+        Assert.False(refreshed.Snapshot?.Stale);
+        Assert.Equal("Fresh row", Assert.Single(refreshed.PullRequests).Title);
+        Assert.Equal(2, Volatile.Read(ref graphQlRequests));
+    }
+
+    [Fact]
+    public async Task GraphQlSnapshotKeepsStableFetchedAtForEmptyListAcrossReads()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var graphQlRequests = 0;
+        var client = CreateClientFromRequests((request, _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            Assert.Equal("graphql", path);
+            Interlocked.Increment(ref graphQlRequests);
+            // A repository/state that legitimately has zero open PRs.
+            return Task.FromResult(Json(GraphQlPullRequestsResponse(hasNextPage: false, endCursor: null)));
+        }, cache, "unit-test-token");
+
+        var seeded = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+        Assert.Empty(seeded.PullRequests);
+        var fetchedAt = seeded.Snapshot?.FetchedAt;
+        Assert.NotNull(fetchedAt);
+
+        // Capture an upper bound for the fetch instant; a correct snapshot must never report a
+        // fetched-at later than this on a subsequent read of the same cached empty list.
+        var afterFetch = DateTimeOffset.UtcNow;
+
+        var reread = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("fresh-cache", reread.Snapshot?.Source);
+        Assert.Empty(reread.PullRequests);
+
+        // Without the per-key fetched-at tracker an empty list falls back to UtcNow on every read,
+        // so the timestamp would advance past afterFetch and look perpetually fresh.
+        Assert.Equal(fetchedAt, reread.Snapshot?.FetchedAt);
+        Assert.True(reread.Snapshot?.FetchedAt <= afterFetch);
+        Assert.Equal(1, Volatile.Read(ref graphQlRequests));
+    }
+
+    [Fact]
+    public async Task GraphQlSnapshotBacksOffQueueingAfterBackgroundRefreshFails()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var graphQlRequests = 0;
+        var client = CreateClientFromRequests((request, _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            Assert.Equal("graphql", path);
+            var requestNumber = Interlocked.Increment(ref graphQlRequests);
+            if (requestNumber == 1)
+            {
+                return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                    hasNextPage: false,
+                    endCursor: null,
+                    GraphQlPullRequestNode(
+                        42,
+                        title: "Last-good row",
+                        reviewState: "APPROVED",
+                        reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                        lastCommitAt: "2026-01-03T00:00:00Z",
+                        reviewThreadsHasNextPage: false,
+                        reviewThreadsEndCursor: null,
+                        reviewThreadsResolved: []))));
+            }
+
+            // Every background refresh after the seed fails.
+            return Task.FromResult(Json("""{ "message": "GitHub unavailable" }""", HttpStatusCode.ServiceUnavailable));
+        }, cache, "unit-test-token");
+
+        var seeded = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("Last-good row", Assert.Single(seeded.PullRequests).Title);
+
+        var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(
+            CreateTokenScopeForTestToken("unit-test-token"),
+            repositoryName,
+            "pulls-graphql",
+            "open");
+        // Drop the fresh entry so subsequent non-forced reads serve last-good and queue a refresh.
+        cache.Remove(cacheKey);
+
+        var queued = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("last-good", queued.Snapshot?.Source);
+        Assert.True(queued.Snapshot?.RefreshQueued);
+
+        // Wait for the queued background refresh to fail (records an error and starts the cooldown).
+        var afterFailure = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (afterFailure.Snapshot?.Error is null)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Background refresh did not fail within the timeout.");
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+            afterFailure = await client.GetPullRequestsGraphQlSnapshotAsync(
+                repositoryName,
+                "open",
+                forceRefresh: false,
+                TestContext.Current.CancellationToken);
+        }
+
+        // The failure cooldown must suppress re-queueing so a polling client cannot drive a retry
+        // loop: no further GraphQL request is issued and RefreshQueued stays false within the window.
+        Assert.False(afterFailure.Snapshot?.RefreshQueued);
+        Assert.Equal(2, Volatile.Read(ref graphQlRequests));
+
+        var stillCoolingDown = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+        Assert.False(stillCoolingDown.Snapshot?.RefreshQueued);
+        Assert.Equal(2, Volatile.Read(ref graphQlRequests));
+    }
+
+    [Fact]
     public async Task PullListSkipsLinkedIssuesThatGitHubReturnsNotFound()
     {
         var client = CreateClient(path => path switch
@@ -4213,6 +4898,30 @@ public sealed class GitHubClientTests
         return items;
     }
 
+    private static async Task<PullRequestListResponse> WaitForFreshGraphQlSnapshotAsync(
+        GitHubClient client,
+        RepositoryName repositoryName,
+        string state)
+    {
+        PullRequestListResponse? latest = null;
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            latest = await client.GetPullRequestsGraphQlSnapshotAsync(
+                repositoryName,
+                state,
+                forceRefresh: false,
+                TestContext.Current.CancellationToken);
+            if (latest.Snapshot is { Stale: false, RefreshInProgress: false })
+            {
+                return latest;
+            }
+
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+
+        return latest ?? throw new InvalidOperationException("No snapshot was loaded.");
+    }
+
     private static DefaultHttpContext CreateHttpContextWithGitHubToken(string token = "unit-test-token")
     {
         var context = new DefaultHttpContext();
@@ -4236,6 +4945,202 @@ public sealed class GitHubClientTests
         context.RequestServices = services.BuildServiceProvider();
 
         return context;
+    }
+
+    private static void AssertPullRequestSummaryEqual(
+        PullRequestSummary expected,
+        PullRequestSummary actual,
+        bool compareChecks = true)
+    {
+        Assert.Equal(expected.Number, actual.Number);
+        Assert.Equal(expected.Title, actual.Title);
+        Assert.Equal(expected.State, actual.State);
+        Assert.Equal(expected.Draft, actual.Draft);
+        Assert.Equal(expected.Author, actual.Author);
+        Assert.Equal(expected.HtmlUrl, actual.HtmlUrl);
+        Assert.Equal(expected.CreatedAt, actual.CreatedAt);
+        Assert.Equal(expected.UpdatedAt, actual.UpdatedAt);
+        Assert.Equal(expected.Labels, actual.Labels);
+        Assert.Equal(expected.RequestedReviewers, actual.RequestedReviewers);
+        Assert.Equal(expected.RequestedReviewerIds, actual.RequestedReviewerIds);
+        Assert.Equal(expected.Milestone, actual.Milestone);
+        Assert.Equal(expected.LinkedIssues.Count, actual.LinkedIssues.Count);
+        for (var i = 0; i < expected.LinkedIssues.Count; i++)
+        {
+            Assert.Equal(expected.LinkedIssues[i].Repository, actual.LinkedIssues[i].Repository);
+            Assert.Equal(expected.LinkedIssues[i].Number, actual.LinkedIssues[i].Number);
+            Assert.Equal(expected.LinkedIssues[i].Title, actual.LinkedIssues[i].Title);
+            Assert.Equal(expected.LinkedIssues[i].Milestone, actual.LinkedIssues[i].Milestone);
+            Assert.Equal(expected.LinkedIssues[i].Labels, actual.LinkedIssues[i].Labels);
+            Assert.Equal(expected.LinkedIssues[i].HtmlUrl, actual.LinkedIssues[i].HtmlUrl);
+        }
+        Assert.Equal(expected.CommitCount, actual.CommitCount);
+        Assert.Equal(expected.Additions, actual.Additions);
+        Assert.Equal(expected.Deletions, actual.Deletions);
+        Assert.Equal(expected.ChangedFiles, actual.ChangedFiles);
+        Assert.Equal(expected.LastCommitAt, actual.LastCommitAt);
+        Assert.Equal(expected.HeadSha, actual.HeadSha);
+        Assert.Equal(expected.BaseRef, actual.BaseRef);
+        Assert.Equal(expected.MergeableState, actual.MergeableState);
+        Assert.Equal(expected.Review, actual.Review);
+        if (compareChecks)
+        {
+            Assert.Equal(expected.Checks, actual.Checks);
+        }
+    }
+
+    private static string? GetGraphQlVariable(string body, string name)
+    {
+        using var document = JsonDocument.Parse(body);
+        var variables = document.RootElement.GetProperty("variables");
+        return variables.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null
+            ? value.GetString()
+            : null;
+    }
+
+    private static string GraphQlPullRequestsResponse(bool hasNextPage, string? endCursor, params string[] nodes) =>
+        $$"""
+        {
+          "data": {
+            "repository": {
+              "pullRequests": {
+                "pageInfo": {
+                  "hasNextPage": {{hasNextPage.ToString().ToLowerInvariant()}},
+                  "endCursor": {{JsonSerializer.Serialize(endCursor)}}
+                },
+                "nodes": [
+                  {{string.Join(",\n", nodes)}}
+                ]
+              }
+            }
+          }
+        }
+        """;
+
+    private static string GraphQlPullRequestNode(
+        int number,
+        string title,
+        string reviewState,
+        string reviewSubmittedAt,
+        string lastCommitAt,
+        bool reviewThreadsHasNextPage,
+        string? reviewThreadsEndCursor,
+        bool[] reviewThreadsResolved,
+        string? statusCheckRollupJson = null)
+    {
+        var reviewThreadNodes = string.Join(
+            ",\n",
+            reviewThreadsResolved.Select(isResolved =>
+                $$"""{ "isResolved": {{isResolved.ToString().ToLowerInvariant()}} }"""));
+
+        return
+            $$"""
+            {
+              "number": {{number}},
+              "title": {{JsonSerializer.Serialize(title)}},
+              "state": "OPEN",
+              "isDraft": false,
+              "author": { "login": "octocat" },
+              "url": "https://github.com/example/repo/pull/{{number}}",
+              "createdAt": "2026-01-01T00:00:00Z",
+              "updatedAt": "2026-01-02T00:00:00Z",
+              "labels": { "nodes": [{ "name": "enhancement" }] },
+              "assignees": { "nodes": [] },
+              "reviewRequests": {
+                "nodes": [
+                  {
+                    "requestedReviewer": {
+                      "__typename": "User",
+                      "login": "reviewer",
+                      "databaseId": 123
+                    }
+                  }
+                ]
+              },
+              "milestone": { "title": "13.4" },
+              "commits": {
+                "totalCount": 1,
+                "nodes": [
+                  {
+                    "commit": {
+                      "committedDate": {{JsonSerializer.Serialize(lastCommitAt)}},
+                      "statusCheckRollup": {{statusCheckRollupJson ?? "null"}}
+                    }
+                  }
+                ]
+              },
+              "additions": 10,
+              "deletions": 2,
+              "changedFiles": 1,
+              "headRefOid": "head-sha",
+              "headRefName": "feature-{{number}}",
+              "baseRefName": "main",
+              "mergeable": "CONFLICTING",
+              "reviews": {
+                "pageInfo": {
+                  "hasPreviousPage": false,
+                  "startCursor": null
+                },
+                "nodes": [
+                  {
+                    "author": { "login": "reviewer" },
+                    "state": {{JsonSerializer.Serialize(reviewState)}},
+                    "submittedAt": {{JsonSerializer.Serialize(reviewSubmittedAt)}}
+                  }
+                ]
+              },
+              "reviewThreads": {
+                "pageInfo": {
+                  "hasNextPage": {{reviewThreadsHasNextPage.ToString().ToLowerInvariant()}},
+                  "endCursor": {{JsonSerializer.Serialize(reviewThreadsEndCursor)}}
+                },
+                "nodes": [
+                  {{reviewThreadNodes}}
+                ]
+              },
+              "closingIssuesReferences": {
+                "nodes": [
+                  {
+                    "number": 10,
+                    "title": "Tracking issue",
+                    "url": "https://github.com/example/repo/issues/10",
+                    "repository": { "nameWithOwner": "example/repo" },
+                    "labels": { "nodes": [{ "name": "bug" }] },
+                    "milestone": { "title": "13.4" }
+                  }
+                ]
+              }
+            }
+            """;
+    }
+
+    private static string ReviewThreadsResponse(bool hasNextPage, string? endCursor, bool[] isResolvedValues)
+    {
+        var nodes = string.Join(
+            ",\n",
+            isResolvedValues.Select(isResolved =>
+                $$"""{ "isResolved": {{isResolved.ToString().ToLowerInvariant()}} }"""));
+
+        return
+            $$"""
+            {
+              "data": {
+                "repository": {
+                  "pullRequest": {
+                    "reviewThreads": {
+                      "pageInfo": {
+                        "hasNextPage": {{hasNextPage.ToString().ToLowerInvariant()}},
+                        "endCursor": {{JsonSerializer.Serialize(endCursor)}}
+                      },
+                      "nodes": [
+                        {{nodes}}
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+            """;
     }
 
     private static HttpResponseMessage Json(

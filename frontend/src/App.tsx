@@ -23,6 +23,7 @@ import type {
   PullRequestChecksResponse,
   PullRequestSummary,
   PullState,
+  ReviewLoadPerfStats,
   ShipWeekIssueSummary,
   ShipWeekLoadingState,
   ShipWeekResponse,
@@ -37,11 +38,12 @@ import { readJson } from './utils/http';
 import { beginAbortableLoad } from './utils/loadLifecycle';
 import { useMediaQuery } from './utils/useMediaQuery';
 import {
-  streamPullRequests,
+  fetchPullRequestList,
+  fetchPullRequests,
   replacePullRequestsByUpdatedAt,
   upsertManyByUpdatedAt,
-  upsertPullRequestByUpdatedAt,
 } from './utils/pullRequests';
+import type { PullRequestListResult } from './utils/pullRequests';
 import {
   createActivityModel,
   createAttentionBuckets,
@@ -75,6 +77,7 @@ type VisibleChecksRequestItem = {
 
 type LoadOptions = {
   forceRefresh?: boolean;
+  forceChecksRefresh?: boolean;
   preserveResults?: boolean;
 };
 
@@ -89,6 +92,8 @@ type ShipWeekRefreshParams = ShipWeekRouteParams;
 
 const autoRefreshIntervalMs = 5 * 60_000;
 const autoRefreshJitterMs = 60_000;
+const pullRequestSnapshotPollIntervalMs = 750;
+const pullRequestSnapshotMaxPolls = 40;
 const clipboardWriteTimeoutMs = 10_000;
 
 function getAutoRefreshDelayMs() {
@@ -113,6 +118,9 @@ function App() {
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
   const [issues, setIssues] = useState<ShipWeekIssueSummary[]>([]);
   const [reviewLastUpdatedAt, setReviewLastUpdatedAt] = useState<string | null>(null);
+  const [reviewSnapshotStatus, setReviewSnapshotStatus] = useState<string | null>(null);
+  const [reviewSnapshotError, setReviewSnapshotError] = useState<string | null>(null);
+  const [reviewLoadPerfStats, setReviewLoadPerfStats] = useState<ReviewLoadPerfStats | null>(null);
   const [issuesLastUpdatedAt, setIssuesLastUpdatedAt] = useState<string | null>(null);
   const [shipWeekRepo, setShipWeekRepo] = useState(initialShipWeekRouteParams.repositoryInput);
   const [shipWeekMilestone, setShipWeekMilestone] = useState(initialShipWeekRouteParams.milestoneInput);
@@ -246,7 +254,6 @@ function App() {
             const params = shipWeekRefreshParamsRef.current;
             void loadShipWeek(params.repositoryInput, params.milestoneInput, params.releaseBranchInput, {
               preserveResults: true,
-              forceRefresh: authStatus?.authenticated === true,
             });
           }
 
@@ -259,7 +266,6 @@ function App() {
             const params = issueRefreshParamsRef.current;
             void loadIssues(params.repositoryInput, params.pullState, {
               preserveResults: true,
-              forceRefresh: authStatus?.authenticated === true,
             });
           }
 
@@ -271,7 +277,6 @@ function App() {
           const params = reviewRefreshParamsRef.current;
           void loadPullRequests(params.repositoryInput, params.pullState, {
             preserveResults: true,
-            forceRefresh: authStatus?.authenticated === true,
           });
         }
 
@@ -288,7 +293,7 @@ function App() {
     };
     // The timer only needs the active mode and loading guards; the loaders are stable function declarations.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authStatus?.authenticated, dashboardMode, issuesLoading, pullsLoading, shipWeekLoading, viewMode]);
+  }, [dashboardMode, issuesLoading, pullsLoading, shipWeekLoading, viewMode]);
 
   useEffect(() => {
     function syncHashState() {
@@ -419,6 +424,9 @@ function App() {
       setIssues([]);
       setIssuesError(null);
       setReviewLastUpdatedAt(null);
+      setReviewSnapshotStatus(null);
+      setReviewSnapshotError(null);
+      setReviewLoadPerfStats(null);
       setIssuesLastUpdatedAt(null);
       setShipWeek(null);
       setShipWeekLastUpdatedAt(null);
@@ -440,6 +448,12 @@ function App() {
     const { abortController, isCurrentLoad } = load;
     const previousPullRequests = pullRequests;
     const previousLastUpdatedAt = reviewLastUpdatedAt;
+    const previousSnapshotStatus = reviewSnapshotStatus;
+    const previousSnapshotError = reviewSnapshotError;
+    const previousLoadPerfStats = reviewLoadPerfStats;
+    const loadStartedAt = performance.now();
+    let firstRowsMs: number | null = null;
+    let requestCount = 0;
 
     setPullsLoading(true);
     setError(null);
@@ -461,31 +475,32 @@ function App() {
       if (!options.preserveResults) {
         setPullRequests([]);
         setReviewLastUpdatedAt(null);
+        setReviewSnapshotStatus(null);
+        setReviewSnapshotError(null);
+        setReviewLoadPerfStats(null);
       }
 
-      const pullRequestTasks = repositories.map(async (repository) => {
-        const query = new URLSearchParams({ repo: repository, state: pullState });
-        if (options.forceRefresh) {
-          query.set('refresh', 'true');
-        }
+      const fetchGroups = async () => {
+        const groups = await fetchPullRequestGroups(repositories, pullState, options, abortController.signal);
+        requestCount += groups.length;
+        return groups;
+      };
 
-        return streamPullRequests(`/api/github/pulls/stream?${query}`, {
-          signal: abortController.signal,
-          onPullRequest: (pullRequest) => {
-            if (!isCurrentLoad()) {
-              return;
-            }
-
-            setPullRequests((currentPullRequests) => upsertPullRequestByUpdatedAt(currentPullRequests, pullRequest));
-          },
-        });
-      });
-
-      const pullRequestResults = await Promise.all(pullRequestTasks);
+      let pullRequestGroups = await fetchGroups();
       if (isCurrentLoad()) {
-        const streamedPullRequests = pullRequestResults.flatMap((result) => result.pullRequests);
-        setPullRequests((currentPullRequests) => replacePullRequestsByUpdatedAt(currentPullRequests, streamedPullRequests));
-        setReviewLastUpdatedAt(getReviewLastUpdatedAt(replacePullRequestsByUpdatedAt([], streamedPullRequests)));
+        applyPullRequestListResults(pullRequestGroups, !shouldPollPullRequestSnapshots(pullRequestGroups));
+      }
+
+      for (let pollAttempt = 0;
+        pollAttempt < pullRequestSnapshotMaxPolls
+          && isCurrentLoad()
+          && shouldPollPullRequestSnapshots(pullRequestGroups);
+        pollAttempt++) {
+        await waitForPullRequestSnapshotPoll(abortController.signal);
+        pullRequestGroups = await fetchGroups();
+        if (isCurrentLoad()) {
+          applyPullRequestListResults(pullRequestGroups, !shouldPollPullRequestSnapshots(pullRequestGroups));
+        }
       }
     } catch (err) {
       if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
@@ -495,15 +510,40 @@ function App() {
       setError(err instanceof Error ? err.message : 'Unable to load pull requests.');
       if (!options.preserveResults) {
         setPullRequests([]);
+        setReviewSnapshotStatus(null);
+        setReviewSnapshotError(null);
+        setReviewLoadPerfStats(null);
       } else {
         setPullRequests(previousPullRequests);
         setReviewLastUpdatedAt(previousLastUpdatedAt);
+        setReviewSnapshotStatus(previousSnapshotStatus);
+        setReviewSnapshotError(previousSnapshotError);
+        setReviewLoadPerfStats(previousLoadPerfStats);
       }
     } finally {
       if (isCurrentLoad()) {
         setPullsLoading(false);
         load.finish();
       }
+    }
+
+    function applyPullRequestListResults(pullRequestGroups: PullRequestListResult[], settled: boolean) {
+      const nextPullRequests = replacePullRequestsByUpdatedAt(
+        [],
+        pullRequestGroups.flatMap((group) => group.pullRequests),
+      );
+      setPullRequests((currentPullRequests) => replacePullRequestsByUpdatedAt(currentPullRequests, nextPullRequests));
+      setReviewLastUpdatedAt(getPullRequestListLastUpdatedAt(nextPullRequests, pullRequestGroups));
+      const snapshotState = getPullRequestSnapshotState(pullRequestGroups);
+      setReviewSnapshotStatus(snapshotState.status);
+      setReviewSnapshotError(snapshotState.error);
+      firstRowsMs ??= Math.round(performance.now() - loadStartedAt);
+      setReviewLoadPerfStats({
+        firstRowsMs,
+        settledMs: settled ? Math.round(performance.now() - loadStartedAt) : null,
+        requestCount,
+        staleSnapshotCount: pullRequestGroups.filter((group) => group.snapshot?.stale).length,
+      });
     }
   }
 
@@ -609,34 +649,12 @@ function App() {
 
       let releaseResponses: ShipWeekResponse[] = [];
       let docsPullRequests: PullRequestSummary[] = [];
-      const publishShipWeek = () => {
-        if (!isCurrentLoad()) {
-          return;
-        }
-
-        if (options.preserveResults) {
-          return;
-        }
-
-        setShipWeek(combineShipWeekResponses(
-          repositories,
-          milestone,
-          releaseBranch,
-          releaseResponses,
-          docsPullRequests,
-        ));
-      };
-
       const releaseTasks = releaseScopeRepositories.map(async (repository) => {
         const response = await loadRepositoryShipWeek(repository, milestone, releaseBranch, options, abortController.signal);
         releaseResponses = [...releaseResponses, response];
-        publishShipWeek();
       });
       const docsTasks = docsRepositories.map(async (repository) =>
-        (await loadDocsFromCodePullRequests(repository, options, abortController.signal, (pullRequest) => {
-          docsPullRequests = upsertPullRequestByUpdatedAt(docsPullRequests, pullRequest);
-          publishShipWeek();
-        })).pullRequests);
+        loadDocsFromCodePullRequests(repository, options, abortController.signal));
       const releaseDoneTask = Promise.all(releaseTasks).finally(() => {
         if (isCurrentLoad()) {
           setShipWeekSectionLoading((current) => ({
@@ -649,7 +667,6 @@ function App() {
       });
       const docsDoneTask = Promise.all(docsTasks).then((docsPullRequestGroups) => {
         docsPullRequests = replacePullRequestsByUpdatedAt(docsPullRequests, docsPullRequestGroups.flat());
-        publishShipWeek();
       }).finally(() => {
         if (isCurrentLoad()) {
           setShipWeekSectionLoading((current) => ({
@@ -659,9 +676,6 @@ function App() {
         }
       });
 
-      if (!options.preserveResults) {
-        publishShipWeek();
-      }
       await Promise.all([releaseDoneTask, docsDoneTask]);
       if (isCurrentLoad()) {
         const nextShipWeek = combineShipWeekResponses(
@@ -698,7 +712,7 @@ function App() {
   }
 
   function beginForceVisibleChecksRefresh(options: LoadOptions) {
-    if (!options.forceRefresh) {
+    if (!options.forceChecksRefresh) {
       return;
     }
 
@@ -957,21 +971,18 @@ function App() {
   }
 
   function onRefresh() {
-    const forceRefresh = authStatus?.authenticated === true;
     if (dashboardMode === 'ship') {
       const params = shipWeekRefreshParamsRef.current;
       void loadShipWeek(params.repositoryInput, params.milestoneInput, params.releaseBranchInput, {
-        forceRefresh,
         preserveResults: true,
       });
     } else if (dashboardMode === 'issues') {
       void loadIssues(repo.trim(), state, {
-        forceRefresh,
         preserveResults: true,
       });
     } else {
       void loadPullRequests(repo.trim(), state, {
-        forceRefresh,
+        forceRefresh: true,
         preserveResults: true,
       });
     }
@@ -1208,6 +1219,9 @@ function App() {
             showShipWeekSnapshotDownload={showShipWeekSnapshotDownload}
             shipWeekSnapshotRef={shipWeekSnapshotRef}
             selectedBucketId={selectedBucketId}
+            pullRequestSnapshotStatus={dashboardMode === 'review' ? reviewSnapshotStatus : null}
+            pullRequestSnapshotError={dashboardMode === 'review' ? reviewSnapshotError : null}
+            pullRequestLoadPerfStats={dashboardMode === 'review' ? reviewLoadPerfStats : null}
             lastUpdatedAt={dashboardMode === 'ship'
               ? shipWeekLastUpdatedAt
               : dashboardMode === 'issues'
@@ -1283,7 +1297,6 @@ function loadDocsFromCodePullRequests(
   repository: string,
   options: LoadOptions = {},
   signal?: AbortSignal,
-  onPullRequest?: (pullRequest: PullRequestSummary) => void,
 ) {
   const query = new URLSearchParams({ repo: repository, state: 'open' });
   query.set('label', docsFromCodeLabel);
@@ -1291,10 +1304,44 @@ function loadDocsFromCodePullRequests(
     query.set('refresh', 'true');
   }
 
-  return streamPullRequests(`/api/github/pulls/stream?${query}`, {
+  return fetchPullRequests(`/api/github/pulls/graphql?${query}`, {
     signal,
     filter: isGeneratedDocsPullRequest,
-    onPullRequest,
+  });
+}
+
+function fetchPullRequestGroups(
+  repositories: string[],
+  pullState: PullState,
+  options: LoadOptions,
+  signal: AbortSignal,
+) {
+  return Promise.all(repositories.map(async (repository) => {
+    const query = new URLSearchParams({ repo: repository, state: pullState });
+    if (options.forceRefresh) {
+      query.set('refresh', 'true');
+    }
+
+    return fetchPullRequestList(`/api/github/pulls/graphql?${query}`, { signal });
+  }));
+}
+
+function waitForPullRequestSnapshotPoll(signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+      return;
+    }
+
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException('The operation was aborted.', 'AbortError'));
+    };
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, pullRequestSnapshotPollIntervalMs);
+    signal.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -1366,6 +1413,44 @@ function getReviewLastUpdatedAt(
   pullRequests: PullRequestSummary[],
 ) {
   return getLatestFetchedAt(pullRequests.map((pullRequest) => pullRequest.fetchedAt));
+}
+
+function getPullRequestListLastUpdatedAt(
+  pullRequests: PullRequestSummary[],
+  pullRequestGroups: PullRequestListResult[],
+) {
+  return getLatestFetchedAt([
+    getReviewLastUpdatedAt(pullRequests),
+    ...pullRequestGroups.map((group) => group.snapshot?.fetchedAt),
+  ]);
+}
+
+function shouldPollPullRequestSnapshots(pullRequestGroups: PullRequestListResult[]) {
+  return pullRequestGroups.some((group) => group.snapshot?.refreshInProgress || group.snapshot?.refreshQueued);
+}
+
+function getPullRequestSnapshotState(pullRequestGroups: PullRequestListResult[]) {
+  const snapshots = pullRequestGroups
+    .map((group) => group.snapshot)
+    .filter((snapshot): snapshot is NonNullable<typeof snapshot> => snapshot !== null && snapshot !== undefined);
+  const error = snapshots.find((snapshot) => snapshot.error)?.error ?? null;
+  if (snapshots.some((snapshot) => snapshot.refreshInProgress || snapshot.refreshQueued)) {
+    return {
+      status: snapshots.some((snapshot) => snapshot.stale)
+        ? 'Showing cached data while checking GitHub for updates.'
+        : 'Checking GitHub for updates.',
+      error,
+    };
+  }
+
+  if (snapshots.some((snapshot) => snapshot.stale)) {
+    return {
+      status: 'Showing cached data from the last successful refresh.',
+      error,
+    };
+  }
+
+  return { status: null, error };
 }
 
 function getIssuesLastUpdatedAt(issues: ShipWeekIssueSummary[]) {

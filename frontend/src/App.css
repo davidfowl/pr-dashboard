@@ -1129,6 +1129,11 @@ select:focus-visible {
   font-size: 0.82rem;
 }
 
+.load-perf-stats {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .dashboard-refresh-panel button {
   flex: 0 0 auto;
   border: 1px solid rgba(185, 170, 238, 0.36);

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CheckState, PullRequestSummary } from '../types';
+import type { CheckState, PullRequestListResponse, PullRequestSummary } from '../types';
 import {
+  fetchPullRequests,
   replacePullRequestsByUpdatedAt,
-  streamPullRequests,
   upsertPullRequestByUpdatedAt,
 } from './pullRequests';
 
@@ -35,7 +35,7 @@ describe('pull request overlays', () => {
     const staleOnly = pullRequest({ number: 2, title: 'Stale-only row' });
     const liveOverlay = pullRequest({
       number: 1,
-      title: 'Live title from stream',
+      title: 'Live title from response',
       headSha: 'abc123',
       checksState: 'unknown',
       updatedAt: '2026-01-03T00:00:00Z',
@@ -46,7 +46,7 @@ describe('pull request overlays', () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({
       number: 1,
-      title: 'Live title from stream',
+      title: 'Live title from response',
       checks: loaded.checks,
     });
   });
@@ -65,16 +65,16 @@ describe('pull request overlays', () => {
     expect(result[0].checks.state).toBe('pending');
   });
 
-  it('replaces the final list with the authoritative streamed rows', () => {
+  it('replaces the final list with the authoritative loaded rows', () => {
     const current = [
       pullRequest({ number: 1, updatedAt: '2026-01-01T00:00:00Z' }),
       pullRequest({ number: 2, updatedAt: '2026-01-02T00:00:00Z' }),
     ];
-    const streamed = [
+    const loaded = [
       pullRequest({ number: 1, title: 'Still open', updatedAt: '2026-01-03T00:00:00Z' }),
     ];
 
-    const result = replacePullRequestsByUpdatedAt(current, streamed);
+    const result = replacePullRequestsByUpdatedAt(current, loaded);
 
     expect(result.map((pullRequest) => pullRequest.number)).toEqual([1]);
     expect(result[0].title).toBe('Still open');
@@ -90,63 +90,37 @@ describe('pull request overlays', () => {
     expect(result[0].checks.state).toBe('unknown');
   });
 
-  it('returns only live rows after a stale overlay stream completes', async () => {
-    const stale = pullRequest({ number: 1, title: 'Cached row' });
+  it('loads pull requests from the JSON list response', async () => {
     const live = pullRequest({ number: 1, title: 'Live row', updatedAt: '2026-01-02T00:00:00Z' });
-    const displayedTitles: string[] = [];
-    vi.stubGlobal('fetch', vi.fn(async () => jsonLinesResponse([
-      streamItem(stale, { isStale: true }),
-      streamItem(live),
-      { repository: live.repository, isComplete: true },
-    ])));
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(pullRequestList(live.repository, [live]))));
 
-    const result = await streamPullRequests('/api/github/pulls/stream?refresh=true', {
-      onPullRequest: (pullRequest) => displayedTitles.push(pullRequest.title),
-    });
+    const result = await fetchPullRequests('/api/github/pulls/graphql?refresh=true');
 
-    expect(displayedTitles).toEqual(['Cached row', 'Live row']);
-    expect(result.completed).toBe(true);
-    expect(result.pullRequests.map((pullRequest) => pullRequest.title)).toEqual(['Live row']);
+    expect(result.map((pullRequest) => pullRequest.title)).toEqual(['Live row']);
+    expect(result[0].repository).toBe('example/repo');
   });
 
-  it('keeps stale overlay rows when a refresh stream does not complete', async () => {
-    const stale = pullRequest({ number: 1, title: 'Cached row' });
-    const liveBaseline = pullRequest({ number: 1, title: 'Live baseline', updatedAt: '2026-01-02T00:00:00Z' });
-    vi.stubGlobal('fetch', vi.fn(async () => jsonLinesResponse([
-      streamItem(stale, { isStale: true }),
-      streamItem(liveBaseline),
-    ])));
-
-    const result = await streamPullRequests('/api/github/pulls/stream?refresh=true');
-
-    expect(result.completed).toBe(false);
-    expect(result.pullRequests.map((pullRequest) => pullRequest.title)).toEqual(['Cached row', 'Live baseline']);
-  });
-
-  it('filters stale and live stream overlays before displaying or finalizing them', async () => {
-    const staleRejected = pullRequest({ number: 1, title: 'Rejected cached row' });
-    const staleAccepted = pullRequest({ number: 2, title: 'Accepted cached row' });
-    const liveAccepted = pullRequest({
+  it('filters loaded pull requests after normalizing repository data', async () => {
+    const rejected = pullRequest({ number: 1, title: 'Rejected row' });
+    const accepted = pullRequest({
       number: 2,
-      title: 'Accepted live row',
+      title: 'Accepted row',
       updatedAt: '2026-01-02T00:00:00Z',
     });
-    const displayedTitles: string[] = [];
-    vi.stubGlobal('fetch', vi.fn(async () => jsonLinesResponse([
-      streamItem(staleRejected, { isStale: true }),
-      streamItem(staleAccepted, { isStale: true }),
-      streamItem(liveAccepted),
-      { repository: liveAccepted.repository, isComplete: true },
-    ])));
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(
+      pullRequestList('example/repo-renamed', [rejected, accepted]),
+    )));
 
-    const result = await streamPullRequests('/api/github/pulls/stream?refresh=true', {
+    const result = await fetchPullRequests('/api/github/pulls/graphql?refresh=true', {
       filter: (pullRequest) => pullRequest.number === 2,
-      onPullRequest: (pullRequest) => displayedTitles.push(pullRequest.title),
     });
 
-    expect(displayedTitles).toEqual(['Accepted cached row', 'Accepted live row']);
-    expect(result.completed).toBe(true);
-    expect(result.pullRequests.map((pullRequest) => pullRequest.title)).toEqual(['Accepted live row']);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      number: 2,
+      repository: 'example/repo-renamed',
+      title: 'Accepted row',
+    });
   });
 });
 
@@ -200,25 +174,22 @@ function pullRequest({ checksState: checksStateOverride, ...overrides }: PullReq
   };
 }
 
-function streamItem(
-  pullRequest: PullRequestSummary,
-  options: { isStale?: boolean } = {},
-) {
-  return {
-    repository: pullRequest.repository,
-    pullRequest: withoutRepository(pullRequest),
-    ...options,
-  };
-}
-
 function withoutRepository(pullRequest: PullRequestSummary): Omit<PullRequestSummary, 'repository'> {
   const { repository: _repository, ...rest } = pullRequest;
   void _repository;
   return rest;
 }
 
-function jsonLinesResponse<T>(items: T[]) {
-  return new Response(items.map((item) => JSON.stringify(item)).join('\n'), {
-    headers: { 'Content-Type': 'application/x-ndjson' },
+function pullRequestList(repository: string, pullRequests: PullRequestSummary[]): PullRequestListResponse {
+  return {
+    repository,
+    pullRequests: pullRequests.map(withoutRepository),
+  };
+}
+
+function jsonResponse<T>(body: T, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
   });
 }

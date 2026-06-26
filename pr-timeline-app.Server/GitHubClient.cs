@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -20,9 +21,28 @@ sealed partial class GitHubClient(
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
     internal static readonly TimeSpan PublicCacheDuration = TimeSpan.FromHours(1);
     private static readonly TimeSpan LastGoodCacheDuration = TimeSpan.FromHours(24);
+    private static readonly TimeSpan MaxStaleDisplayAge = TimeSpan.FromMinutes(10);
     private const int PullRequestPageSize = 100;
     private const int PullRequestStreamBatchSize = 20;
     private const int MaxLinkedIssuesPerPullRequest = 10;
+    private static readonly string PullRequestsGraphQlQuery =
+        "query PullRequestsForDashboard($owner:String!,$name:String!,$states:[PullRequestState!],$after:String,$orderField:IssueOrderField!,$orderDirection:OrderDirection!){" +
+        "repository(owner:$owner,name:$name){" +
+        "pullRequests(first:" + PullRequestPageSize + ",after:$after,states:$states,orderBy:{field:$orderField,direction:$orderDirection}){" +
+        "pageInfo{hasNextPage endCursor}" +
+        "nodes{" +
+        "number title state isDraft author{login} url createdAt updatedAt " +
+        "labels(first:20){nodes{name}} " +
+        "assignees(first:10){nodes{login}} " +
+        "reviewRequests(first:100){nodes{requestedReviewer{__typename ... on User{login databaseId}}}} " +
+        "milestone{title} " +
+        "commits(last:1){totalCount nodes{commit{committedDate " +
+        "statusCheckRollup{state}}}} " +
+        "additions deletions changedFiles headRefOid headRefName baseRefName mergeable " +
+        "reviews(last:100){pageInfo{hasPreviousPage startCursor}nodes{author{login}state submittedAt}} " +
+        "reviewThreads(first:" + PullRequestPageSize + "){pageInfo{hasNextPage endCursor}nodes{isResolved}} " +
+        "closingIssuesReferences(first:" + MaxLinkedIssuesPerPullRequest + "){nodes{number title url repository{nameWithOwner} labels(first:20){nodes{name}} milestone{title}}}" +
+        "}}}}";
     private const int FocusIssueGraphQlBatchSize = 20;
     private const int FocusIssueCrossReferenceEventLimit = 20;
     private static readonly string FocusIssueLinkedPullRequestsGraphQlQuery =
@@ -40,6 +60,18 @@ sealed partial class GitHubClient(
     private const string CtiTeamSearchTerm = "AspireE2E";
     private static readonly SemaphoreSlim s_githubRequestThrottle = new(MaxConcurrentGitHubRequests, MaxConcurrentGitHubRequests);
     private static readonly SemaphoreSlim s_checksFetchThrottle = new(MaxConcurrentChecksFetches, MaxConcurrentChecksFetches);
+    private readonly ConcurrentDictionary<string, Task> _pullRequestGraphQlRefreshTasks = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, string> _pullRequestGraphQlRefreshErrors = new(StringComparer.Ordinal);
+    // The fetched-at timestamp is normally derived from the cached PR summaries, but an empty list
+    // (a repo/state that legitimately has zero PRs) carries none, which would otherwise fall back to
+    // "now" on every read and make empty cached results look perpetually fresh. Remember when each
+    // cache key was last fetched so empty lists keep correct age semantics for the lifetime of the
+    // process (consistent with the in-memory single-flight/error state above).
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _pullRequestGraphQlListFetchedAt = new(StringComparer.Ordinal);
+    // When a background refresh fails, hold off re-queueing for this key until the cooldown elapses so
+    // a polling client cannot spin up a tight retry loop against a persistently failing upstream.
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _pullRequestGraphQlRefreshCooldownUntil = new(StringComparer.Ordinal);
+    private static readonly TimeSpan PullRequestGraphQlRefreshFailureCooldown = TimeSpan.FromSeconds(30);
 
     private readonly HashSet<string> _conversationResolutionRepositories =
         new(reviewPolicyOptions.Value.RequireConversationResolution, StringComparer.OrdinalIgnoreCase);
@@ -476,6 +508,40 @@ sealed partial class GitHubClient(
             cancellationToken);
     }
 
+    public async Task<IReadOnlyList<PullRequestSummary>> GetPullRequestsGraphQlAsync(
+        RepositoryName repositoryName,
+        string state,
+        bool forceRefresh,
+        CancellationToken cancellationToken)
+    {
+        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        return await GetPullRequestsGraphQlAsync(
+            repositoryName,
+            state,
+            scopeSelection.Refresh,
+            scopeSelection.Scope,
+            scopeSelection.CacheOnly,
+            CreateSharedFallbackCacheKey(scopeSelection.SharedFallbackScope, repositoryName, "pulls-graphql", state),
+            cancellationToken);
+    }
+
+    public async Task<PullRequestListResponse> GetPullRequestsGraphQlSnapshotAsync(
+        RepositoryName repositoryName,
+        string state,
+        bool forceRefresh,
+        CancellationToken cancellationToken)
+    {
+        var scopeSelection = await GetRepositoryCacheScopeSelectionAsync(repositoryName, forceRefresh, cancellationToken);
+        return await GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            state,
+            scopeSelection.Refresh,
+            scopeSelection.Scope,
+            scopeSelection.CacheOnly,
+            CreateSharedFallbackCacheKey(scopeSelection.SharedFallbackScope, repositoryName, "pulls-graphql", state),
+            cancellationToken);
+    }
+
     public async Task<bool> TryPrewarmPublicPullRequestsAsync(
         RepositoryName repositoryName,
         string state,
@@ -571,6 +637,624 @@ sealed partial class GitHubClient(
         },
             cancellationToken,
             transientFallbackCacheKey: transientFallbackCacheKey);
+    }
+
+    private async Task<IReadOnlyList<PullRequestSummary>> GetPullRequestsGraphQlAsync(
+        RepositoryName repositoryName,
+        string state,
+        bool forceRefresh,
+        GitHubCacheScope scope,
+        bool cacheOnly,
+        string? transientFallbackCacheKey,
+        CancellationToken cancellationToken)
+    {
+        var cacheKey = CreateRepositoryCacheKey(
+            scope,
+            repositoryName,
+            "pulls-graphql",
+            state);
+        var refreshCache = forceRefresh;
+        return await GetOrCreateWithLastGoodFallbackAsync(
+            cacheKey,
+            CacheDurationForScope(scope),
+            refreshCache,
+            cacheOnly,
+            async () =>
+            {
+                var result = await FetchPullRequestGraphQlSummariesAsync(
+                    repositoryName,
+                    state,
+                    scope,
+                    cancellationToken);
+                _pullRequestGraphQlListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
+                return result;
+            },
+            cancellationToken,
+            transientFallbackCacheKey: transientFallbackCacheKey);
+    }
+
+    private async Task<PullRequestListResponse> GetPullRequestsGraphQlSnapshotAsync(
+        RepositoryName repositoryName,
+        string state,
+        bool forceRefresh,
+        GitHubCacheScope scope,
+        bool cacheOnly,
+        string? transientFallbackCacheKey,
+        CancellationToken cancellationToken)
+    {
+        var cacheKey = CreateRepositoryCacheKey(
+            scope,
+            repositoryName,
+            "pulls-graphql",
+            state);
+        var refreshCache = forceRefresh;
+        if (refreshCache && !cacheOnly)
+        {
+            var livePullRequests = await FetchPullRequestGraphQlSummariesAsync(
+                repositoryName,
+                state,
+                scope,
+                cancellationToken);
+            _pullRequestGraphQlListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
+            await SetLastGoodAsync(cacheKey, livePullRequests, cancellationToken);
+            await SetCacheEntryAsync(cacheKey, livePullRequests, CacheDurationForScope(scope), cancellationToken);
+            _pullRequestGraphQlRefreshErrors.TryRemove(cacheKey, out var ignoredError);
+            _ = ignoredError;
+            return CreatePullRequestListResponse(
+                repositoryName,
+                livePullRequests,
+                "live",
+                stale: false,
+                refreshInProgress: false,
+                refreshQueued: false,
+                error: null,
+                cacheKey: cacheKey);
+        }
+
+        if (!refreshCache)
+        {
+            var cachedLookup = await cache.GetAsync<IReadOnlyList<PullRequestSummary>>(cacheKey, cancellationToken);
+            if (cachedLookup is { Found: true, Value: not null })
+            {
+                return CreatePullRequestListResponse(
+                    repositoryName,
+                    cachedLookup.Value,
+                    "fresh-cache",
+                    stale: false,
+                    refreshInProgress: IsPullRequestGraphQlRefreshInProgress(cacheKey),
+                    refreshQueued: false,
+                    error: GetPullRequestGraphQlRefreshError(cacheKey),
+                    cacheKey: cacheKey);
+            }
+
+            var lastGood = await GetLastGoodAsync<IReadOnlyList<PullRequestSummary>>(cacheKey, cancellationToken);
+            if (lastGood is { Found: true, Value: not null }
+                && (cacheOnly || IsPullRequestListWithinMaxStaleAge(lastGood.Value, cacheKey)))
+            {
+                var refreshQueued = await TryQueuePullRequestGraphQlRefreshAsync(
+                    cacheKey,
+                    repositoryName,
+                    state,
+                    scope,
+                    cacheOnly,
+                    cancellationToken);
+
+                return CreatePullRequestListResponse(
+                    repositoryName,
+                    lastGood.Value,
+                    "last-good",
+                    stale: true,
+                    refreshInProgress: !cacheOnly && IsPullRequestGraphQlRefreshInProgress(cacheKey),
+                    refreshQueued,
+                    error: GetPullRequestGraphQlRefreshError(cacheKey),
+                    cacheKey: cacheKey);
+            }
+
+            var cachedFallback = await GetCachedFallbackAsync<IReadOnlyList<PullRequestSummary>>(
+                transientFallbackCacheKey,
+                cancellationToken);
+            if (cachedFallback is { Found: true, Value: not null })
+            {
+                var refreshQueued = await TryQueuePullRequestGraphQlRefreshAsync(
+                    cacheKey,
+                    repositoryName,
+                    state,
+                    scope,
+                    cacheOnly,
+                    cancellationToken);
+
+                return CreatePullRequestListResponse(
+                    repositoryName,
+                    cachedFallback.Value,
+                    "shared-cache",
+                    stale: false,
+                    refreshInProgress: !cacheOnly && IsPullRequestGraphQlRefreshInProgress(cacheKey),
+                    refreshQueued,
+                    error: GetPullRequestGraphQlRefreshError(cacheKey),
+                    cacheKey: cacheKey);
+            }
+
+            if (transientFallbackCacheKey is not null)
+            {
+                var fallbackLastGood = await GetLastGoodAsync<IReadOnlyList<PullRequestSummary>>(
+                    transientFallbackCacheKey,
+                    cancellationToken);
+                if (fallbackLastGood is { Found: true, Value: not null }
+                    && (cacheOnly || IsPullRequestListWithinMaxStaleAge(fallbackLastGood.Value, cacheKey)))
+                {
+                    var refreshQueued = await TryQueuePullRequestGraphQlRefreshAsync(
+                        cacheKey,
+                        repositoryName,
+                        state,
+                        scope,
+                        cacheOnly,
+                        cancellationToken);
+
+                    return CreatePullRequestListResponse(
+                        repositoryName,
+                        fallbackLastGood.Value,
+                        "last-good",
+                        stale: true,
+                        refreshInProgress: !cacheOnly && IsPullRequestGraphQlRefreshInProgress(cacheKey),
+                        refreshQueued,
+                        error: GetPullRequestGraphQlRefreshError(cacheKey),
+                        cacheKey: cacheKey);
+                }
+            }
+
+            if (cacheOnly)
+            {
+                throw CreatePublicCacheUnavailableException();
+            }
+        }
+
+        var pullRequests = await GetPullRequestsGraphQlAsync(
+            repositoryName,
+            state,
+            refreshCache,
+            scope,
+            cacheOnly,
+            transientFallbackCacheKey,
+            cancellationToken);
+        _pullRequestGraphQlRefreshErrors.TryRemove(cacheKey, out _);
+        return CreatePullRequestListResponse(
+            repositoryName,
+            pullRequests,
+            "live",
+            stale: false,
+            refreshInProgress: false,
+            refreshQueued: false,
+            error: null,
+            cacheKey: cacheKey);
+    }
+
+    private async Task<IReadOnlyList<PullRequestSummary>> FetchPullRequestGraphQlSummariesAsync(
+        RepositoryName repositoryName,
+        string state,
+        GitHubCacheScope scope,
+        CancellationToken cancellationToken)
+    {
+        var token = await GetRequiredGraphQlTokenAsync(scope.RequestAuthorization, cancellationToken);
+        return await FetchPullRequestGraphQlSummariesAsync(
+            repositoryName,
+            state,
+            token,
+            cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<PullRequestSummary>> FetchPullRequestGraphQlSummariesAsync(
+        RepositoryName repositoryName,
+        string state,
+        string token,
+        CancellationToken cancellationToken)
+    {
+        var pullRequests = await FetchPullRequestsGraphQlAsync(
+            repositoryName,
+            state,
+            token,
+            cancellationToken);
+
+        var activePullRequests = pullRequests
+            .Where(pullRequest => !pullRequest.IsDraft)
+            .ToArray();
+
+        var summaries = activePullRequests.Select(pullRequest =>
+            CreatePullRequestSummaryFromGraphQlAsync(
+                repositoryName,
+                pullRequest,
+                token,
+                cancellationToken));
+
+        var fetchedAt = DateTimeOffset.UtcNow;
+        return (await Task.WhenAll(summaries))
+            .Select(pullRequest => pullRequest with { FetchedAt = fetchedAt })
+            .ToArray();
+    }
+
+    private async Task<string> GetRequiredGraphQlTokenAsync(
+        GitHubRequestAuthorization requestAuthorization,
+        CancellationToken cancellationToken)
+    {
+        var token = await GetGraphQlTokenAsync(requestAuthorization, cancellationToken);
+        if (token is not null)
+        {
+            return token;
+        }
+
+        throw new GitHubApiException(
+            HttpStatusCode.Unauthorized,
+            requestAuthorization == GitHubRequestAuthorization.PublicCacheToken
+                ? "GitHub authentication is required. Configure the public cache identity token."
+                : "GitHub authentication is required. Sign in with GitHub.");
+    }
+
+    private bool QueuePullRequestGraphQlRefresh(
+        string cacheKey,
+        RepositoryName repositoryName,
+        string state,
+        GitHubCacheScope scope,
+        string token)
+    {
+        // Reserve the slot synchronously before starting any work so concurrent callers
+        // for the same key cannot each launch a background fetch (true single-flight).
+        var reservation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_pullRequestGraphQlRefreshTasks.TryAdd(cacheKey, reservation.Task))
+        {
+            return false;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var pullRequests = await FetchPullRequestGraphQlSummariesAsync(
+                    repositoryName,
+                    state,
+                    token,
+                    CancellationToken.None);
+                _pullRequestGraphQlListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
+                await SetLastGoodAsync(cacheKey, pullRequests, CancellationToken.None);
+                await SetCacheEntryAsync(
+                    cacheKey,
+                    pullRequests,
+                    CacheDurationForScope(scope),
+                    CancellationToken.None);
+                _pullRequestGraphQlRefreshErrors.TryRemove(cacheKey, out _);
+                _pullRequestGraphQlRefreshCooldownUntil.TryRemove(cacheKey, out _);
+            }
+            catch (Exception ex)
+            {
+                _pullRequestGraphQlRefreshErrors[cacheKey] = ex.Message;
+                // Back off before another refresh can be queued for this key so a polling client
+                // cannot drive a tight retry loop against a persistently failing upstream.
+                _pullRequestGraphQlRefreshCooldownUntil[cacheKey] = DateTimeOffset.UtcNow + PullRequestGraphQlRefreshFailureCooldown;
+            }
+            finally
+            {
+                // Remove only our own reservation so we can never evict a newer in-flight refresh.
+                _pullRequestGraphQlRefreshTasks.TryRemove(new KeyValuePair<string, Task>(cacheKey, reservation.Task));
+                reservation.SetResult();
+            }
+        });
+
+        return true;
+    }
+
+    private async Task<bool> TryQueuePullRequestGraphQlRefreshAsync(
+        string cacheKey,
+        RepositoryName repositoryName,
+        string state,
+        GitHubCacheScope scope,
+        bool cacheOnly,
+        CancellationToken cancellationToken)
+    {
+        if (cacheOnly)
+        {
+            return false;
+        }
+
+        if (_pullRequestGraphQlRefreshCooldownUntil.TryGetValue(cacheKey, out var cooldownUntil)
+            && cooldownUntil > DateTimeOffset.UtcNow)
+        {
+            // A recent background refresh for this key failed; skip queueing until the cooldown
+            // elapses so repeated client polls don't spin up a refresh on every request.
+            return false;
+        }
+
+        var token = await GetGraphQlTokenAsync(scope.RequestAuthorization, cancellationToken);
+        if (token is null)
+        {
+            _pullRequestGraphQlRefreshErrors[cacheKey] = scope.RequestAuthorization == GitHubRequestAuthorization.PublicCacheToken
+                ? "GitHub authentication is required. Configure the public cache identity token."
+                : "GitHub authentication is required. Sign in with GitHub.";
+            return false;
+        }
+
+        return QueuePullRequestGraphQlRefresh(cacheKey, repositoryName, state, scope, token);
+    }
+
+    private bool IsPullRequestGraphQlRefreshInProgress(string cacheKey) =>
+        _pullRequestGraphQlRefreshTasks.ContainsKey(cacheKey);
+
+    private string? GetPullRequestGraphQlRefreshError(string cacheKey) =>
+        _pullRequestGraphQlRefreshErrors.TryGetValue(cacheKey, out var error) ? error : null;
+
+    private PullRequestListResponse CreatePullRequestListResponse(
+        RepositoryName repositoryName,
+        IReadOnlyList<PullRequestSummary> pullRequests,
+        string source,
+        bool stale,
+        bool refreshInProgress,
+        bool refreshQueued,
+        string? error,
+        string cacheKey) =>
+        new(
+            repositoryName.ToString(),
+            pullRequests,
+            new PullRequestListSnapshot(
+                source,
+                GetPullRequestListFetchedAt(pullRequests, cacheKey),
+                stale,
+                refreshInProgress,
+                refreshQueued,
+                error));
+
+    private DateTimeOffset GetPullRequestListFetchedAt(IReadOnlyList<PullRequestSummary> pullRequests, string cacheKey)
+    {
+        // An empty list carries no per-PR FetchedAt, so fall back to the time this cache key was last
+        // fetched rather than "now" -- otherwise an empty cached result would look fresh on every read
+        // and defeat the max-stale-age gate. UtcNow is only used when nothing has been tracked yet
+        // (e.g. immediately after a process restart, before the first fetch completes).
+        var emptyListFetchedAt = _pullRequestGraphQlListFetchedAt.TryGetValue(cacheKey, out var tracked)
+            ? tracked
+            : DateTimeOffset.UtcNow;
+        var fetchedAt = pullRequests
+            .Select(pullRequest => pullRequest.FetchedAt)
+            .Where(timestamp => timestamp != default)
+            .DefaultIfEmpty(emptyListFetchedAt)
+            .Max();
+        return fetchedAt;
+    }
+
+    private bool IsPullRequestListWithinMaxStaleAge(IReadOnlyList<PullRequestSummary> pullRequests, string cacheKey) =>
+        DateTimeOffset.UtcNow - GetPullRequestListFetchedAt(pullRequests, cacheKey) <= MaxStaleDisplayAge;
+
+    private async Task<IReadOnlyList<GitHubPullRequestGraphQlNodeDto>> FetchPullRequestsGraphQlAsync(
+        RepositoryName repositoryName,
+        string state,
+        string token,
+        CancellationToken cancellationToken)
+    {
+        var pullRequests = new List<GitHubPullRequestGraphQlNodeDto>();
+        var states = ToGraphQlPullRequestStates(state);
+        var (orderField, orderDirection) = ToGraphQlPullRequestOrder(state);
+        string? afterCursor = null;
+
+        while (true)
+        {
+            var connection = await SendPullRequestsGraphQlPageAsync(
+                repositoryName,
+                states,
+                orderField,
+                orderDirection,
+                afterCursor,
+                token,
+                cancellationToken);
+            if (connection?.Nodes is { Count: > 0 } nodes)
+            {
+                pullRequests.AddRange(nodes.OfType<GitHubPullRequestGraphQlNodeDto>());
+            }
+
+            var pageInfo = connection?.PageInfo;
+            if (pageInfo?.HasNextPage == true
+                && !string.IsNullOrEmpty(pageInfo.EndCursor)
+                && pageInfo.EndCursor != afterCursor)
+            {
+                afterCursor = pageInfo.EndCursor;
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        return pullRequests;
+    }
+
+    private async Task<PullRequestSummary> CreatePullRequestSummaryFromGraphQlAsync(
+        RepositoryName repositoryName,
+        GitHubPullRequestGraphQlNodeDto pullRequest,
+        string graphQlToken,
+        CancellationToken cancellationToken)
+    {
+        var reviewStatus = await CreateReviewStatusFromGraphQlAsync(
+            repositoryName,
+            pullRequest,
+            graphQlToken,
+            cancellationToken);
+        var state = MapGraphQlPullRequestState(pullRequest.State);
+        var headSha = string.IsNullOrWhiteSpace(pullRequest.HeadRefOid) ? null : pullRequest.HeadRefOid;
+        var requestedReviewers = GetRequestedReviewerLogins(pullRequest).ToArray();
+        var requestedReviewerIds = GetRequestedReviewerIds(pullRequest).ToArray();
+        var lastCommitAt = reviewStatus.LastReviewedAt is not null
+            && (reviewStatus.State == "reviewed" || reviewStatus.State == "changes_requested")
+                ? GetLastCommitAt(pullRequest)
+                : null;
+
+        return new PullRequestSummary(
+            pullRequest.Number,
+            pullRequest.Title ?? "",
+            state,
+            pullRequest.IsDraft,
+            PullRequestSummary.ResolveAuthor(
+                pullRequest.Author?.Login,
+                pullRequest.Assignees?.Nodes?
+                    .Select(assignee => assignee?.Login)
+                    .Where(login => !string.IsNullOrWhiteSpace(login))
+                    .Select(login => login!)
+                ?? []),
+            pullRequest.Url ?? "",
+            pullRequest.CreatedAt,
+            pullRequest.UpdatedAt,
+            pullRequest.Labels?.Nodes?
+                .Select(label => label?.Name)
+                .Where(label => !string.IsNullOrWhiteSpace(label))
+                .Select(label => label!)
+                .ToArray()
+            ?? [],
+            requestedReviewers,
+            pullRequest.Milestone?.Title,
+            GetLinkedIssueSummaries(pullRequest).ToArray(),
+            pullRequest.Commits?.TotalCount ?? 0,
+            pullRequest.Additions,
+            pullRequest.Deletions,
+            pullRequest.ChangedFiles,
+            lastCommitAt,
+            headSha,
+            pullRequest.BaseRefName,
+            MapGraphQlMergeableState(pullRequest.Mergeable),
+            reviewStatus,
+            state.Equals("open", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(headSha)
+                ? CreateChecksStatusFromGraphQl(GetHeadCommitStatusCheckRollup(pullRequest))
+                : ChecksStatus.None)
+        {
+            RequestedReviewerIds = requestedReviewerIds,
+        };
+    }
+
+    private static IReadOnlyList<string>? ToGraphQlPullRequestStates(string state) =>
+        state.Trim().ToLowerInvariant() switch
+        {
+            "open" => ["OPEN"],
+            "closed" => ["CLOSED", "MERGED"],
+            "all" => null,
+            _ => [state.ToUpperInvariant()],
+        };
+
+    private static (string Field, string Direction) ToGraphQlPullRequestOrder(string state) =>
+        state.Equals("open", StringComparison.OrdinalIgnoreCase)
+            ? ("CREATED_AT", "ASC")
+            : ("UPDATED_AT", "DESC");
+
+    private static string MapGraphQlPullRequestState(string? state) =>
+        state?.Equals("OPEN", StringComparison.OrdinalIgnoreCase) is true
+            ? "open"
+            : "closed";
+
+    private static string? MapGraphQlMergeableState(string? mergeable) =>
+        mergeable?.ToUpperInvariant() switch
+        {
+            "MERGEABLE" => "clean",
+            "CONFLICTING" => "dirty",
+            "UNKNOWN" => "unknown",
+            null => null,
+            _ => mergeable.ToLowerInvariant(),
+        };
+
+    private static DateTimeOffset? GetLastCommitAt(GitHubPullRequestGraphQlNodeDto pullRequest) =>
+        pullRequest.Commits?.Nodes?
+            .Select(node => node?.Commit?.CommittedDate)
+            .LastOrDefault(date => date is not null);
+
+    private static IEnumerable<string> GetRequestedReviewerLogins(GitHubPullRequestGraphQlNodeDto pullRequest) =>
+        pullRequest.ReviewRequests?.Nodes?
+            .Select(node => node?.RequestedReviewer)
+            .Where(reviewer => reviewer?.TypeName == "User" && !string.IsNullOrWhiteSpace(reviewer.Login))
+            .Select(reviewer => reviewer!.Login!)
+        ?? [];
+
+    private static IEnumerable<long> GetRequestedReviewerIds(GitHubPullRequestGraphQlNodeDto pullRequest) =>
+        pullRequest.ReviewRequests?.Nodes?
+            .Select(node => node?.RequestedReviewer)
+            .Where(reviewer => reviewer?.TypeName == "User" && reviewer.DatabaseId is > 0)
+            .Select(reviewer => reviewer!.DatabaseId!.Value)
+            .Distinct()
+        ?? [];
+
+    private static IEnumerable<LinkedIssueSummary> GetLinkedIssueSummaries(GitHubPullRequestGraphQlNodeDto pullRequest)
+    {
+        if (pullRequest.ClosingIssuesReferences?.Nodes is not { Count: > 0 } issues)
+        {
+            yield break;
+        }
+
+        foreach (var issue in issues)
+        {
+            if (issue is null)
+            {
+                continue;
+            }
+
+            var repository = issue.Repository?.NameWithOwner;
+            if (string.IsNullOrWhiteSpace(repository))
+            {
+                continue;
+            }
+
+            yield return new LinkedIssueSummary(
+                repository,
+                issue.Number,
+                issue.Title ?? "",
+                issue.Milestone?.Title,
+                issue.Labels?.Nodes?
+                    .Select(label => label?.Name)
+                    .Where(label => !string.IsNullOrWhiteSpace(label))
+                    .Select(label => label!)
+                    .ToArray()
+                ?? [],
+                issue.Url ?? "");
+        }
+    }
+
+    private async Task<ReviewStatus> CreateReviewStatusFromGraphQlAsync(
+        RepositoryName repositoryName,
+        GitHubPullRequestGraphQlNodeDto pullRequest,
+        string graphQlToken,
+        CancellationToken cancellationToken)
+    {
+        var reviewEvents = pullRequest.Reviews?.Nodes?
+            .Where(review => review is not null)
+            .Select(review => ReviewEvent.FromGraphQl(review!))
+            .ToArray()
+        ?? [];
+        var humanReviews = reviewEvents
+            .Where(review => !IsBotActor(review.Actor))
+            .OrderBy(review => review.SubmittedAt)
+            .ToArray();
+
+        var latestByReviewer = humanReviews
+            .GroupBy(review => review.Actor, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.MaxBy(review => review.SubmittedAt)!)
+            .ToArray();
+
+        var state =
+            latestByReviewer.Any(review => review.State == "CHANGES_REQUESTED") ? "changes_requested" :
+            latestByReviewer.Any(review => review.State == "APPROVED") ? "approved" :
+            latestByReviewer.Any(review => review.State == "COMMENTED") ? "reviewed" :
+            "waiting";
+        var copilotReviewed = reviewEvents.Any(review => IsCopilotReviewer(review.Actor));
+        var shouldCountUnresolvedThreads =
+            (state == "approved" && RequiresConversationResolution(repositoryName))
+            || (state == "waiting" && copilotReviewed);
+        var unresolvedThreadCount = shouldCountUnresolvedThreads
+            ? await CountUnresolvedReviewThreadsFromGraphQlAsync(
+                repositoryName,
+                pullRequest.Number,
+                pullRequest.ReviewThreads,
+                graphQlToken,
+                cancellationToken)
+            : 0;
+
+        return new ReviewStatus(
+            State: state,
+            LatestState: humanReviews.LastOrDefault()?.State,
+            ReviewerCount: humanReviews.Select(review => review.Actor).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            ApprovalCount: humanReviews.Count(review => review.State == "APPROVED"),
+            ChangesRequestedCount: humanReviews.Count(review => review.State == "CHANGES_REQUESTED"),
+            CommentedReviewCount: humanReviews.Count(review => review.State == "COMMENTED"),
+            LastApprovedAt: humanReviews.LastOrDefault(review => review.State == "APPROVED")?.SubmittedAt,
+            LastReviewedAt: humanReviews.LastOrDefault()?.SubmittedAt,
+            UnresolvedThreadCount: unresolvedThreadCount);
     }
 
     public IAsyncEnumerable<PullRequestSummary> StreamPullRequestsAsync(
@@ -2319,6 +3003,41 @@ sealed partial class GitHubClient(
         return candidate.Id > existing.Id;
     }
 
+    private static GitHubGraphQlStatusCheckRollupDto? GetHeadCommitStatusCheckRollup(
+        GitHubPullRequestGraphQlNodeDto pullRequest) =>
+        pullRequest.Commits?.Nodes?
+            .LastOrDefault(node => node?.Commit is not null)?
+            .Commit?.StatusCheckRollup;
+
+    // The PR-list GraphQL query carries only statusCheckRollup.state -- the single overall CI state
+    // GitHub computes across every check context. Enumerating the rollup's contexts inline is far too
+    // expensive at list scale: adding contexts(...) pushed the microsoft/aspire list query past
+    // GitHub's 10s GraphQL execution timeout (measured ~7.6s without it, ~11s with it), failing the
+    // whole repo. Even contexts{ totalCount } alone straddled the limit. The list only needs the
+    // headline state to pick the CI colour/label, so we surface just that here -- effectively free --
+    // and leave per-check counts and failing-check names to the detail/timeline path
+    // (GetChecksStatusAsync), which pages the REST check-runs + combined-status for one PR on demand.
+    private static ChecksStatus CreateChecksStatusFromGraphQl(GitHubGraphQlStatusCheckRollupDto? rollup)
+    {
+        var state = NormalizeRollupState(rollup?.State);
+        return state is null
+            ? ChecksStatus.None
+            : ChecksStatus.None with { State = state };
+    }
+
+    // Maps GitHub's StatusState rollup enum onto the lowercase state vocabulary the rest of the app
+    // uses. Returns null when there is no rollup (no CI configured) or an unrecognized value so the
+    // caller falls back to ChecksStatus.None ("no checks"). EXPECTED is a status a commit is waiting
+    // on, so it rolls up as pending the way GitHub's own rollup reports it.
+    private static string? NormalizeRollupState(string? rollupState) =>
+        rollupState?.ToUpperInvariant() switch
+        {
+            "SUCCESS" => "success",
+            "FAILURE" or "ERROR" => "failure",
+            "PENDING" or "EXPECTED" => "pending",
+            _ => null,
+        };
+
     private static ChecksStatus MergeChecks(IReadOnlyList<GitHubCheckRunDto> checkRuns, IReadOnlyList<GitHubStatusDto> statuses)
     {
         // A re-run or re-triggered workflow leaves the older check runs with the same name attached
@@ -2742,6 +3461,67 @@ sealed partial class GitHubClient(
         }
     }
 
+    private async Task<int> CountUnresolvedReviewThreadsFromGraphQlAsync(
+        RepositoryName repositoryName,
+        int number,
+        GitHubReviewThreadsConnectionDto? initialThreads,
+        string token,
+        CancellationToken cancellationToken)
+    {
+        var unresolvedCount = initialThreads?.Nodes?.Count(node => !node.IsResolved) ?? 0;
+        var afterCursor = initialThreads?.PageInfo?.EndCursor;
+        if (initialThreads?.PageInfo?.HasNextPage != true || string.IsNullOrEmpty(afterCursor))
+        {
+            return unresolvedCount;
+        }
+
+        try
+        {
+            for (var page = 1; page < MaxReviewThreadPages; page++)
+            {
+                var requestBody = new GitHubGraphQlRequestDto
+                {
+                    Query = ReviewThreadsGraphQlQuery,
+                    Variables = new GitHubReviewThreadsVariablesDto
+                    {
+                        Owner = repositoryName.Owner,
+                        Name = repositoryName.Name,
+                        Number = number,
+                        After = afterCursor,
+                    },
+                };
+
+                var threads = await SendReviewThreadsPageAsync(requestBody, token, cancellationToken);
+                if (threads is null)
+                {
+                    break;
+                }
+
+                if (threads.Nodes is not null)
+                {
+                    unresolvedCount += threads.Nodes.Count(node => !node.IsResolved);
+                }
+
+                var pageInfo = threads.PageInfo;
+                if (pageInfo?.HasNextPage == true
+                    && !string.IsNullOrEmpty(pageInfo.EndCursor)
+                    && pageInfo.EndCursor != afterCursor)
+                {
+                    afterCursor = pageInfo.EndCursor;
+                }
+                else
+                {
+                    break;
+                }
+            }
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsBestEffortReviewThreadFailure(ex))
+        {
+        }
+
+        return unresolvedCount;
+    }
+
     // Best-effort enrichment must never fail review status: tolerate transient transport
     // errors as well as a successful response whose body is malformed or not JSON
     // (e.g. a schema change or an HTML error page), while still surfacing programming bugs.
@@ -2751,6 +3531,82 @@ sealed partial class GitHubClient(
     private static bool IsBestEffortGraphQlFailure(Exception exception) =>
         IsTransientGitHubTransportFailure(exception)
             || exception is JsonException or NotSupportedException;
+
+    private async Task<GitHubPullRequestsGraphQlConnectionDto?> SendPullRequestsGraphQlPageAsync(
+        RepositoryName repositoryName,
+        IReadOnlyList<string>? states,
+        string orderField,
+        string orderDirection,
+        string? afterCursor,
+        string token,
+        CancellationToken cancellationToken)
+    {
+        await s_githubRequestThrottle.WaitAsync(cancellationToken);
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "graphql")
+            {
+                Content = JsonContent.Create(
+                    new GitHubPullRequestsGraphQlRequestDto
+                    {
+                        Query = PullRequestsGraphQlQuery,
+                        Variables = new GitHubPullRequestsGraphQlVariablesDto
+                        {
+                            Owner = repositoryName.Owner,
+                            Name = repositoryName.Name,
+                            States = states,
+                            OrderField = orderField,
+                            OrderDirection = orderDirection,
+                            After = afterCursor,
+                        },
+                    },
+                    GitHubJsonSerializerContext.Default.GitHubPullRequestsGraphQlRequestDto),
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+            using var response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                var message = await ReadGitHubErrorMessageAsync(response, cancellationToken);
+                throw new GitHubApiException(response.StatusCode, message);
+            }
+
+            var payload = await response.Content.ReadFromJsonAsync(
+                GitHubJsonSerializerContext.Default.GitHubPullRequestsGraphQlResponseDto,
+                cancellationToken);
+
+            // GitHub GraphQL can return a partial `data` payload alongside field-level `errors`
+            // when an individual sub-resolver fails (for example a single PR's statusCheckRollup
+            // times out). Now that checks travel inline with the list, discarding the whole page on
+            // any error would regress the per-field graceful degradation we had when checks were a
+            // separate REST call: the failed field simply deserializes as null (-> "no checks" for
+            // that PR) while every other PR still renders. Only treat errors as fatal when GitHub
+            // returned no usable data at all (bad query, auth failure, repo not found, a top-level
+            // rate-limit), which GraphQL signals with a null `data`/`repository`.
+            if (payload?.Data?.Repository?.PullRequests is { } pullRequests)
+            {
+                return pullRequests;
+            }
+
+            if (payload?.Errors is { Count: > 0 } errors)
+            {
+                var message = errors
+                    .Select(error => error.Message)
+                    .FirstOrDefault(error => !string.IsNullOrWhiteSpace(error))
+                    ?? "GitHub GraphQL returned an error.";
+                throw new GitHubApiException(HttpStatusCode.BadGateway, message);
+            }
+
+            return payload?.Data?.Repository?.PullRequests;
+        }
+        finally
+        {
+            s_githubRequestThrottle.Release();
+        }
+    }
 
     private async Task<GitHubReviewThreadsConnectionDto?> SendReviewThreadsPageAsync(
         GitHubGraphQlRequestDto requestBody,

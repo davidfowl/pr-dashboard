@@ -1,5 +1,5 @@
-import type { CheckState, PullRequestStreamItem, PullRequestSummary } from '../types';
-import { readJsonLines } from './http';
+import type { CheckState, PullRequestListResponse, PullRequestSummary } from '../types';
+import { readJson } from './http';
 
 type PullRequestCollectionItem = {
   repository: string;
@@ -7,49 +7,32 @@ type PullRequestCollectionItem = {
   updatedAt: string;
 };
 
-type StreamPullRequestsOptions = {
+type FetchPullRequestsOptions = {
   signal?: AbortSignal;
-  filter?: (pullRequest: PullRequestSummary, item: PullRequestStreamItem) => boolean;
-  onPullRequest?: (pullRequest: PullRequestSummary, item: PullRequestStreamItem) => void;
+  filter?: (pullRequest: PullRequestSummary) => boolean;
 };
 
-export type StreamPullRequestsResult = {
+export type PullRequestListResult = {
+  repository: string;
   pullRequests: PullRequestSummary[];
-  completed: boolean;
+  snapshot: PullRequestListResponse['snapshot'] | null;
 };
 
-export async function streamPullRequests(url: string, options: StreamPullRequestsOptions = {}) {
-  const displayedPullRequests: PullRequestSummary[] = [];
-  const livePullRequests: PullRequestSummary[] = [];
-  let completed = false;
+export async function fetchPullRequestList(url: string, options: FetchPullRequestsOptions = {}): Promise<PullRequestListResult> {
   const response = await fetch(url, { signal: options.signal });
-
-  await readJsonLines<PullRequestStreamItem>(response, (item) => {
-    if (item.isComplete) {
-      completed = true;
-      return;
-    }
-
-    if (!item.pullRequest) {
-      return;
-    }
-
-    const pullRequest = normalizeStreamedPullRequest(item.repository, item.pullRequest);
-    if (options.filter && !options.filter(pullRequest, item)) {
-      return;
-    }
-
-    displayedPullRequests.push(pullRequest);
-    if (!item.isStale) {
-      livePullRequests.push(pullRequest);
-    }
-    options.onPullRequest?.(pullRequest, item);
-  });
+  const data = await readJson<PullRequestListResponse>(response);
+  const pullRequests = data.pullRequests.map((pullRequest) =>
+    normalizePullRequest(data.repository, pullRequest));
 
   return {
-    pullRequests: completed ? livePullRequests : displayedPullRequests,
-    completed,
+    repository: data.repository,
+    pullRequests: options.filter ? pullRequests.filter(options.filter) : pullRequests,
+    snapshot: data.snapshot ?? null,
   };
+}
+
+export async function fetchPullRequests(url: string, options: FetchPullRequestsOptions = {}) {
+  return (await fetchPullRequestList(url, options)).pullRequests;
 }
 
 export function upsertByUpdatedAt<T extends PullRequestCollectionItem>(items: T[], item: T) {
@@ -101,9 +84,9 @@ export function replacePullRequestsByUpdatedAt(
   );
 }
 
-function normalizeStreamedPullRequest(
+function normalizePullRequest(
   repository: string,
-  pullRequest: NonNullable<PullRequestStreamItem['pullRequest']>,
+  pullRequest: PullRequestListResponse['pullRequests'][number],
 ): PullRequestSummary {
   return {
     ...pullRequest,
