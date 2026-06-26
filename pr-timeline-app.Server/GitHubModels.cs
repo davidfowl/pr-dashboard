@@ -1050,59 +1050,6 @@ sealed class GitHubGraphQlStatusCheckRollupDto
 {
     [JsonPropertyName("state")]
     public string? State { get; init; }
-
-    [JsonPropertyName("contexts")]
-    public GitHubGraphQlStatusCheckContextConnectionDto? Contexts { get; init; }
-}
-
-sealed class GitHubGraphQlStatusCheckContextConnectionDto
-{
-    [JsonPropertyName("totalCount")]
-    public int TotalCount { get; init; }
-
-    [JsonPropertyName("nodes")]
-    public IReadOnlyList<GitHubGraphQlStatusCheckContextDto?>? Nodes { get; init; }
-}
-
-// CheckRun and StatusContext are the two members of GitHub's StatusCheckRollupContext union.
-// Both are flattened onto a single DTO discriminated by __typename so the source-generated
-// serializer can read either shape without polymorphic deserialization.
-sealed class GitHubGraphQlStatusCheckContextDto
-{
-    [JsonPropertyName("__typename")]
-    public string? TypeName { get; init; }
-
-    // CheckRun fields.
-    [JsonPropertyName("name")]
-    public string? Name { get; init; }
-
-    [JsonPropertyName("status")]
-    public string? Status { get; init; }
-
-    [JsonPropertyName("conclusion")]
-    public string? Conclusion { get; init; }
-
-    [JsonPropertyName("startedAt")]
-    public DateTimeOffset? StartedAt { get; init; }
-
-    [JsonPropertyName("completedAt")]
-    public DateTimeOffset? CompletedAt { get; init; }
-
-    [JsonPropertyName("detailsUrl")]
-    public string? DetailsUrl { get; init; }
-
-    // StatusContext fields.
-    [JsonPropertyName("context")]
-    public string? Context { get; init; }
-
-    [JsonPropertyName("state")]
-    public string? State { get; init; }
-
-    [JsonPropertyName("targetUrl")]
-    public string? TargetUrl { get; init; }
-
-    [JsonPropertyName("createdAt")]
-    public DateTimeOffset? CreatedAt { get; init; }
 }
 
 sealed class GitHubGraphQlReviewConnectionDto

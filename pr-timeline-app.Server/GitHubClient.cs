@@ -37,9 +37,7 @@ sealed partial class GitHubClient(
         "reviewRequests(first:100){nodes{requestedReviewer{__typename ... on User{login databaseId}}}} " +
         "milestone{title} " +
         "commits(last:1){totalCount nodes{commit{committedDate " +
-        "statusCheckRollup{state contexts(first:100){totalCount nodes{__typename " +
-        "... on CheckRun{name status conclusion startedAt completedAt detailsUrl} " +
-        "... on StatusContext{context state targetUrl createdAt}}}}}}} " +
+        "statusCheckRollup{state}}}} " +
         "additions deletions changedFiles headRefOid headRefName baseRefName mergeable " +
         "reviews(last:100){pageInfo{hasPreviousPage startCursor}nodes{author{login}state submittedAt}} " +
         "reviewThreads(first:" + PullRequestPageSize + "){pageInfo{hasNextPage endCursor}nodes{isResolved}} " +
@@ -2968,79 +2966,26 @@ sealed partial class GitHubClient(
             .LastOrDefault(node => node?.Commit is not null)?
             .Commit?.StatusCheckRollup;
 
-    // Builds the same ChecksStatus the REST check-runs + combined-status path produces, but from the
-    // statusCheckRollup that now travels inline with the PR-list GraphQL query. Converting the union
-    // contexts into the existing REST DTOs lets MergeChecks (and its re-run de-duplication) stay the
-    // single source of truth for how CI state rolls up.
+    // The PR-list GraphQL query carries only statusCheckRollup.state -- the single overall CI state
+    // GitHub computes across every check context. Enumerating the rollup's contexts inline is far too
+    // expensive at list scale: adding contexts(...) pushed the microsoft/aspire list query past
+    // GitHub's 10s GraphQL execution timeout (measured ~7.6s without it, ~11s with it), failing the
+    // whole repo. Even contexts{ totalCount } alone straddled the limit. The list only needs the
+    // headline state to pick the CI colour/label, so we surface just that here -- effectively free --
+    // and leave per-check counts and failing-check names to the detail/timeline path
+    // (GetChecksStatusAsync), which pages the REST check-runs + combined-status for one PR on demand.
     private static ChecksStatus CreateChecksStatusFromGraphQl(GitHubGraphQlStatusCheckRollupDto? rollup)
     {
-        if (rollup?.Contexts?.Nodes is not { Count: > 0 } nodes)
-        {
-            return ChecksStatus.None;
-        }
-
-        var checkRuns = new List<GitHubCheckRunDto>();
-        var statuses = new List<GitHubStatusDto>();
-        foreach (var node in nodes)
-        {
-            if (node is null)
-            {
-                continue;
-            }
-
-            if (string.Equals(node.TypeName, "StatusContext", StringComparison.Ordinal))
-            {
-                statuses.Add(new GitHubStatusDto
-                {
-                    // EXPECTED has no REST combined-status equivalent; treat it as pending so a PR
-                    // waiting on an expected status rolls up the way GitHub's own rollup reports it.
-                    State = string.Equals(node.State, "EXPECTED", StringComparison.OrdinalIgnoreCase)
-                        ? "pending"
-                        : node.State,
-                    Context = node.Context,
-                    TargetUrl = node.TargetUrl,
-                    UpdatedAt = node.CreatedAt,
-                });
-            }
-            else
-            {
-                checkRuns.Add(new GitHubCheckRunDto
-                {
-                    Name = node.Name,
-                    Status = node.Status,
-                    Conclusion = node.Conclusion,
-                    StartedAt = node.StartedAt,
-                    CompletedAt = node.CompletedAt,
-                    HtmlUrl = node.DetailsUrl,
-                });
-            }
-        }
-
-        var merged = MergeChecks(checkRuns, statuses);
-
-        // contexts(first:100) only returns GitHub's first page. The REST checks path deliberately
-        // pages through every check run and status precisely so a PR with > 100 contexts (large
-        // build matrices, e.g. some aspire PRs carry hundreds) cannot truncate into a false "green"
-        // rollup. We can't page an inline connection without extra round trips, but GitHub already
-        // computes statusCheckRollup.state across ALL contexts, so when the page is truncated we
-        // trust that authoritative state (and the connection's real totalCount) for the headline
-        // instead of the partial recomputation from the first 100.
-        if (rollup.Contexts.TotalCount > nodes.Count
-            && NormalizeRollupState(rollup.State) is { } authoritativeState)
-        {
-            return merged with
-            {
-                State = authoritativeState,
-                TotalCount = rollup.Contexts.TotalCount,
-            };
-        }
-
-        return merged;
+        var state = NormalizeRollupState(rollup?.State);
+        return state is null
+            ? ChecksStatus.None
+            : ChecksStatus.None with { State = state };
     }
 
-    // Maps GitHub's StatusState rollup enum onto the lowercase state vocabulary MergeChecks emits.
-    // Returns null for an unrecognized or absent rollup state so the caller falls back to the
-    // recomputed (partial) state rather than inventing one.
+    // Maps GitHub's StatusState rollup enum onto the lowercase state vocabulary the rest of the app
+    // uses. Returns null when there is no rollup (no CI configured) or an unrecognized value so the
+    // caller falls back to ChecksStatus.None ("no checks"). EXPECTED is a status a commit is waiting
+    // on, so it rolls up as pending the way GitHub's own rollup reports it.
     private static string? NormalizeRollupState(string? rollupState) =>
         rollupState?.ToUpperInvariant() switch
         {
@@ -3589,6 +3534,20 @@ sealed partial class GitHubClient(
             var payload = await response.Content.ReadFromJsonAsync(
                 GitHubJsonSerializerContext.Default.GitHubPullRequestsGraphQlResponseDto,
                 cancellationToken);
+
+            // GitHub GraphQL can return a partial `data` payload alongside field-level `errors`
+            // when an individual sub-resolver fails (for example a single PR's statusCheckRollup
+            // times out). Now that checks travel inline with the list, discarding the whole page on
+            // any error would regress the per-field graceful degradation we had when checks were a
+            // separate REST call: the failed field simply deserializes as null (-> "no checks" for
+            // that PR) while every other PR still renders. Only treat errors as fatal when GitHub
+            // returned no usable data at all (bad query, auth failure, repo not found, a top-level
+            // rate-limit), which GraphQL signals with a null `data`/`repository`.
+            if (payload?.Data?.Repository?.PullRequests is { } pullRequests)
+            {
+                return pullRequests;
+            }
+
             if (payload?.Errors is { Count: > 0 } errors)
             {
                 var message = errors

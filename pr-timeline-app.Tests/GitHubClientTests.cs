@@ -142,54 +142,17 @@ public sealed class GitHubClientTests
         Assert.Equal("none", graphQl.Checks.State);
     }
 
-    [Fact]
-    public async Task GraphQlSnapshotResolvesChecksInlineWithoutCheckFanout()
+    [Theory]
+    [InlineData("SUCCESS", "success")]
+    [InlineData("FAILURE", "failure")]
+    [InlineData("ERROR", "failure")]
+    [InlineData("PENDING", "pending")]
+    [InlineData("EXPECTED", "pending")]
+    public async Task GraphQlSnapshotResolvesChecksStateInlineWithoutCheckFanout(string rollupState, string expectedState)
     {
-        var rollup =
-            """
-            {
-              "state": "FAILURE",
-              "contexts": {
-                "totalCount": 4,
-                "nodes": [
-                  {
-                    "__typename": "CheckRun",
-                    "name": "build",
-                    "status": "COMPLETED",
-                    "conclusion": "FAILURE",
-                    "startedAt": "2026-01-02T00:00:00Z",
-                    "completedAt": "2026-01-02T01:00:00Z",
-                    "detailsUrl": "https://github.com/example/repo/runs/1"
-                  },
-                  {
-                    "__typename": "CheckRun",
-                    "name": "test",
-                    "status": "COMPLETED",
-                    "conclusion": "SUCCESS",
-                    "startedAt": "2026-01-02T00:00:00Z",
-                    "completedAt": "2026-01-02T01:00:00Z",
-                    "detailsUrl": "https://github.com/example/repo/runs/2"
-                  },
-                  {
-                    "__typename": "CheckRun",
-                    "name": "lint",
-                    "status": "IN_PROGRESS",
-                    "conclusion": null,
-                    "startedAt": "2026-01-02T00:00:00Z",
-                    "completedAt": null,
-                    "detailsUrl": "https://github.com/example/repo/runs/3"
-                  },
-                  {
-                    "__typename": "StatusContext",
-                    "context": "ci/azp",
-                    "state": "SUCCESS",
-                    "targetUrl": "https://dev.azure.com/build/1",
-                    "createdAt": "2026-01-02T00:30:00Z"
-                  }
-                ]
-              }
-            }
-            """;
+        // The list query carries only statusCheckRollup.state (enumerating contexts inline timed the
+        // largest repos out), so the inline checks surface the headline state with zeroed counts.
+        var rollup = $$"""{ "state": "{{rollupState}}" }""";
 
         // The handler throws on any non-GraphQL request, so a passing test proves the PR-list no
         // longer fans out to the per-PR REST check-runs / status endpoints.
@@ -217,15 +180,11 @@ public sealed class GitHubClientTests
             forceRefresh: true,
             TestContext.Current.CancellationToken));
 
-        Assert.Equal("failure", pullRequest.Checks.State);
-        Assert.Equal(4, pullRequest.Checks.TotalCount);
-        Assert.Equal(2, pullRequest.Checks.SuccessCount);
-        Assert.Equal(1, pullRequest.Checks.FailureCount);
-        Assert.Equal(1, pullRequest.Checks.PendingCount);
-        var failing = Assert.Single(pullRequest.Checks.FailingChecks);
-        Assert.Equal("build", failing.Name);
-        Assert.Equal("failure", failing.Conclusion);
-        Assert.Equal("https://github.com/example/repo/runs/1", failing.HtmlUrl);
+        // State drives the dashboard's CI colour/label; per-check counts are filled in on demand by
+        // the detail/timeline path, so the list-level checks intentionally carry zeroed counts.
+        Assert.Equal(expectedState, pullRequest.Checks.State);
+        Assert.Equal(0, pullRequest.Checks.TotalCount);
+        Assert.Empty(pullRequest.Checks.FailingChecks);
     }
 
     [Fact]
@@ -259,58 +218,47 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
-    public async Task GraphQlSnapshotTrustsRollupStateWhenContextsAreTruncated()
+    public async Task GraphQlSnapshotKeepsPartialDataWhenAFieldErrorAccompaniesIt()
     {
-        // GitHub caps an inline connection at 100 nodes per page. This rollup reports 150 total
-        // contexts but only returns two passing ones, mimicking a large build matrix whose failing
-        // checks fall beyond the first page. Recomputing from the page alone would report a false
-        // "success"; the authoritative rollup state must win so the dashboard does not show green.
-        var rollup =
-            """
+        // GitHub returns a partial `data` payload alongside field-level `errors` when a single PR's
+        // sub-resolver (e.g. statusCheckRollup) times out. The page must still render every PR that
+        // did resolve, with the errored field degrading to "no checks", rather than the whole list
+        // failing. The errored PR's statusCheckRollup is null here to mimic that partial payload.
+        var node = GraphQlPullRequestNode(
+            55,
+            title: "Partial data survives",
+            reviewState: "APPROVED",
+            reviewSubmittedAt: "2026-01-02T00:00:00Z",
+            lastCommitAt: "2026-01-03T00:00:00Z",
+            reviewThreadsHasNextPage: false,
+            reviewThreadsEndCursor: null,
+            reviewThreadsResolved: []);
+
+        var responseWithFieldError =
+            $$"""
             {
-              "state": "FAILURE",
-              "contexts": {
-                "totalCount": 150,
-                "nodes": [
-                  {
-                    "__typename": "CheckRun",
-                    "name": "build (1)",
-                    "status": "COMPLETED",
-                    "conclusion": "SUCCESS",
-                    "startedAt": "2026-01-02T00:00:00Z",
-                    "completedAt": "2026-01-02T01:00:00Z",
-                    "detailsUrl": "https://github.com/example/repo/runs/1"
-                  },
-                  {
-                    "__typename": "CheckRun",
-                    "name": "build (2)",
-                    "status": "COMPLETED",
-                    "conclusion": "SUCCESS",
-                    "startedAt": "2026-01-02T00:00:00Z",
-                    "completedAt": "2026-01-02T01:00:00Z",
-                    "detailsUrl": "https://github.com/example/repo/runs/2"
+              "data": {
+                "repository": {
+                  "pullRequests": {
+                    "pageInfo": { "hasNextPage": false, "endCursor": null },
+                    "nodes": [ {{node}} ]
                   }
-                ]
-              }
+                }
+              },
+              "errors": [
+                {
+                  "type": "SERVICE_TIMEOUT",
+                  "path": ["repository","pullRequests","nodes",0,"commits","nodes",0,"commit","statusCheckRollup"],
+                  "message": "Something went wrong while executing your query."
+                }
+              ]
             }
             """;
 
         var client = CreateClientCapturingRequests((request, path, cancellationToken) =>
         {
             Assert.Equal("graphql", path);
-            return Task.FromResult(Json(GraphQlPullRequestsResponse(
-                hasNextPage: false,
-                endCursor: null,
-                GraphQlPullRequestNode(
-                    99,
-                    title: "Big matrix",
-                    reviewState: "CHANGES_REQUESTED",
-                    reviewSubmittedAt: "2026-01-02T00:00:00Z",
-                    lastCommitAt: "2026-01-03T00:00:00Z",
-                    reviewThreadsHasNextPage: false,
-                    reviewThreadsEndCursor: null,
-                    reviewThreadsResolved: [],
-                    statusCheckRollupJson: rollup))));
+            return Task.FromResult(Json(responseWithFieldError));
         });
 
         var pullRequest = Assert.Single(await client.GetPullRequestsGraphQlAsync(
@@ -319,10 +267,37 @@ public sealed class GitHubClientTests
             forceRefresh: true,
             TestContext.Current.CancellationToken));
 
-        // Authoritative rollup state wins over the all-green first page, and the connection's real
-        // total is surfaced rather than the truncated page size.
-        Assert.Equal("failure", pullRequest.Checks.State);
-        Assert.Equal(150, pullRequest.Checks.TotalCount);
+        Assert.Equal(55, pullRequest.Number);
+        // The errored statusCheckRollup degrades to "no checks" for that PR instead of failing the
+        // whole list.
+        Assert.Equal("none", pullRequest.Checks.State);
+    }
+
+    [Fact]
+    public async Task GraphQlSnapshotStillThrowsWhenErrorsCarryNoData()
+    {
+        // A fatal error (bad query, auth, repo not found, top-level rate limit) returns errors with
+        // a null data payload. With nothing usable to render, the request must still surface the
+        // failure rather than silently returning an empty list.
+        var fatalErrorResponse =
+            """
+            {
+              "data": null,
+              "errors": [ { "type": "NOT_FOUND", "message": "Could not resolve to a Repository." } ]
+            }
+            """;
+
+        var client = CreateClientCapturingRequests((request, path, cancellationToken) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(fatalErrorResponse));
+        });
+
+        await Assert.ThrowsAsync<GitHubApiException>(async () => await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
     }
 
     [Theory]
