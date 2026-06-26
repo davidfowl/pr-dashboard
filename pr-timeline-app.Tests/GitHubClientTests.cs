@@ -581,6 +581,135 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task GraphQlSnapshotKeepsStableFetchedAtForEmptyListAcrossReads()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var graphQlRequests = 0;
+        var client = CreateClientFromRequests((request, _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            Assert.Equal("graphql", path);
+            Interlocked.Increment(ref graphQlRequests);
+            // A repository/state that legitimately has zero open PRs.
+            return Task.FromResult(Json(GraphQlPullRequestsResponse(hasNextPage: false, endCursor: null)));
+        }, cache, "unit-test-token");
+
+        var seeded = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+        Assert.Empty(seeded.PullRequests);
+        var fetchedAt = seeded.Snapshot?.FetchedAt;
+        Assert.NotNull(fetchedAt);
+
+        // Capture an upper bound for the fetch instant; a correct snapshot must never report a
+        // fetched-at later than this on a subsequent read of the same cached empty list.
+        var afterFetch = DateTimeOffset.UtcNow;
+
+        var reread = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("fresh-cache", reread.Snapshot?.Source);
+        Assert.Empty(reread.PullRequests);
+
+        // Without the per-key fetched-at tracker an empty list falls back to UtcNow on every read,
+        // so the timestamp would advance past afterFetch and look perpetually fresh.
+        Assert.Equal(fetchedAt, reread.Snapshot?.FetchedAt);
+        Assert.True(reread.Snapshot?.FetchedAt <= afterFetch);
+        Assert.Equal(1, Volatile.Read(ref graphQlRequests));
+    }
+
+    [Fact]
+    public async Task GraphQlSnapshotBacksOffQueueingAfterBackgroundRefreshFails()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var graphQlRequests = 0;
+        var client = CreateClientFromRequests((request, _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            Assert.Equal("graphql", path);
+            var requestNumber = Interlocked.Increment(ref graphQlRequests);
+            if (requestNumber == 1)
+            {
+                return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                    hasNextPage: false,
+                    endCursor: null,
+                    GraphQlPullRequestNode(
+                        42,
+                        title: "Last-good row",
+                        reviewState: "APPROVED",
+                        reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                        lastCommitAt: "2026-01-03T00:00:00Z",
+                        reviewThreadsHasNextPage: false,
+                        reviewThreadsEndCursor: null,
+                        reviewThreadsResolved: []))));
+            }
+
+            // Every background refresh after the seed fails.
+            return Task.FromResult(Json("""{ "message": "GitHub unavailable" }""", HttpStatusCode.ServiceUnavailable));
+        }, cache, "unit-test-token");
+
+        var seeded = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("Last-good row", Assert.Single(seeded.PullRequests).Title);
+
+        var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(
+            CreateTokenScopeForTestToken("unit-test-token"),
+            repositoryName,
+            "pulls-graphql",
+            "open");
+        // Drop the fresh entry so subsequent non-forced reads serve last-good and queue a refresh.
+        cache.Remove(cacheKey);
+
+        var queued = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("last-good", queued.Snapshot?.Source);
+        Assert.True(queued.Snapshot?.RefreshQueued);
+
+        // Wait for the queued background refresh to fail (records an error and starts the cooldown).
+        var afterFailure = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (afterFailure.Snapshot?.Error is null)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Background refresh did not fail within the timeout.");
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+            afterFailure = await client.GetPullRequestsGraphQlSnapshotAsync(
+                repositoryName,
+                "open",
+                forceRefresh: false,
+                TestContext.Current.CancellationToken);
+        }
+
+        // The failure cooldown must suppress re-queueing so a polling client cannot drive a retry
+        // loop: no further GraphQL request is issued and RefreshQueued stays false within the window.
+        Assert.False(afterFailure.Snapshot?.RefreshQueued);
+        Assert.Equal(2, Volatile.Read(ref graphQlRequests));
+
+        var stillCoolingDown = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+        Assert.False(stillCoolingDown.Snapshot?.RefreshQueued);
+        Assert.Equal(2, Volatile.Read(ref graphQlRequests));
+    }
+
+    [Fact]
     public async Task PullListSkipsLinkedIssuesThatGitHubReturnsNotFound()
     {
         var client = CreateClient(path => path switch
