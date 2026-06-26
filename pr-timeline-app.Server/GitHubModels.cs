@@ -238,15 +238,20 @@ record PullRequestSummary(
     // The human who owns the PR, for self-notification suppression. Keep this in lockstep with
     // ResolveAuthor: a human author owns their own PR; a Copilot/bot-authored PR is owned by its
     // sole human assignee (ambiguous when there are zero or several, so no owner is returned).
-    private static long? ResolveOwnerUserId(GitHubPullRequestDto pullRequest)
+    private static long? ResolveOwnerUserId(GitHubPullRequestDto pullRequest) =>
+        ResolveOwnerUserId(
+            pullRequest.User?.Login,
+            pullRequest.User?.Id,
+            (pullRequest.Assignees ?? []).Select(assignee => (assignee.Login, assignee.Id)));
+
+    public static long? ResolveOwnerUserId(string? authorLogin, long? authorId, IEnumerable<(string? Login, long? Id)> assignees)
     {
-        var author = pullRequest.User;
-        if (author is not null && !IsCopilotLogin(author.Login) && author.Id is > 0)
+        if (!IsCopilotLogin(authorLogin) && authorId is > 0)
         {
-            return author.Id;
+            return authorId;
         }
 
-        var humanAssigneeIds = (pullRequest.Assignees ?? [])
+        var humanAssigneeIds = assignees
             .Where(assignee => !IsCopilotLogin(assignee.Login) && assignee.Id is > 0)
             .Select(assignee => assignee.Id!.Value)
             .Distinct()
