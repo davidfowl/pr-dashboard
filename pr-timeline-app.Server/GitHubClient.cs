@@ -3863,8 +3863,9 @@ sealed partial class GitHubClient(
     }
 
     // Builds a SHA -> GitHub login map from the PR commits API so the timeline can attribute
-    // "committed" events to a GitHub user instead of the raw git author name. Best-effort: any
-    // failure (including 404) yields an empty map and the timeline falls back to git names.
+    // "committed" events to a GitHub user instead of the raw git author name. Best-effort: a
+    // failure (including 404) stops enrichment and returns whatever was collected so far — empty if
+    // the first page failed — so unmapped commits fall back to git names.
     private async Task<IReadOnlyDictionary<string, string>> GetCommitAuthorLoginsByShaAsync(
         RepositoryName repositoryName,
         int number,

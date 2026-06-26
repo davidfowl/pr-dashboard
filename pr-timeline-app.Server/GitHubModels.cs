@@ -174,9 +174,9 @@ record PullRequestSummary(
     public IReadOnlyList<long> RequestedReviewerIds { get; init; } = [];
 
     // GitHub numeric id of the human who owns the PR: the author for a human-authored PR, or the
-    // sole human assignee for a Copilot/bot-authored PR (mirrors ResolveAuthor's attribution).
+    // sole human assignee for a Copilot-authored PR (mirrors ResolveAuthor's attribution).
     // Used to avoid notifying that human to "review" their own work. Null when no unambiguous
-    // human owner exists (e.g. a bot PR with zero or multiple human assignees).
+    // human owner exists (e.g. a Copilot PR with zero or multiple human assignees).
     public long? OwnerUserId { get; init; }
 
     public static PullRequestSummary FromDto(GitHubPullRequestDto pullRequest)
@@ -236,7 +236,7 @@ record PullRequestSummary(
     }
 
     // The human who owns the PR, for self-notification suppression. Keep this in lockstep with
-    // ResolveAuthor: a human author owns their own PR; a Copilot/bot-authored PR is owned by its
+    // ResolveAuthor: a human author owns their own PR; a Copilot-authored PR is owned by its
     // sole human assignee (ambiguous when there are zero or several, so no owner is returned).
     private static long? ResolveOwnerUserId(GitHubPullRequestDto pullRequest) =>
         ResolveOwnerUserId(
