@@ -888,7 +888,7 @@ public sealed class GitHubClientTests
             repositoryName,
             "open",
             TestContext.Current.CancellationToken);
-        var expectedFetchedAt = graphQlState.ListFetchedAt[graphQlCacheKey];
+        Assert.True(graphQlState.TryGetListFetchedAt(graphQlCacheKey, out var expectedFetchedAt));
         cache.Remove(graphQlCacheKey);
         cache.Remove($"last-good:{graphQlCacheKey}");
         var anonymousClient = CreateAnonymousClientFromRequests(route, cache, graphQlState: graphQlState);
@@ -904,6 +904,56 @@ public sealed class GitHubClientTests
         Assert.Equal(expectedFetchedAt, fallback.Snapshot?.FetchedAt);
         Assert.Equal(1, listRequests);
         Assert.Equal(1, graphQlRequests);
+    }
+
+    [Fact]
+    public async Task GraphQlStateRemovesTokenScopedEntriesWhenLastGoodSnapshotExpires()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var graphQlState = new GitHubPullRequestGraphQlState(cache);
+        var repositoryName = new RepositoryName("example", "repo");
+        var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(
+            CreateTokenScopeForTestToken("token-a"),
+            repositoryName,
+            "pulls-graphql",
+            "open");
+
+        graphQlState.SetListFetchedAt(cacheKey, DateTimeOffset.UtcNow, TimeSpan.FromHours(1));
+        graphQlState.SetRefreshError(cacheKey, "GitHub unavailable", TimeSpan.FromHours(1));
+        graphQlState.SetRefreshCooldownUntil(cacheKey, DateTimeOffset.UtcNow.AddHours(1));
+        await new GitHubResponseCache(cache, new GitHubPublicCacheStore(cache))
+            .SetAsync(
+                $"last-good:{cacheKey}",
+                Array.Empty<PullRequestSummary>(),
+                TimeSpan.FromMilliseconds(250),
+                TestContext.Current.CancellationToken,
+                () => graphQlState.Remove(cacheKey));
+        Assert.True(HasGraphQlState(graphQlState, cacheKey));
+
+        await WaitForGraphQlStateRemovalAsync(
+            graphQlState,
+            cacheKey,
+            () => cache.TryGetValue($"last-good:{cacheKey}", out _));
+    }
+
+    [Fact]
+    public async Task GraphQlStateExpiresUnusedTokenScopedEntries()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var graphQlState = new GitHubPullRequestGraphQlState(cache);
+        var repositoryName = new RepositoryName("example", "repo");
+        var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(
+            CreateTokenScopeForTestToken("token-a"),
+            repositoryName,
+            "pulls-graphql",
+            "open");
+
+        graphQlState.SetListFetchedAt(cacheKey, DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(250));
+        graphQlState.SetRefreshError(cacheKey, "GitHub unavailable", TimeSpan.FromMilliseconds(250));
+        graphQlState.SetRefreshCooldownUntil(cacheKey, DateTimeOffset.UtcNow.AddMilliseconds(250));
+        Assert.True(HasGraphQlState(graphQlState, cacheKey));
+
+        await WaitForGraphQlStateRemovalAsync(graphQlState, cacheKey);
     }
 
     [Fact]
@@ -5353,6 +5403,32 @@ public sealed class GitHubClientTests
 
         return latest ?? throw new InvalidOperationException("No snapshot was loaded.");
     }
+
+    private static async Task WaitForGraphQlStateRemovalAsync(
+        GitHubPullRequestGraphQlState graphQlState,
+        string cacheKey,
+        Action? triggerExpirationScan = null)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            triggerExpirationScan?.Invoke();
+            if (!HasGraphQlState(graphQlState, cacheKey))
+            {
+                return;
+            }
+
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+
+        Assert.False(graphQlState.TryGetListFetchedAt(cacheKey, out _));
+        Assert.False(graphQlState.TryGetRefreshError(cacheKey, out _));
+        Assert.False(graphQlState.TryGetRefreshCooldownUntil(cacheKey, out _));
+    }
+
+    private static bool HasGraphQlState(GitHubPullRequestGraphQlState graphQlState, string cacheKey) =>
+        graphQlState.TryGetListFetchedAt(cacheKey, out _)
+        || graphQlState.TryGetRefreshError(cacheKey, out _)
+        || graphQlState.TryGetRefreshCooldownUntil(cacheKey, out _);
 
     private static DefaultHttpContext CreateHttpContextWithGitHubToken(string token = "unit-test-token")
     {

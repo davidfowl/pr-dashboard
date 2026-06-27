@@ -21,6 +21,7 @@ sealed partial class GitHubClient(
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
     internal static readonly TimeSpan PublicCacheDuration = TimeSpan.FromHours(1);
     private static readonly TimeSpan LastGoodCacheDuration = TimeSpan.FromHours(24);
+    private static readonly TimeSpan PullRequestGraphQlStateDuration = LastGoodCacheDuration;
     private static readonly TimeSpan MaxStaleDisplayAge = TimeSpan.FromMinutes(10);
     private const int PullRequestPageSize = 100;
     private const int GraphQlLabelPageSize = 100;
@@ -160,8 +161,27 @@ sealed partial class GitHubClient(
     private async Task SetLastGoodAsync<T>(
         string cacheKey,
         T value,
+        CancellationToken cancellationToken,
+        Action? onLocalEvicted = null) =>
+        await cache.SetAsync(GetLastGoodCacheKey(cacheKey), value, LastGoodCacheDuration, cancellationToken, onLocalEvicted);
+
+    private async Task SetPullRequestGraphQlLastGoodAsync(
+        string cacheKey,
+        IReadOnlyList<PullRequestSummary> value,
         CancellationToken cancellationToken) =>
-        await cache.SetAsync(GetLastGoodCacheKey(cacheKey), value, LastGoodCacheDuration, cancellationToken);
+        await SetLastGoodAsync(
+            cacheKey,
+            value,
+            cancellationToken,
+            () => RemovePullRequestGraphQlStateIfLastGoodMissing(cacheKey));
+
+    private void RemovePullRequestGraphQlStateIfLastGoodMissing(string cacheKey)
+    {
+        if (!cache.TryGetLocalValue<IReadOnlyList<PullRequestSummary>>(GetLastGoodCacheKey(cacheKey), out _))
+        {
+            graphQlState.Remove(cacheKey);
+        }
+    }
 
     private async Task<GitHubCacheLookup<T>> GetLastGoodAsync<T>(
         string cacheKey,
@@ -242,7 +262,8 @@ sealed partial class GitHubClient(
         CancellationToken cancellationToken,
         Func<T, bool>? storeLastGood = null,
         Func<T, TimeSpan>? cacheDurationSelector = null,
-        string? transientFallbackCacheKey = null)
+        string? transientFallbackCacheKey = null,
+        Action? lastGoodLocalEvicted = null)
         where T : class
     {
         var cachedLookup = await cache.GetAsync<T>(cacheKey, cancellationToken);
@@ -283,7 +304,7 @@ sealed partial class GitHubClient(
             var value = await factory();
             if (storeLastGood?.Invoke(value) ?? true)
             {
-                await SetLastGoodAsync(cacheKey, value, cancellationToken);
+                await SetLastGoodAsync(cacheKey, value, cancellationToken, lastGoodLocalEvicted);
             }
             else
             {
@@ -671,11 +692,12 @@ sealed partial class GitHubClient(
                     state,
                     scope,
                     cancellationToken);
-                graphQlState.ListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
+                graphQlState.SetListFetchedAt(cacheKey, DateTimeOffset.UtcNow, PullRequestGraphQlStateDuration);
                 return result;
             },
             cancellationToken,
-            transientFallbackCacheKey: transientFallbackCacheKey);
+            transientFallbackCacheKey: transientFallbackCacheKey,
+            lastGoodLocalEvicted: () => graphQlState.Remove(cacheKey));
     }
 
     private async Task<PullRequestListResponse> GetPullRequestsGraphQlSnapshotAsync(
@@ -700,11 +722,10 @@ sealed partial class GitHubClient(
                 state,
                 scope,
                 cancellationToken);
-            graphQlState.ListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
-            await SetLastGoodAsync(cacheKey, livePullRequests, cancellationToken);
+            graphQlState.SetListFetchedAt(cacheKey, DateTimeOffset.UtcNow, PullRequestGraphQlStateDuration);
+            await SetPullRequestGraphQlLastGoodAsync(cacheKey, livePullRequests, cancellationToken);
             await SetCacheEntryAsync(cacheKey, livePullRequests, CacheDurationForScope(scope), cancellationToken);
-            graphQlState.RefreshErrors.TryRemove(cacheKey, out var ignoredError);
-            _ = ignoredError;
+            graphQlState.RemoveRefreshError(cacheKey);
             return CreatePullRequestListResponse(
                 repositoryName,
                 livePullRequests,
@@ -838,11 +859,11 @@ sealed partial class GitHubClient(
                 state,
                 scope,
                 cancellationToken);
-            graphQlState.ListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
-            await SetLastGoodAsync(cacheKey, pullRequests, cancellationToken);
+            graphQlState.SetListFetchedAt(cacheKey, DateTimeOffset.UtcNow, PullRequestGraphQlStateDuration);
+            await SetPullRequestGraphQlLastGoodAsync(cacheKey, pullRequests, cancellationToken);
             await SetCacheEntryAsync(cacheKey, pullRequests, CacheDurationForScope(scope), cancellationToken);
-            graphQlState.RefreshErrors.TryRemove(cacheKey, out _);
-            graphQlState.RefreshCooldownUntil.TryRemove(cacheKey, out _);
+            graphQlState.RemoveRefreshError(cacheKey);
+            graphQlState.RemoveRefreshCooldownUntil(cacheKey);
             return CreatePullRequestListResponse(
                 repositoryName,
                 pullRequests,
@@ -864,7 +885,7 @@ sealed partial class GitHubClient(
                 throw;
             }
 
-            graphQlState.RefreshErrors[cacheKey] = ex.Message;
+            graphQlState.SetRefreshError(cacheKey, ex.Message, PullRequestGraphQlStateDuration);
             return CreatePullRequestListResponse(
                 repositoryName,
                 fallback.PullRequests!,
@@ -1034,22 +1055,22 @@ sealed partial class GitHubClient(
                     state,
                     token,
                     CancellationToken.None);
-                graphQlState.ListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
-                await SetLastGoodAsync(cacheKey, pullRequests, CancellationToken.None);
+                graphQlState.SetListFetchedAt(cacheKey, DateTimeOffset.UtcNow, PullRequestGraphQlStateDuration);
+                await SetPullRequestGraphQlLastGoodAsync(cacheKey, pullRequests, CancellationToken.None);
                 await SetCacheEntryAsync(
                     cacheKey,
                     pullRequests,
                     CacheDurationForScope(scope),
                     CancellationToken.None);
-                graphQlState.RefreshErrors.TryRemove(cacheKey, out _);
-                graphQlState.RefreshCooldownUntil.TryRemove(cacheKey, out _);
+                graphQlState.RemoveRefreshError(cacheKey);
+                graphQlState.RemoveRefreshCooldownUntil(cacheKey);
             }
             catch (Exception ex)
             {
                 // Back off before another refresh can be queued for this key so a polling client
                 // cannot drive a tight retry loop against a persistently failing upstream.
-                graphQlState.RefreshCooldownUntil[cacheKey] = DateTimeOffset.UtcNow + PullRequestGraphQlRefreshFailureCooldown;
-                graphQlState.RefreshErrors[cacheKey] = ex.Message;
+                graphQlState.SetRefreshCooldownUntil(cacheKey, DateTimeOffset.UtcNow + PullRequestGraphQlRefreshFailureCooldown);
+                graphQlState.SetRefreshError(cacheKey, ex.Message, PullRequestGraphQlStateDuration);
             }
             finally
             {
@@ -1075,7 +1096,7 @@ sealed partial class GitHubClient(
             return false;
         }
 
-        if (graphQlState.RefreshCooldownUntil.TryGetValue(cacheKey, out var cooldownUntil)
+        if (graphQlState.TryGetRefreshCooldownUntil(cacheKey, out var cooldownUntil)
             && cooldownUntil > DateTimeOffset.UtcNow)
         {
             // A recent background refresh for this key failed; skip queueing until the cooldown
@@ -1086,9 +1107,12 @@ sealed partial class GitHubClient(
         var token = await GetGraphQlTokenAsync(scope.RequestAuthorization, cancellationToken);
         if (token is null)
         {
-            graphQlState.RefreshErrors[cacheKey] = scope.RequestAuthorization == GitHubRequestAuthorization.PublicCacheToken
-                ? "GitHub authentication is required. Configure the public cache identity token."
-                : "GitHub authentication is required. Sign in with GitHub.";
+            graphQlState.SetRefreshError(
+                cacheKey,
+                scope.RequestAuthorization == GitHubRequestAuthorization.PublicCacheToken
+                    ? "GitHub authentication is required. Configure the public cache identity token."
+                    : "GitHub authentication is required. Sign in with GitHub.",
+                PullRequestGraphQlStateDuration);
             return false;
         }
 
@@ -1099,7 +1123,7 @@ sealed partial class GitHubClient(
         graphQlState.RefreshTasks.ContainsKey(cacheKey);
 
     private string? GetPullRequestGraphQlRefreshError(string cacheKey) =>
-        graphQlState.RefreshErrors.TryGetValue(cacheKey, out var error) ? error : null;
+        graphQlState.TryGetRefreshError(cacheKey, out var error) ? error : null;
 
     private PullRequestListResponse CreatePullRequestListResponse(
         RepositoryName repositoryName,
@@ -1127,7 +1151,7 @@ sealed partial class GitHubClient(
         // fetched rather than "now" -- otherwise an empty cached result would look fresh on every read
         // and defeat the max-stale-age gate. UtcNow is only used when nothing has been tracked yet
         // (e.g. immediately after a process restart, before the first fetch completes).
-        var emptyListFetchedAt = graphQlState.ListFetchedAt.TryGetValue(cacheKey, out var tracked)
+        var emptyListFetchedAt = graphQlState.TryGetListFetchedAt(cacheKey, out var tracked)
             ? tracked
             : DateTimeOffset.UtcNow;
         var fetchedAt = pullRequests
