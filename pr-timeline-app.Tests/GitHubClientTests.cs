@@ -441,6 +441,45 @@ public sealed class GitHubClientTests
         Assert.Contains(graphQlBodies, body => GetGraphQlVariable(body, "after") == "THREAD_PAGE_1");
     }
 
+    [Theory]
+    [InlineData("APPROVED", "approved", false)]
+    [InlineData("COMMENTED", "reviewed", true)]
+    public async Task GraphQlPullListCountsUnresolvedThreadsForActionableReviewStates(
+        string reviewState,
+        string expectedState,
+        bool requireConversationResolution)
+    {
+        var reviewPolicyOptions = requireConversationResolution
+            ? CreateReviewPolicyOptions("example/repo")
+            : CreateReviewPolicyOptions();
+        var client = CreateClientCapturingRequests((_, path, _) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                GraphQlPullRequestNode(
+                    42,
+                    title: "Reviewed work",
+                    reviewState: reviewState,
+                    reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                    lastCommitAt: "2026-01-03T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: [false, true, false]))));
+        }, reviewPolicyOptions);
+
+        var pullRequest = Assert.Single(await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal(expectedState, pullRequest.Review.State);
+        Assert.Equal(2, pullRequest.Review.UnresolvedThreadCount);
+        Assert.Equal(requireConversationResolution, pullRequest.Review.RequiresConversationResolution);
+    }
+
     [Fact]
     public async Task GraphQlSnapshotReturnsLastGoodWhileBackgroundRefreshUpdatesFreshCache()
     {
