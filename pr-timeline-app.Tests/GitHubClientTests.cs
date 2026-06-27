@@ -45,7 +45,8 @@ public sealed class GitHubClientTests
                             lastCommitAt: "2026-01-03T00:00:00Z",
                             reviewThreadsHasNextPage: false,
                             reviewThreadsEndCursor: null,
-                            reviewThreadsResolved: [])));
+                            reviewThreadsResolved: [],
+                            authorDatabaseId: 555)));
                 }
             }
 
@@ -62,7 +63,7 @@ public sealed class GitHubClientTests
                         "created_at": "2026-01-01T00:00:00Z",
                         "updated_at": "2026-01-02T00:00:00Z",
                         "draft": false,
-                        "user": { "login": "octocat" },
+                        "user": { "login": "octocat", "id": 555 },
                         "html_url": "https://github.com/example/repo/pull/42",
                         "labels": [{ "name": "enhancement" }],
                         "assignees": [],
@@ -140,6 +141,55 @@ public sealed class GitHubClientTests
         // resolves checks inline from statusCheckRollup. With no rollup in this mock that means None.
         Assert.Equal("unknown", rest.Checks.State);
         Assert.Equal("none", graphQl.Checks.State);
+    }
+
+    [Fact]
+    public async Task GraphQlPullListQuerySelectsAuthorDatabaseIdViaUserInlineFragment()
+    {
+        // databaseId is not a field on the Actor interface (PullRequest.author's type); it only
+        // exists on the concrete User type. Selecting it directly as author{login databaseId} makes
+        // GitHub reject the whole query with "Field 'databaseId' doesn't exist on type 'Actor'", so
+        // it must go through a User inline fragment. The canned-JSON tests can't catch that (no
+        // schema validation), so guard the query shape the client actually sends over the wire.
+        string? capturedQuery = null;
+        var client = CreateClientCapturingRequests(async (request, path, cancellationToken) =>
+        {
+            if (path == "graphql")
+            {
+                var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+                if (body.Contains("PullRequestsForDashboard", StringComparison.Ordinal))
+                {
+                    capturedQuery = body;
+                    return Json(GraphQlPullRequestsResponse(
+                        hasNextPage: false,
+                        endCursor: null,
+                        GraphQlPullRequestNode(
+                            42,
+                            title: "Author selection",
+                            reviewState: "APPROVED",
+                            reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                            lastCommitAt: "2026-01-03T00:00:00Z",
+                            reviewThreadsHasNextPage: false,
+                            reviewThreadsEndCursor: null,
+                            reviewThreadsResolved: [],
+                            authorDatabaseId: 555)));
+                }
+            }
+
+            throw new InvalidOperationException($"Unexpected GitHub request: {path}");
+        });
+
+        _ = await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedQuery);
+        // The schema-invalid form that GitHub rejects must never appear.
+        Assert.DoesNotContain("author{login databaseId}", capturedQuery, StringComparison.Ordinal);
+        // databaseId on author must be selected through a User inline fragment.
+        Assert.Contains("author{login ... on User{databaseId}}", capturedQuery, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -929,6 +979,7 @@ public sealed class GitHubClientTests
                     """),
                 "repos/example/repo/commits/abc123/status?per_page=100" when token == "public-cache-token" => Json(
                     """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+                "repos/example/repo/pulls/1/commits?per_page=100" when token == "public-cache-token" => Json("[]"),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
             });
         };
@@ -960,6 +1011,131 @@ public sealed class GitHubClientTests
         Assert.Equal("commented", item.Event);
         Assert.Equal("reviewer", item.Actor);
         Assert.All(requests, request => Assert.Equal("public-cache-token", request.Token));
+    }
+
+    [Fact]
+    public async Task TimelineResolvesCommittedEventActorToGitHubLoginFromCommitsApi()
+    {
+        // A "committed" event only carries the raw git author name ("Ankit Jain"). The commits
+        // API maps that commit's SHA to the GitHub login ("radical"), and the timeline must use
+        // the login so the commit is attributed to the same person as their logged-in activity.
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var route = (HttpRequestMessage request, CancellationToken _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            var token = request.Headers.Authorization?.Parameter;
+
+            return Task.FromResult(path switch
+            {
+                "repos/example/repo" when token == "public-cache-token" => Json("""{ "visibility": "public" }"""),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" => Json(
+                    PullRequestsJson([PullRequestJson(1, title: "Public list item", headSha: "abc123")])),
+                "repos/example/repo/pulls/1" when token == "public-cache-token" => Json(
+                    PullRequestJson(1, headSha: "abc123", mergeableState: "clean")),
+                "repos/example/repo/issues/1/timeline?per_page=100" when token == "public-cache-token" => Json(
+                    """
+                    [
+                      {
+                        "event": "committed",
+                        "sha": "c0ffee1",
+                        "author": { "name": "Ankit Jain", "date": "2026-01-02T12:00:00Z" },
+                        "committer": { "name": "Ankit Jain", "date": "2026-01-02T12:00:00Z" }
+                      }
+                    ]
+                    """),
+                "repos/example/repo/pulls/1/commits?per_page=100" when token == "public-cache-token" => Json(
+                    """[ { "sha": "c0ffee1", "author": { "login": "radical", "id": 1472 }, "commit": { "author": { "name": "Ankit Jain" } } } ]"""),
+                "repos/example/repo/commits/abc123/check-runs?filter=latest&per_page=100" when token == "public-cache-token" => Json(
+                    """{ "total_count": 0, "check_runs": [] }"""),
+                "repos/example/repo/commits/abc123/status?per_page=100" when token == "public-cache-token" => Json(
+                    """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
+            });
+        };
+        var warmupClient = CreateClientFromRequests(route, cache, "token-a");
+        await warmupClient.TryPrewarmPublicPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            TestContext.Current.CancellationToken);
+        var readClient = CreateAnonymousClientFromRequests(route, cache);
+        await readClient.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var timeline = await new GitHubPullRequestService(readClient).GetTimelineAsync(
+            new RepositoryName("example", "repo"),
+            1,
+            false,
+            TestContext.Current.CancellationToken);
+
+        var item = Assert.Single(timeline.Items);
+        Assert.Equal("committed", item.Event);
+        Assert.Equal("radical", item.Actor);
+    }
+
+    [Fact]
+    public async Task TimelineFallsBackToGitNameWhenCommitsApiFailsNonTransiently()
+    {
+        // Commit-author enrichment is best-effort. A non-404, non-transient failure from the PR
+        // commits endpoint (e.g. a 403 from SSO/scope enforcement that is not a rate limit) must
+        // not fail the whole timeline — it already loaded — so the committed event falls back to
+        // the raw git author name instead of throwing.
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var route = (HttpRequestMessage request, CancellationToken _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            var token = request.Headers.Authorization?.Parameter;
+
+            return Task.FromResult(path switch
+            {
+                "repos/example/repo" when token == "public-cache-token" => Json("""{ "visibility": "public" }"""),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" => Json(
+                    PullRequestsJson([PullRequestJson(1, title: "Public list item", headSha: "abc123")])),
+                "repos/example/repo/pulls/1" when token == "public-cache-token" => Json(
+                    PullRequestJson(1, headSha: "abc123", mergeableState: "clean")),
+                "repos/example/repo/issues/1/timeline?per_page=100" when token == "public-cache-token" => Json(
+                    """
+                    [
+                      {
+                        "event": "committed",
+                        "sha": "c0ffee1",
+                        "author": { "name": "Ankit Jain", "date": "2026-01-02T12:00:00Z" },
+                        "committer": { "name": "Ankit Jain", "date": "2026-01-02T12:00:00Z" }
+                      }
+                    ]
+                    """),
+                "repos/example/repo/pulls/1/commits?per_page=100" when token == "public-cache-token" => Json(
+                    """{ "message": "Resource not accessible by integration" }""", HttpStatusCode.Forbidden),
+                "repos/example/repo/commits/abc123/check-runs?filter=latest&per_page=100" when token == "public-cache-token" => Json(
+                    """{ "total_count": 0, "check_runs": [] }"""),
+                "repos/example/repo/commits/abc123/status?per_page=100" when token == "public-cache-token" => Json(
+                    """{ "state": "success", "total_count": 0, "statuses": [] }"""),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
+            });
+        };
+        var warmupClient = CreateClientFromRequests(route, cache, "token-a");
+        await warmupClient.TryPrewarmPublicPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            TestContext.Current.CancellationToken);
+        var readClient = CreateAnonymousClientFromRequests(route, cache);
+        await readClient.GetPullRequestsAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var timeline = await new GitHubPullRequestService(readClient).GetTimelineAsync(
+            new RepositoryName("example", "repo"),
+            1,
+            false,
+            TestContext.Current.CancellationToken);
+
+        var item = Assert.Single(timeline.Items);
+        Assert.Equal("committed", item.Event);
+        Assert.Equal("Ankit Jain", item.Actor);
     }
 
     [Fact]
@@ -4964,6 +5140,7 @@ public sealed class GitHubClientTests
         Assert.Equal(expected.Labels, actual.Labels);
         Assert.Equal(expected.RequestedReviewers, actual.RequestedReviewers);
         Assert.Equal(expected.RequestedReviewerIds, actual.RequestedReviewerIds);
+        Assert.Equal(expected.OwnerUserId, actual.OwnerUserId);
         Assert.Equal(expected.Milestone, actual.Milestone);
         Assert.Equal(expected.LinkedIssues.Count, actual.LinkedIssues.Count);
         for (var i = 0; i < expected.LinkedIssues.Count; i++)
@@ -5027,12 +5204,15 @@ public sealed class GitHubClientTests
         bool reviewThreadsHasNextPage,
         string? reviewThreadsEndCursor,
         bool[] reviewThreadsResolved,
-        string? statusCheckRollupJson = null)
+        string? statusCheckRollupJson = null,
+        long? authorDatabaseId = null)
     {
         var reviewThreadNodes = string.Join(
             ",\n",
             reviewThreadsResolved.Select(isResolved =>
                 $$"""{ "isResolved": {{isResolved.ToString().ToLowerInvariant()}} }"""));
+
+        var authorDatabaseIdJson = authorDatabaseId is { } id ? $", \"databaseId\": {id}" : "";
 
         return
             $$"""
@@ -5041,7 +5221,7 @@ public sealed class GitHubClientTests
               "title": {{JsonSerializer.Serialize(title)}},
               "state": "OPEN",
               "isDraft": false,
-              "author": { "login": "octocat" },
+              "author": { "login": "octocat"{{authorDatabaseIdJson}} },
               "url": "https://github.com/example/repo/pull/{{number}}",
               "createdAt": "2026-01-01T00:00:00Z",
               "updatedAt": "2026-01-02T00:00:00Z",

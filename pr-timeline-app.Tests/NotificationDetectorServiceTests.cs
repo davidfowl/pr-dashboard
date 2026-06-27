@@ -83,13 +83,33 @@ public sealed class ReviewRequestDetectionTests
         Assert.Empty(detected);
     }
 
+    [Fact]
+    public void DetectSkipsThePullRequestsOwnHumanOwner()
+    {
+        // The human behind a Copilot PR is listed as both the sole assignee and a requested
+        // reviewer; OwnerUserId carries that human's id so they are not pinged to review their
+        // own work. A different requested reviewer on the same PR still gets a candidate.
+        var pullRequests = new[]
+        {
+            Pr(1, "Copilot PR owned by 7", ["radical", "adamint"], [7, 8], ownerUserId: 7)
+        };
+
+        var detected = ReviewRequestDetection
+            .DetectForRepository("o/r", pullRequests, new HashSet<long> { 7, 8 })
+            .ToList();
+
+        Assert.Single(detected);
+        Assert.Equal(8, detected[0].UserId);
+    }
+
     internal static PullRequestSummary Pr(
         int number,
         string title,
         string[] reviewers,
         long[] reviewerIds,
         bool draft = false,
-        string state = "open") =>
+        string state = "open",
+        long? ownerUserId = null) =>
         new(
             number,
             title,
@@ -114,7 +134,8 @@ public sealed class ReviewRequestDetectionTests
             ReviewStatus.Waiting,
             ChecksStatus.Unknown)
         {
-            RequestedReviewerIds = reviewerIds
+            RequestedReviewerIds = reviewerIds,
+            OwnerUserId = ownerUserId
         };
 }
 
