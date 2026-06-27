@@ -34,7 +34,6 @@ type ShipWeekSectionProps = {
   onDownloadSnapshot: () => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: VisiblePullRequestHandler;
-  visibleChecksRefreshKey: number;
   login?: string;
 };
 
@@ -61,7 +60,6 @@ function ShipWeekSection({
   onDownloadSnapshot,
   onSelectPullRequest,
   onVisiblePullRequest,
-  visibleChecksRefreshKey,
   login,
 }: ShipWeekSectionProps) {
   const model = useMemo(() => shipWeek ? createShipModeModel(shipWeek) : null, [shipWeek]);
@@ -196,7 +194,6 @@ function ShipWeekSection({
                 emptyState={sectionLoading.milestone ? 'Loading milestone PRs...' : 'No open PRs are in or linked to this milestone.'}
                 onSelectPullRequest={onSelectPullRequest}
                 onVisiblePullRequest={onVisiblePullRequest}
-                visibleChecksRefreshKey={visibleChecksRefreshKey}
                 login={login}
               />
             </section>
@@ -222,7 +219,6 @@ function ShipWeekSection({
                 emptyState={sectionLoading.baseBranch ? 'Loading base-branch PRs...' : 'No open PRs target the selected base branch.'}
                 onSelectPullRequest={onSelectPullRequest}
                 onVisiblePullRequest={onVisiblePullRequest}
-                visibleChecksRefreshKey={visibleChecksRefreshKey}
                 login={login}
               />
             </section>
@@ -249,7 +245,6 @@ function ShipWeekSection({
                   emptyState={sectionLoading.docs ? 'Loading generated docs PRs...' : 'No open generated docs PRs are loaded.'}
                   onSelectPullRequest={onSelectPullRequest}
                   onVisiblePullRequest={onVisiblePullRequest}
-                  visibleChecksRefreshKey={visibleChecksRefreshKey}
                   login={login}
                 />
               </section>
@@ -389,7 +384,6 @@ function ShipModePullRequestList({
   emptyState,
   onSelectPullRequest,
   onVisiblePullRequest,
-  visibleChecksRefreshKey,
   login,
 }: {
   items: ShipModePullRequestItem[];
@@ -398,7 +392,6 @@ function ShipModePullRequestList({
   emptyState: string;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: VisiblePullRequestHandler;
-  visibleChecksRefreshKey: number;
   login?: string;
 }) {
   if (loading && !hasLoaded && items.length === 0) {
@@ -419,7 +412,6 @@ function ShipModePullRequestList({
       emptyState={emptyState}
       onSelectPullRequest={onSelectPullRequest}
       onVisiblePullRequest={onVisiblePullRequest}
-      visibleChecksRefreshKey={visibleChecksRefreshKey}
       login={login}
     />
   );

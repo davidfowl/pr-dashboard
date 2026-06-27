@@ -18,7 +18,6 @@ type PullRequestListProps = {
   emptyState?: string;
   limit?: number;
   preserveOrder?: boolean;
-  visibleChecksRefreshKey?: number;
   login?: string;
 };
 
@@ -42,7 +41,6 @@ function PullRequestList({
   emptyState,
   limit,
   preserveOrder,
-  visibleChecksRefreshKey = 0,
   login,
 }: PullRequestListProps) {
   const visibleEntries = useMemo(() => {
@@ -65,7 +63,6 @@ function PullRequestList({
           bucketLabel={entry.bucketLabel}
           onSelectPullRequest={onSelectPullRequest}
           onVisiblePullRequest={onVisiblePullRequest}
-          visibleChecksRefreshKey={visibleChecksRefreshKey}
           signalProps={rowActionSignalProps(entry)}
           linkedIssues={entry.linkedIssues}
           login={login}

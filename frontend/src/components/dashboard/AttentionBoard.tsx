@@ -18,7 +18,6 @@ type AttentionBoardProps = {
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: VisiblePullRequestHandler;
-  visibleChecksRefreshKey: number;
   login?: string;
 };
 
@@ -45,7 +44,6 @@ function AttentionBoard({
   onSelectBucket,
   onSelectPullRequest,
   onVisiblePullRequest,
-  visibleChecksRefreshKey,
   login,
 }: AttentionBoardProps) {
   const [copyStatus, setCopyStatus] = useState<CopyStatus | null>(null);
@@ -178,7 +176,6 @@ function AttentionBoard({
                 preserveOrder={bucket.preserveItemOrder}
                 onSelectPullRequest={onSelectPullRequest}
                 onVisiblePullRequest={onVisiblePullRequest}
-                visibleChecksRefreshKey={visibleChecksRefreshKey}
                 login={login}
               />
             </section>

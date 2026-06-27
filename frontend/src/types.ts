@@ -65,6 +65,7 @@ export type ReviewStatus = {
   lastApprovedAt?: string | null;
   lastReviewedAt?: string | null;
   unresolvedThreadCount: number;
+  requiresConversationResolution: boolean;
 };
 
 export type CheckState = 'unknown' | 'success' | 'failure' | 'pending' | 'none';
@@ -90,23 +91,28 @@ export type ChecksStatus = {
 export type PullRequestListResponse = {
   repository: string;
   pullRequests: Omit<PullRequestSummary, 'repository'>[];
+  snapshot?: PullRequestListSnapshot | null;
 };
 
-export type PullRequestStreamItem = {
-  repository: string;
-  pullRequest?: Omit<PullRequestSummary, 'repository'> | null;
-  isStale?: boolean;
-  isComplete?: boolean;
+export type PullRequestListSnapshot = {
+  source: 'fresh-cache' | 'last-good' | 'live' | 'shared-cache' | string;
+  fetchedAt: string;
+  stale: boolean;
+  refreshInProgress: boolean;
+  refreshQueued: boolean;
+  error?: string | null;
 };
 
-export type VisiblePullRequestOptions = {
-  forceRefresh?: boolean;
+export type ReviewLoadPerfStats = {
+  firstRowsMs: number;
+  settledMs: number | null;
+  requestCount: number;
+  staleSnapshotCount: number;
 };
 
 export type VisiblePullRequestHandler = (
   repository: string,
   pullRequest: PullRequestSummary,
-  options?: VisiblePullRequestOptions,
 ) => boolean;
 
 export type IssueListResponse = {

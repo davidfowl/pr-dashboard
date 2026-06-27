@@ -40,17 +40,13 @@ In development, the server can use an OAuth session, `GITHUB_TOKEN`, `GH_TOKEN`,
 
 Automation can read `/api/agents/schema` to choose the dashboard mode and API endpoint by use case. The schema lists review, issue-focus, and ship-week modes, their use cases, required inputs, and the backing API paths. The dashboard footer links to the same schema.
 
-## Conversation-resolution policy
+## Unresolved feedback
 
-Some repositories require all review conversations to be resolved before an approved PR can merge (GitHub's "require conversation resolution" branch protection). For repositories listed in `GitHubReviewPolicy:RequireConversationResolution` (`owner/repo`, case-insensitive), the dashboard fetches unresolved review-thread counts for approved PRs and surfaces them: an approved PR with open threads shows a `resolve feedback` action and a `N unresolved` pill, moves to an **Unresolved feedback** bucket, and is kept out of **Ready to merge**.
+When a PR has open (unresolved) review threads, the author has feedback to address, so it is not reviewer-ready. The dashboard fetches unresolved review-thread counts for PRs that have actually been reviewed — approved or commented — plus **waiting** PRs the Copilot review bot has reviewed (its reviews are filtered out of the human review state, so the PR still reads as "waiting"). It skips plain awaiting-review PRs (no threads yet) and changes-requested PRs (already author-blocked in the **Author response** lane), keeping the extra GraphQL calls bounded.
 
-This is opt-in per repo because the branch-protection setting is only readable through GitHub's admin-scoped branch-protection API, which this app's tokens do not have. Repositories not in the list are unaffected, and no extra GitHub calls are made for them.
+Human and Copilot threads are treated identically. Any such PR shows a `resolve feedback` action and an `N unresolved` pill, moves to the **Unresolved feedback** bucket, and is kept out of the **Needs attention** focus queue.
 
-## Copilot review feedback
-
-The Copilot review bot's reviews are filtered out of a PR's human review state, so a PR that only Copilot has commented on otherwise looks like it still "needs a reviewer". To avoid surfacing those as actionable review work, the dashboard also fetches unresolved review-thread counts for **waiting** PRs that the Copilot reviewer has reviewed (this is independent of the conversation-resolution policy above, since it is a triage signal rather than a merge gate).
-
-A waiting PR with unresolved threads is treated as waiting on the author: it shows an `address feedback` action, moves to a **Copilot feedback** bucket, and is kept out of the **Needs attention** focus queue. The extra GraphQL call is bounded to waiting PRs the bot actually reviewed.
+Merge-blocking is policy-gated. Some repositories require all review conversations to be resolved before an approved PR can merge (GitHub's "require conversation resolution" branch protection). Only for repositories listed in `GitHubReviewPolicy:RequireConversationResolution` (`owner/repo`, case-insensitive) does an approved PR with open threads get pulled out of **Ready to merge**; elsewhere the unresolved-feedback signal is informational and does not gate merging. This is opt-in per repo because the branch-protection setting is only readable through GitHub's admin-scoped branch-protection API, which this app's tokens do not have.
 
 Any PR whose head commit has failing checks is also kept out of the **Needs attention** focus queue (pending checks are fine). The author still sees it in the standalone **CI failing** bucket, and it reappears in Needs attention once its checks are green — nudging the team to keep CI passing.
 

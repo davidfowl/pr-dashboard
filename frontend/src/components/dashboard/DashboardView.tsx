@@ -7,6 +7,7 @@ import type {
   PickItem,
   PullRequestSummary,
   PullState,
+  ReviewLoadPerfStats,
   ShipWeekIssueSummary,
   ShipWeekLoadingState,
   ShipWeekResponse,
@@ -46,7 +47,9 @@ type DashboardViewProps = {
   showShipWeekSnapshotDownload: boolean;
   shipWeekSnapshotRef: RefObject<HTMLElement | null>;
   selectedBucketId: string;
-  reviewRefreshState: 'idle' | 'refreshing' | 'incomplete';
+  pullRequestSnapshotStatus: string | null;
+  pullRequestSnapshotError: string | null;
+  pullRequestLoadPerfStats: ReviewLoadPerfStats | null;
   lastUpdatedAt: string | null;
   autoRefreshIntervalMs: number;
   login?: string;
@@ -64,7 +67,6 @@ type DashboardViewProps = {
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: VisiblePullRequestHandler;
-  visibleChecksRefreshKey: number;
 };
 
 function DashboardView({
@@ -95,7 +97,9 @@ function DashboardView({
   showShipWeekSnapshotDownload,
   shipWeekSnapshotRef,
   selectedBucketId,
-  reviewRefreshState,
+  pullRequestSnapshotStatus,
+  pullRequestSnapshotError,
+  pullRequestLoadPerfStats,
   lastUpdatedAt,
   autoRefreshIntervalMs,
   login,
@@ -113,7 +117,6 @@ function DashboardView({
   onSelectBucket,
   onSelectPullRequest,
   onVisiblePullRequest,
-  visibleChecksRefreshKey,
 }: DashboardViewProps) {
   const shipModeActive = dashboardMode === 'ship';
   const issuesModeActive = dashboardMode === 'issues';
@@ -123,10 +126,8 @@ function DashboardView({
     || (issuesModeActive && issues.length > 0)
     || (shipModeActive && shipWeek !== null);
   const visibleRefreshLoading = refreshing && !hasLoadedData;
-  const reviewRefreshActive = !shipModeActive && !issuesModeActive && reviewRefreshState === 'refreshing';
-  const refreshButtonLoading = visibleRefreshLoading
-    || reviewRefreshActive;
-  const visiblePullsLoading = pullsLoading && (!hasLoadedData || reviewRefreshActive);
+  const refreshButtonLoading = refreshing;
+  const visiblePullsLoading = pullsLoading && !hasLoadedData;
   const visibleIssuesLoading = issuesLoading && !hasLoadedData;
   const displayedLastUpdatedAt = lastUpdatedAt
     ?? (!shipModeActive && !issuesModeActive && pullRequests.length > 0
@@ -138,13 +139,7 @@ function DashboardView({
     : issuesModeActive
       ? 'Issue focus data'
       : 'Review queue data';
-  const refreshStatus = !shipModeActive && !issuesModeActive
-    ? reviewRefreshState === 'refreshing'
-      ? 'Showing cached rows while live GitHub data refreshes.'
-      : reviewRefreshState === 'incomplete'
-        ? 'Showing cached rows because live GitHub data did not finish refreshing.'
-        : null
-    : null;
+  const refreshStatus = !shipModeActive && !issuesModeActive ? pullRequestSnapshotStatus : null;
   const showQueuePanel = shipModeActive
     || (issuesModeActive
       ? issuesLoading || issues.length > 0 || issueBuckets.length > 0
@@ -158,9 +153,14 @@ function DashboardView({
           <p className="eyebrow">Refresh</p>
           <h2>{dataTitle}</h2>
           <p>
-            {displayedLastUpdatedAt
-              ? `List updated ${formatRelative(displayedLastUpdatedAt)} at ${formatTime(displayedLastUpdatedAt)}.`
-              : 'List has not loaded yet.'}
+            {displayedLastUpdatedAt ? (
+              <>
+                List updated {formatRelative(displayedLastUpdatedAt)} at {formatTime(displayedLastUpdatedAt)}.
+                {pullRequestLoadPerfStats && (
+                  <span className="load-perf-stats"> {formatLoadPerfStats(pullRequestLoadPerfStats)}</span>
+                )}
+              </>
+            ) : 'List has not loaded yet.'}
             {' '}
             Auto-refreshes about every {autoRefreshCadence} using cached data.
           </p>
@@ -169,6 +169,7 @@ function DashboardView({
               {refreshStatus}
             </p>
           )}
+          {pullRequestSnapshotError && <p className="error">{pullRequestSnapshotError}</p>}
         </div>
         <button type="button" onClick={onRefresh} disabled={refreshButtonLoading}>
           {refreshButtonLoading ? (hasLoadedData ? 'Refreshing...' : 'Loading...') : 'Refresh now'}
@@ -195,7 +196,6 @@ function DashboardView({
               onDownloadSnapshot={onDownloadShipWeekSnapshot}
               onSelectPullRequest={onSelectPullRequest}
               onVisiblePullRequest={onVisiblePullRequest}
-              visibleChecksRefreshKey={visibleChecksRefreshKey}
               login={login}
             />
           ) : issuesModeActive ? (
@@ -219,7 +219,6 @@ function DashboardView({
               onSelectBucket={onSelectBucket}
               onSelectPullRequest={onSelectPullRequest}
               onVisiblePullRequest={onVisiblePullRequest}
-              visibleChecksRefreshKey={visibleChecksRefreshKey}
             />
           )}
         </section>
@@ -249,6 +248,27 @@ function DashboardView({
       />
     </>
   );
+}
+
+function formatLoadPerfStats(stats: ReviewLoadPerfStats) {
+  const requestLabel = `${stats.requestCount} GraphQL ${stats.requestCount === 1 ? 'request' : 'requests'}`;
+  if (stats.settledMs === null) {
+    return `Shown in ${formatLoadDuration(stats.firstRowsMs)}; still refreshing (${requestLabel}).`;
+  }
+
+  if (stats.settledMs <= stats.firstRowsMs + 50) {
+    return `Loaded in ${formatLoadDuration(stats.settledMs)} (${requestLabel}).`;
+  }
+
+  return `Shown in ${formatLoadDuration(stats.firstRowsMs)}; settled in ${formatLoadDuration(stats.settledMs)} (${requestLabel}).`;
+}
+
+function formatLoadDuration(durationMs: number) {
+  if (durationMs < 1000) {
+    return `${Math.max(0, Math.round(durationMs))}ms`;
+  }
+
+  return `${(durationMs / 1000).toFixed(durationMs < 10_000 ? 1 : 0)}s`;
 }
 
 export default DashboardView;

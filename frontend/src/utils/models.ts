@@ -169,7 +169,7 @@ function createPersonalPick(pullRequest: PullRequestSummary, login: string): Pic
     return {
       pullRequest,
       action: personalPickActions.fixCi,
-      reason: `Your PR has ${formatCount(pullRequest.checks.failureCount, 'failing check')} · ${pickReason(pullRequest)}`,
+      reason: `${pullRequest.checks.failureCount > 0 ? `Your PR has ${formatCount(pullRequest.checks.failureCount, 'failing check')}` : 'Your PR is failing CI'} · ${pickReason(pullRequest)}`,
       tone: 'danger',
       personal: true,
     };
@@ -293,7 +293,7 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
     },
     {
       label: 'Unresolved feedback',
-      summary: 'Approved PRs with unresolved review threads that block merging until conversations are resolved.',
+      summary: 'PRs with unresolved review threads (human or Copilot) the author still needs to address.',
       tone: 'danger',
       metric: 'resolve threads',
       items: [],
@@ -310,13 +310,6 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
       summary: 'A commit landed after human review, so the PR needs another look.',
       tone: 'warning',
       metric: 'finish loops',
-      items: [],
-    },
-    {
-      label: 'Copilot feedback',
-      summary: 'The Copilot review bot left unresolved feedback the author has not addressed yet — waiting on the author, not a new reviewer.',
-      tone: 'warning',
-      metric: 'author action',
       items: [],
     },
     {
@@ -676,13 +669,19 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
     labels.push('Unresolved feedback');
   }
 
-  // Failing CI, unresolved review threads, merge conflicts, or a do-not-merge label disqualify
-  // "Ready to merge" — the PR is not actually ready to land until CI is green, conversations are
-  // resolved, it merges cleanly, and it is not explicitly held by a no-merge label.
+  // Unresolved threads only block merging where the repo requires conversation resolution; elsewhere
+  // the signal is informational, so it must not disqualify Ready to merge.
+  const unresolvedFeedbackBlocksMerge =
+    unresolvedFeedback && pullRequest.review.requiresConversationResolution;
+
+  // Failing CI, merge-blocking unresolved threads, merge conflicts, or a do-not-merge label
+  // disqualify "Ready to merge" — the PR is not actually ready to land until CI is green,
+  // conversations that gate merging are resolved, it merges cleanly, and it is not explicitly held
+  // by a no-merge label.
   if (pullRequest.review.state === 'approved'
     && !approvedButAging
     && !ciFailing
-    && !unresolvedFeedback
+    && !unresolvedFeedbackBlocksMerge
     && !mergeConflicts
     && !hasNeedsAuthorActionLabel(pullRequest)) {
     labels.push('Ready to merge');
@@ -709,10 +708,6 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
     labels.push('Quick wins');
   }
 
-  if (hasCopilotFeedback(pullRequest)) {
-    labels.push('Copilot feedback');
-  }
-
   if (needsReview(pullRequest)) {
     labels.push('Needs review');
   }
@@ -735,8 +730,10 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
       return regressionSignal(pullRequest);
     case approvedButAgingBucketLabel:
       return approvedAt ? `Approved ${formatAge(approvedAt)}` : 'Approved';
-    case 'CI failing':
-      return formatCount(pullRequest.checks?.failureCount ?? 0, 'failing check');
+    case 'CI failing': {
+      const failureCount = pullRequest.checks?.failureCount ?? 0;
+      return failureCount > 0 ? formatCount(failureCount, 'failing check') : 'CI failing';
+    }
     case 'Unresolved feedback':
       return formatCount(pullRequest.review.unresolvedThreadCount, 'unresolved thread');
     case 'Ready to merge':
@@ -745,8 +742,6 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
       return pullRequest.lastCommitAt
         ? `Pushed ${formatAge(pullRequest.lastCommitAt)}`
         : 'Pushed after review';
-    case 'Copilot feedback':
-      return formatCount(pullRequest.review.unresolvedThreadCount, 'unresolved thread');
     case 'Merge conflicts':
       return 'Merge conflicts';
     case 'Docs':
@@ -779,18 +774,12 @@ function isApprovedButAging(pullRequest: PullRequestSummary) {
     && ageMs(approvedAt) >= approvedAgingMs;
 }
 
+// Any PR with open review threads (surfaced by the server for reviewed/approved PRs and
+// Copilot-reviewed waiting PRs, human or Copilot alike) has feedback the author still needs to
+// resolve, so it is treated as author-blocked: it carries the "Unresolved feedback" signal and is
+// kept out of the Needs-attention queue regardless of review state.
 function hasUnresolvedFeedback(pullRequest: PullRequestSummary) {
-  return pullRequest.review.state === 'approved'
-    && pullRequest.review.unresolvedThreadCount > 0;
-}
-
-// A PR that only the Copilot review bot has commented on shows up with no human review state
-// (the bot is filtered out), so it looks like it "needs a reviewer". When the bot left an
-// unresolved thread, the PR is really waiting on the author to address that feedback, so it
-// belongs in the "Copilot feedback" lane rather than the needs-review queue.
-function hasCopilotFeedback(pullRequest: PullRequestSummary) {
-  return pullRequest.review.state === 'waiting'
-    && pullRequest.review.unresolvedThreadCount > 0;
+  return pullRequest.review.unresolvedThreadCount > 0;
 }
 
 export function isChecksFailing(pullRequest: PullRequestSummary) {
@@ -882,7 +871,7 @@ function isCommunityWaiting(pullRequest: PullRequestSummary) {
 function isQuickWin(pullRequest: PullRequestSummary) {
   const linesChanged = changedLineCount(pullRequest);
   return pullRequest.review.state === 'waiting'
-    && !hasCopilotFeedback(pullRequest)
+    && !hasUnresolvedFeedback(pullRequest)
     && !hasMergeConflicts(pullRequest)
     && isCoreTeamAuthor(pullRequest.author)
     && !targetsCurrentRelease(pullRequest)
@@ -897,7 +886,7 @@ function isQuickWin(pullRequest: PullRequestSummary) {
 
 function needsReview(pullRequest: PullRequestSummary) {
   return pullRequest.review.state === 'waiting'
-    && !hasCopilotFeedback(pullRequest)
+    && !hasUnresolvedFeedback(pullRequest)
     && !hasMergeConflicts(pullRequest)
     && isCoreTeamAuthor(pullRequest.author);
 }
@@ -1184,10 +1173,6 @@ function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {
     return { label: 'resolve feedback', tone: 'danger' };
   }
 
-  if (hasCopilotFeedback(pullRequest)) {
-    return { label: 'address feedback', tone: 'warning' };
-  }
-
   if (isApprovedButAging(pullRequest)) {
     return { label: 'land approval', tone: 'danger' };
   }
@@ -1270,7 +1255,9 @@ export function createTriageModel(
     .slice(0, 6);
 
   if (pullRequest.checks?.state === 'success') {
-    signals.push({ label: `CI ${formatCount(pullRequest.checks.successCount, 'check')} pass`, tone: 'success' });
+    const successCount = pullRequest.checks.successCount;
+    const label = successCount > 0 ? `CI ${formatCount(successCount, 'check')} pass` : 'CI passing';
+    signals.push({ label, tone: 'success' });
   }
 
   if (mergeableState === 'dirty') {

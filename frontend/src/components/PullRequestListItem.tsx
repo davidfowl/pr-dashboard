@@ -16,7 +16,6 @@ type PullRequestListItemProps = {
   bucketLabel: string;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest?: VisiblePullRequestHandler;
-  visibleChecksRefreshKey?: number;
   signalProps?: Omit<PullRequestSignalPillsProps, 'pullRequest'>;
   linkedIssues?: LinkedIssueSummary[];
   login?: string;
@@ -34,17 +33,12 @@ function PullRequestListItem({
   bucketLabel,
   onSelectPullRequest,
   onVisiblePullRequest,
-  visibleChecksRefreshKey = 0,
   signalProps,
   linkedIssues = [],
   login,
 }: PullRequestListItemProps) {
   const itemRef = useRef<HTMLElement | null>(null);
-  const lastForcedVisibleChecksRefreshRef = useRef(0);
   const checksState = pullRequest.checks?.state;
-  const shouldForceVisibleChecksRefresh =
-    visibleChecksRefreshKey > 0
-    && lastForcedVisibleChecksRefreshRef.current !== visibleChecksRefreshKey;
   const badge = checksState && checksState !== 'none' ? checkBadgeGlyphs[checksState] : null;
   const isSignedInAuthor = login ? sameLogin(pullRequest.author, login) : false;
   const isReadyToMerge = bucketLabel === 'Ready to merge';
@@ -65,18 +59,13 @@ function PullRequestListItem({
       !onVisiblePullRequest
       || pullRequest.state !== 'open'
       || !pullRequest.headSha
-      || (checksState !== 'unknown' && !shouldForceVisibleChecksRefresh)
+      || checksState !== 'unknown'
     ) {
       return;
     }
 
     const reportVisible = () => {
-      const accepted = onVisiblePullRequest(pullRequest.repository, pullRequest, {
-        forceRefresh: shouldForceVisibleChecksRefresh,
-      });
-      if (accepted) {
-        lastForcedVisibleChecksRefreshRef.current = visibleChecksRefreshKey;
-      }
+      onVisiblePullRequest(pullRequest.repository, pullRequest);
     };
 
     const node = itemRef.current;
@@ -100,7 +89,7 @@ function PullRequestListItem({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [checksState, onVisiblePullRequest, pullRequest, shouldForceVisibleChecksRefresh, visibleChecksRefreshKey]);
+  }, [checksState, onVisiblePullRequest, pullRequest]);
 
   return (
     <article
