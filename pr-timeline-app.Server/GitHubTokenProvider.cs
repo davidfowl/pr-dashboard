@@ -51,7 +51,7 @@ sealed class GitHubTokenProvider
     public void Logout()
     {
         suppressFallback = true;
-        LocalAuthFailureMessage = "Local token fallback is disabled for this browser session after sign-out.";
+        LocalAuthFailureMessage = "Local token fallback is disabled for this development backend after sign-out.";
         AuthGeneration++;
     }
 

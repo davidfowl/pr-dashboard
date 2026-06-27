@@ -1387,7 +1387,6 @@ public sealed class GitHubClientTests
     }
     [Fact]
     public async Task AuthenticatedAllowlistedRepositoryDoesNotUsePublicBaselineBeforeTokenLoad()
-    public async Task AuthenticatedAllowlistedRepositoryDoesNotUsePublicBaselineBeforeTokenLoad()
     {
         var cache = new MemoryCache(new MemoryCacheOptions());
         var publicCacheStore = new GitHubPublicCacheStore(cache);

@@ -96,10 +96,9 @@ function PullRequestListItem({
       ref={itemRef}
       className={[
         'attention-pr-row',
-        'compact-pr-action-marker-layout content-bounded-action-marker-layout',
+        'compact-pr-action-marker-layout',
         isReadyToMerge ? 'ready-to-merge-entry' : undefined,
-        isSignedInAuthor ? 'signed-in-user-entry signed-in-user-entry-full-bleed' : undefined,
-        isReadyToMerge ? 'ready-to-merge-entry-full-bleed' : undefined,
+        isSignedInAuthor ? 'signed-in-user-entry' : undefined,
       ].filter(Boolean).join(' ')}
     >
       <span className="attention-pr-number">

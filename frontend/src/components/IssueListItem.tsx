@@ -15,7 +15,7 @@ function IssueListItem({ issue, signalProps, login }: IssueListItemProps) {
   const isSignedInAuthor = login ? sameLogin(issue.author, login) : false;
 
   return (
-    <article className={`attention-issue-row${isSignedInAuthor ? ' signed-in-user-entry signed-in-user-entry-full-bleed' : ''}`}>
+    <article className={`attention-issue-row${isSignedInAuthor ? ' signed-in-user-entry' : ''}`}>
       <span className="attention-issue-number">
         <a
           className="attention-issue-number-link"

@@ -125,7 +125,6 @@ function DashboardView({
     || (!shipModeActive && !issuesModeActive && pullRequests.length > 0)
     || (issuesModeActive && issues.length > 0)
     || (shipModeActive && shipWeek !== null);
-  const visibleRefreshLoading = refreshing && !hasLoadedData;
   const refreshButtonLoading = refreshing;
   const visiblePullsLoading = pullsLoading && !hasLoadedData;
   const visibleIssuesLoading = issuesLoading && !hasLoadedData;
