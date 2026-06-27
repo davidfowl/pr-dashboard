@@ -16,7 +16,6 @@ It helps the team prioritize GitHub pull request work, focus on urgent reviews, 
 ## Run locally
 
 ```bash
-npm --prefix frontend ci
 aspire start
 ```
 
@@ -36,9 +35,9 @@ You can replace that list in the dashboard with any comma-separated `owner/repo`
 
 In development, the server can use an OAuth session, `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`. Outside development, configure `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`; the callback path is `/signin-github`. The OAuth flow requests no GitHub scopes, so it supports public repository API reads without requesting repository or organization permissions.
 
-## Agent schema
+## App-specific agent schema
 
-Automation can read `/api/agents/schema` to choose the dashboard mode and API endpoint by use case. The schema lists review, issue-focus, and ship-week modes, their use cases, required inputs, and the backing API paths. The dashboard footer links to the same schema.
+Automation can read the app-specific `/api/agents/schema` document to choose the dashboard mode and API endpoint by use case. The schema lists review, issue-focus, and ship-week modes, their use cases, required inputs, and the backing API paths. The dashboard footer links to the same schema.
 
 ## Unresolved feedback
 
