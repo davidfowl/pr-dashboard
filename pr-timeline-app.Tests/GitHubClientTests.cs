@@ -523,6 +523,83 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task GraphQlSnapshotSingleFlightSpansClientInstances()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var graphQlState = new GitHubPullRequestGraphQlState();
+        var repositoryName = new RepositoryName("example", "repo");
+        var graphQlRequests = 0;
+        var backgroundStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseBackground = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var route = async (HttpRequestMessage request, CancellationToken cancellationToken) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            Assert.Equal("graphql", path);
+            var body = await request.Content!.ReadAsStringAsync(cancellationToken);
+            Assert.Contains("PullRequestsForDashboard", body);
+            var requestNumber = Interlocked.Increment(ref graphQlRequests);
+            if (requestNumber == 2)
+            {
+                backgroundStarted.SetResult();
+                await releaseBackground.Task.WaitAsync(cancellationToken);
+            }
+
+            return Json(GraphQlPullRequestsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                GraphQlPullRequestNode(
+                    42,
+                    title: requestNumber == 1 ? "Last-good row" : "Fresh row",
+                    reviewState: "APPROVED",
+                    reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                    lastCommitAt: "2026-01-03T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: [])));
+        };
+        var firstClient = CreateClientFromRequests(route, cache, "unit-test-token", graphQlState: graphQlState);
+        var secondClient = CreateClientFromRequests(route, cache, "unit-test-token", graphQlState: graphQlState);
+
+        var seeded = await firstClient.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("Last-good row", Assert.Single(seeded.PullRequests).Title);
+
+        var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(
+            CreateTokenScopeForTestToken("unit-test-token"),
+            repositoryName,
+            "pulls-graphql",
+            "open");
+        cache.Remove(cacheKey);
+
+        var stale = await firstClient.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+        Assert.True(stale.Snapshot?.RefreshQueued);
+        await backgroundStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var deduped = await secondClient.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(deduped.Snapshot?.RefreshQueued);
+        Assert.True(deduped.Snapshot?.RefreshInProgress);
+        Assert.Equal(2, Volatile.Read(ref graphQlRequests));
+
+        releaseBackground.SetResult();
+        var fresh = await WaitForFreshGraphQlSnapshotAsync(secondClient, repositoryName, "open");
+        Assert.Equal("fresh-cache", fresh.Snapshot?.Source);
+        Assert.Equal("Fresh row", Assert.Single(fresh.PullRequests).Title);
+        Assert.Equal(2, Volatile.Read(ref graphQlRequests));
+    }
+
+    [Fact]
     public async Task GraphQlSnapshotForceRefreshDoesNotReturnLastGoodWhenLiveRefreshFails()
     {
         using var cache = new MemoryCache(new MemoryCacheOptions());
@@ -627,6 +704,74 @@ public sealed class GitHubClientTests
         Assert.Equal("live", refreshed.Snapshot?.Source);
         Assert.False(refreshed.Snapshot?.Stale);
         Assert.Equal("Fresh row", Assert.Single(refreshed.PullRequests).Title);
+        Assert.Equal(2, Volatile.Read(ref graphQlRequests));
+    }
+
+    [Fact]
+    public async Task GraphQlSnapshotMarksAgedLastGoodStaleWhenLiveFetchFails()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var graphQlRequests = 0;
+        var client = CreateClientFromRequests((request, _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            Assert.Equal("graphql", path);
+            var requestNumber = Interlocked.Increment(ref graphQlRequests);
+            if (requestNumber == 1)
+            {
+                return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                    hasNextPage: false,
+                    endCursor: null,
+                    GraphQlPullRequestNode(
+                        42,
+                        title: "Aged row",
+                        reviewState: "APPROVED",
+                        reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                        lastCommitAt: "2026-01-03T00:00:00Z",
+                        reviewThreadsHasNextPage: false,
+                        reviewThreadsEndCursor: null,
+                        reviewThreadsResolved: []))));
+            }
+
+            return Task.FromResult(Json("""{ "message": "GitHub unavailable" }""", HttpStatusCode.ServiceUnavailable));
+        }, cache, "unit-test-token");
+
+        var seeded = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("Aged row", Assert.Single(seeded.PullRequests).Title);
+
+        var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(
+            CreateTokenScopeForTestToken("unit-test-token"),
+            repositoryName,
+            "pulls-graphql",
+            "open");
+        IReadOnlyList<PullRequestSummary> agedPullRequests = seeded.PullRequests
+            .Select(pullRequest => pullRequest with { FetchedAt = DateTimeOffset.UtcNow.AddHours(-1) })
+            .ToArray();
+        await new GitHubResponseCache(cache, new GitHubPublicCacheStore(cache))
+            .SetAsync(
+                $"last-good:{cacheKey}",
+                agedPullRequests,
+                TimeSpan.FromHours(24),
+                TestContext.Current.CancellationToken);
+        cache.Remove(cacheKey);
+
+        var fallback = await client.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("last-good", fallback.Snapshot?.Source);
+        Assert.True(fallback.Snapshot?.Stale);
+        Assert.False(fallback.Snapshot?.RefreshInProgress);
+        Assert.False(fallback.Snapshot?.RefreshQueued);
+        Assert.NotNull(fallback.Snapshot?.Error);
+        Assert.Equal("Aged row", Assert.Single(fallback.PullRequests).Title);
         Assert.Equal(2, Volatile.Read(ref graphQlRequests));
     }
 
@@ -892,11 +1037,12 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
-    public async Task PublicCacheWarmupUsesServerTokenAndWritesListOnlyBaseline()
+    public async Task PublicCacheWarmupUsesServerTokenAndWritesRestAndGraphQlBaselines()
     {
         var cache = new MemoryCache(new MemoryCacheOptions());
         var requests = new ConcurrentQueue<(string Path, string? Token)>();
         var listRequests = 0;
+        var graphQlRequests = 0;
         var route = (HttpRequestMessage request, CancellationToken _) =>
         {
             var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
@@ -908,6 +1054,7 @@ public sealed class GitHubClientTests
                 "repos/example/repo" when token == "public-cache-token" => Json("""{ "visibility": "public" }"""),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" => Json(
                     PullRequestsJson([PullRequestJson(1, title: $"Public list {++listRequests}", body: "Fixes #404")])),
+                "graphql" when token == "public-cache-token" && ++graphQlRequests == 1 => Json(PublicGraphQlPullRequestsResponse()),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
             });
         };
@@ -923,15 +1070,23 @@ public sealed class GitHubClientTests
             "open",
             false,
             TestContext.Current.CancellationToken);
+        var graphQlSnapshot = await readClient.GetPullRequestsGraphQlSnapshotAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
 
         var pullRequest = Assert.Single(pullRequests);
         Assert.True(warmed);
         Assert.Equal("Public list 1", pullRequest.Title);
+        Assert.Equal("fresh-cache", graphQlSnapshot.Snapshot?.Source);
+        Assert.Equal("Public GraphQL list", Assert.Single(graphQlSnapshot.PullRequests).Title);
         Assert.Empty(pullRequest.LinkedIssues);
         Assert.Equal("waiting", pullRequest.Review.State);
         Assert.Equal("none", pullRequest.Checks.State);
         Assert.Equal(1, pullRequest.CommitCount);
         Assert.Equal(1, listRequests);
+        Assert.Equal(1, graphQlRequests);
         Assert.DoesNotContain(requests, request => request.Path.Contains("/reviews", StringComparison.Ordinal));
         Assert.DoesNotContain(requests, request => request.Path == "repos/example/repo/pulls/1");
         Assert.All(requests, request => Assert.Equal("public-cache-token", request.Token));
@@ -953,6 +1108,7 @@ public sealed class GitHubClientTests
                 "repos/example/repo" when token == "public-cache-token" => Json("""{ "visibility": "public" }"""),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" => Json(
                     PullRequestsJson([PullRequestJson(1, title: "Public list item", headSha: "abc123")])),
+                "graphql" when token == "public-cache-token" => Json(PublicGraphQlPullRequestsResponse()),
                 "repos/example/repo/pulls/1" when token == "public-cache-token" => Json(
                     PullRequestJson(1, headSha: "abc123", mergeableState: "clean")),
                 "repos/example/repo/issues/1/timeline?per_page=100" when token == "public-cache-token" => Json(
@@ -1030,6 +1186,7 @@ public sealed class GitHubClientTests
                 "repos/example/repo" when token == "public-cache-token" => Json("""{ "visibility": "public" }"""),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" => Json(
                     PullRequestsJson([PullRequestJson(1, title: "Public list item", headSha: "abc123")])),
+                "graphql" when token == "public-cache-token" => Json(PublicGraphQlPullRequestsResponse()),
                 "repos/example/repo/pulls/1" when token == "public-cache-token" => Json(
                     PullRequestJson(1, headSha: "abc123", mergeableState: "clean")),
                 "repos/example/repo/issues/1/timeline?per_page=100" when token == "public-cache-token" => Json(
@@ -1093,6 +1250,7 @@ public sealed class GitHubClientTests
                 "repos/example/repo" when token == "public-cache-token" => Json("""{ "visibility": "public" }"""),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" => Json(
                     PullRequestsJson([PullRequestJson(1, title: "Public list item", headSha: "abc123")])),
+                "graphql" when token == "public-cache-token" => Json(PublicGraphQlPullRequestsResponse()),
                 "repos/example/repo/pulls/1" when token == "public-cache-token" => Json(
                     PullRequestJson(1, headSha: "abc123", mergeableState: "clean")),
                 "repos/example/repo/issues/1/timeline?per_page=100" when token == "public-cache-token" => Json(
@@ -1154,6 +1312,7 @@ public sealed class GitHubClientTests
                 "repos/example/repo" when token == "public-cache-token" => Json("""{ "visibility": "public" }"""),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" => Json(
                     PullRequestsJson([PullRequestJson(1, title: "Public baseline")])),
+                "graphql" when token == "public-cache-token" => Json(PublicGraphQlPullRequestsResponse()),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "token-a" => Json(
                     PullRequestsJson([PullRequestJson(1, title: "Token enriched list")])),
                 "repos/example/repo/pulls/1/reviews?per_page=100" when token == "token-a" => Json("[]"),
@@ -1200,6 +1359,7 @@ public sealed class GitHubClientTests
                 "repos/example/repo" when token == "public-cache-token" => Json("""{ "visibility": "public" }"""),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" && ++listRequests == 1 => Json(
                     PullRequestsJson([PullRequestJson(1, title: "Last good public list")])),
+                "graphql" when token == "public-cache-token" => Json(PublicGraphQlPullRequestsResponse()),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
             });
         };
@@ -1235,6 +1395,7 @@ public sealed class GitHubClientTests
                 "repos/example/repo" when token == "public-cache-token" => Json($$"""{ "visibility": "{{visibility}}" }"""),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" => Json(
                     PullRequestsJson([PullRequestJson(1, title: $"Public list {++listRequests}")])),
+                "graphql" when token == "public-cache-token" => Json(PublicGraphQlPullRequestsResponse()),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
             });
         };
@@ -1284,6 +1445,7 @@ public sealed class GitHubClientTests
                 "repos/example/repo" when token == "public-cache-token" => Json($$"""{ "visibility": "{{visibility}}" }"""),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" => Json(
                     PullRequestsJson([PullRequestJson(1, title: "Public list")])),
+                "graphql" when token == "public-cache-token" => Json(PublicGraphQlPullRequestsResponse()),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "token-a" => Json(
                     """{ "message": "GitHub unavailable" }""",
                     HttpStatusCode.ServiceUnavailable),
@@ -1329,6 +1491,7 @@ public sealed class GitHubClientTests
                 "repos/example/repo" when token == "public-cache-token" => Json("""{ "visibility": "public" }"""),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" && ++listRequests == 1 => Json(
                     PullRequestsJson([PullRequestJson(1, title: "Last good public list")])),
+                "graphql" when token == "public-cache-token" => Json(PublicGraphQlPullRequestsResponse()),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
             });
         };
@@ -4831,7 +4994,7 @@ public sealed class GitHubClientTests
         var responseCache = new GitHubResponseCache(cache, publicCacheStore);
         var cacheScopeResolver = new GitHubCacheScopeResolver(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, options, cache);
 
-        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment(), reviewPolicyOptions ?? CreateReviewPolicyOptions("example/repo"));
+        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new GitHubPullRequestGraphQlState(), new TestHostEnvironment(), reviewPolicyOptions ?? CreateReviewPolicyOptions("example/repo"));
     }
 
     private static IOptions<GitHubReviewPolicyOptions> CreateReviewPolicyOptions(params string[] repositories) =>
@@ -4859,7 +5022,7 @@ public sealed class GitHubClientTests
         var responseCache = new GitHubResponseCache(cache, publicCacheStore);
         var cacheScopeResolver = new GitHubCacheScopeResolver(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, options, cache);
 
-        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment(), reviewPolicyOptions ?? CreateReviewPolicyOptions("example/repo"));
+        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new GitHubPullRequestGraphQlState(), new TestHostEnvironment(), reviewPolicyOptions ?? CreateReviewPolicyOptions("example/repo"));
     }
 
     private static async Task<WebApplication> CreatePullRequestTestAppAsync(
@@ -4889,6 +5052,7 @@ public sealed class GitHubClientTests
         builder.Services.AddSingleton<GitHubPublicCacheIdentity>();
         builder.Services.AddSingleton<GitHubPublicCacheStore>();
         builder.Services.AddSingleton<GitHubResponseCache>();
+        builder.Services.AddSingleton<GitHubPullRequestGraphQlState>();
         builder.Services.AddSingleton(sp => new GitHubCacheScopeResolver(
             sp.GetRequiredService<HttpClient>(),
             sp.GetRequiredService<GitHubTokenProvider>(),
@@ -4903,6 +5067,7 @@ public sealed class GitHubClientTests
             sp.GetRequiredService<GitHubPublicCacheStore>(),
             sp.GetRequiredService<GitHubCacheScopeResolver>(),
             sp.GetRequiredService<GitHubResponseCache>(),
+            sp.GetRequiredService<GitHubPullRequestGraphQlState>(),
             sp.GetRequiredService<IHostEnvironment>(),
             CreateReviewPolicyOptions()));
         builder.Services.AddSingleton<GitHubPullRequestService>();
@@ -4960,7 +5125,8 @@ public sealed class GitHubClientTests
         IMemoryCache cache,
         string token,
         IOptions<GitHubCacheWarmupOptions>? options = null,
-        GitHubPublicCacheStore? publicCacheStore = null)
+        GitHubPublicCacheStore? publicCacheStore = null,
+        GitHubPullRequestGraphQlState? graphQlState = null)
     {
         var httpClient = new HttpClient(new RequestStubGitHubHandler(route))
         {
@@ -4975,14 +5141,15 @@ public sealed class GitHubClientTests
         var responseCache = new GitHubResponseCache(cache, publicCacheStore);
         var cacheScopeResolver = new GitHubCacheScopeResolver(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, options, cache);
 
-        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment(), CreateReviewPolicyOptions("example/repo"));
+        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, graphQlState ?? new GitHubPullRequestGraphQlState(), new TestHostEnvironment(), CreateReviewPolicyOptions("example/repo"));
     }
 
     private static GitHubClient CreateAnonymousClientFromRequests(
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> route,
         IMemoryCache cache,
         IOptions<GitHubCacheWarmupOptions>? options = null,
-        GitHubPublicCacheStore? publicCacheStore = null)
+        GitHubPublicCacheStore? publicCacheStore = null,
+        GitHubPullRequestGraphQlState? graphQlState = null)
     {
         var httpClient = new HttpClient(new RequestStubGitHubHandler(route))
         {
@@ -4997,7 +5164,7 @@ public sealed class GitHubClientTests
         var responseCache = new GitHubResponseCache(cache, publicCacheStore);
         var cacheScopeResolver = new GitHubCacheScopeResolver(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, options, cache);
 
-        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, new TestHostEnvironment(), CreateReviewPolicyOptions("example/repo"));
+        return new GitHubClient(httpClient, tokenProvider, publicCacheIdentity, publicCacheStore, cacheScopeResolver, responseCache, graphQlState ?? new GitHubPullRequestGraphQlState(), new TestHostEnvironment(), CreateReviewPolicyOptions("example/repo"));
     }
 
     private static IOptions<GitHubCacheWarmupOptions> CreateWarmupOptions(
@@ -5294,6 +5461,20 @@ public sealed class GitHubClientTests
             }
             """;
     }
+
+    private static string PublicGraphQlPullRequestsResponse(string title = "Public GraphQL list") =>
+        GraphQlPullRequestsResponse(
+            hasNextPage: false,
+            endCursor: null,
+            GraphQlPullRequestNode(
+                1,
+                title: title,
+                reviewState: "APPROVED",
+                reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                lastCommitAt: "2026-01-03T00:00:00Z",
+                reviewThreadsHasNextPage: false,
+                reviewThreadsEndCursor: null,
+                reviewThreadsResolved: []));
 
     private static string ReviewThreadsResponse(bool hasNextPage, string? endCursor, bool[] isResolvedValues)
     {

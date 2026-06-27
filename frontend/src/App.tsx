@@ -77,7 +77,6 @@ type VisibleChecksRequestItem = {
 
 type LoadOptions = {
   forceRefresh?: boolean;
-  forceChecksRefresh?: boolean;
   preserveResults?: boolean;
 };
 
@@ -137,7 +136,7 @@ function App() {
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [shipWeekLoading, setShipWeekLoading] = useState(false);
   const [shipWeekSectionLoading, setShipWeekSectionLoading] = useState<ShipWeekLoadingState>(emptyShipWeekLoadingState);
-  const [visibleChecksRefreshKey, setVisibleChecksRefreshKey] = useState(0);
+  const visibleChecksRefreshKey = 0;
   const [loginLoading, setLoginLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issuesError, setIssuesError] = useState<string | null>(null);
@@ -458,7 +457,6 @@ function App() {
     setPullsLoading(true);
     setError(null);
     beginVisibleChecksRequestScope();
-    beginForceVisibleChecksRefresh(options);
     if (!options.preserveResults) {
       currentSelectionRef.current = null;
       setSelectedPullRequest(null);
@@ -624,7 +622,6 @@ function App() {
     setShipWeekSnapshotError(null);
     setShowShipWeekSnapshotDownload(false);
     beginVisibleChecksRequestScope();
-    beginForceVisibleChecksRefresh(options);
 
     try {
       const shipWeekParams = normalizeShipWeekRouteParams({ repositoryInput, milestoneInput, releaseBranchInput });
@@ -709,14 +706,6 @@ function App() {
   function beginVisibleChecksRequestScope() {
     cancelVisibleChecksRequests();
     visibleChecksAbortControllerRef.current = new AbortController();
-  }
-
-  function beginForceVisibleChecksRefresh(options: LoadOptions) {
-    if (!options.forceChecksRefresh) {
-      return;
-    }
-
-    setVisibleChecksRefreshKey((key) => key + 1);
   }
 
   function cancelVisibleChecksRequests() {
