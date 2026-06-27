@@ -891,7 +891,7 @@ select:focus-visible {
   width: min(86vw, 22rem);
   height: 100%;
   padding: calc(1rem + env(safe-area-inset-top, 0px)) calc(1rem + env(safe-area-inset-right, 0px))
-    calc(1rem + env(safe-area-inset-bottom, 0px));
+    calc(1rem + env(safe-area-inset-bottom, 0px)) 1rem;
   border-left: 1px solid var(--border-strong);
   background: var(--panel-strong);
   box-shadow: var(--shadow-strong);
