@@ -819,6 +819,55 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task GraphQlSnapshotUsesGraphQlFetchedAtForEmptyPublicRestFallback()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var graphQlState = new GitHubPullRequestGraphQlState();
+        var graphQlCacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(
+            GitHubCachePolicy.CreatePublicRepositoryScope(),
+            repositoryName,
+            "pulls-graphql",
+            "open");
+        var listRequests = 0;
+        var graphQlRequests = 0;
+        var route = (HttpRequestMessage request, CancellationToken _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            var token = request.Headers.Authorization?.Parameter;
+
+            return Task.FromResult(path switch
+            {
+                "repos/example/repo" when token == "public-cache-token" => Json("""{ "visibility": "public" }"""),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" && ++listRequests == 1 => Json("[]"),
+                "graphql" when token == "public-cache-token" && ++graphQlRequests == 1 => Json(GraphQlPullRequestsResponse(hasNextPage: false, endCursor: null)),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
+            });
+        };
+        var warmupClient = CreateClientFromRequests(route, cache, "token-a", graphQlState: graphQlState);
+        await warmupClient.TryPrewarmPublicPullRequestsAsync(
+            repositoryName,
+            "open",
+            TestContext.Current.CancellationToken);
+        var expectedFetchedAt = graphQlState.ListFetchedAt[graphQlCacheKey];
+        cache.Remove(graphQlCacheKey);
+        cache.Remove($"last-good:{graphQlCacheKey}");
+        var anonymousClient = CreateAnonymousClientFromRequests(route, cache, graphQlState: graphQlState);
+
+        var fallback = await anonymousClient.GetPullRequestsGraphQlSnapshotAsync(
+            repositoryName,
+            "open",
+            forceRefresh: false,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("shared-cache", fallback.Snapshot?.Source);
+        Assert.Empty(fallback.PullRequests);
+        Assert.Equal(expectedFetchedAt, fallback.Snapshot?.FetchedAt);
+        Assert.Equal(1, listRequests);
+        Assert.Equal(1, graphQlRequests);
+    }
+
+    [Fact]
     public async Task GraphQlSnapshotBacksOffQueueingAfterBackgroundRefreshFails()
     {
         using var cache = new MemoryCache(new MemoryCacheOptions());

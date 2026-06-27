@@ -31,7 +31,6 @@ import type {
   TimelineResponse,
   TimelineStats,
   TimelineStoryEntry,
-  VisiblePullRequestOptions,
 } from './types';
 import { colorForText } from './utils/format';
 import { readJson } from './utils/http';
@@ -72,7 +71,6 @@ type VisibleChecksRequestItem = {
   repository: string;
   number: number;
   headSha: string;
-  forceRefresh: boolean;
 };
 
 type LoadOptions = {
@@ -136,7 +134,6 @@ function App() {
   const [timelineLoading, setTimelineLoading] = useState(false);
   const [shipWeekLoading, setShipWeekLoading] = useState(false);
   const [shipWeekSectionLoading, setShipWeekSectionLoading] = useState<ShipWeekLoadingState>(emptyShipWeekLoadingState);
-  const visibleChecksRefreshKey = 0;
   const [loginLoading, setLoginLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [issuesError, setIssuesError] = useState<string | null>(null);
@@ -724,13 +721,11 @@ function App() {
   function requestVisibleChecks(
     repository: string,
     pullRequest: PullRequestSummary,
-    options: VisiblePullRequestOptions = {},
   ) {
-    const forceRefresh = options.forceRefresh === true;
     if (
       pullRequest.state !== 'open'
       || !pullRequest.headSha
-      || (pullRequest.checks?.state !== 'unknown' && !forceRefresh)
+      || pullRequest.checks?.state !== 'unknown'
     ) {
       return false;
     }
@@ -742,7 +737,6 @@ function App() {
 
     const queuedItem = visibleChecksQueueRef.current.get(key);
     if (queuedItem) {
-      queuedItem.forceRefresh ||= forceRefresh;
       return true;
     }
 
@@ -751,7 +745,6 @@ function App() {
       repository,
       number: pullRequest.number,
       headSha: pullRequest.headSha,
-      forceRefresh,
     });
 
     if (visibleChecksTimerRef.current === null) {
@@ -786,7 +779,7 @@ function App() {
         items,
         requestVersion,
         abortController.signal,
-        items.some((item) => item.forceRefresh))));
+      )));
   }
 
   async function loadVisibleChecks(
@@ -794,14 +787,10 @@ function App() {
     items: VisibleChecksRequestItem[],
     requestVersion: number,
     signal: AbortSignal,
-    forceRefresh: boolean,
   ) {
     const requestedKeys = items.map((item) => checksRequestKey(item.repository, item.number, item.headSha));
     try {
       const query = new URLSearchParams({ repo: repository });
-      if (forceRefresh) {
-        query.set('refresh', 'true');
-      }
       const body: PullRequestChecksRequest = {
         pullRequests: items.map((item) => ({
           number: item.number,
@@ -1232,7 +1221,6 @@ function App() {
             onSelectBucket={selectBucket}
             onSelectPullRequest={(repository, pullRequest) => void loadTimeline(repository, pullRequest)}
             onVisiblePullRequest={requestVisibleChecks}
-            visibleChecksRefreshKey={visibleChecksRefreshKey}
           />
         )}
 

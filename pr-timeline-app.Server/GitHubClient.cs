@@ -822,7 +822,7 @@ sealed partial class GitHubClient(
                     refreshInProgress: false,
                     refreshQueued: false,
                     error: GetPullRequestGraphQlRefreshError(cacheKey),
-                    cacheKey: publicRestFallback.CacheKey);
+                    cacheKey: cacheKey);
             }
 
             if (cacheOnly)
@@ -1046,10 +1046,10 @@ sealed partial class GitHubClient(
             }
             catch (Exception ex)
             {
-                graphQlState.RefreshErrors[cacheKey] = ex.Message;
                 // Back off before another refresh can be queued for this key so a polling client
                 // cannot drive a tight retry loop against a persistently failing upstream.
                 graphQlState.RefreshCooldownUntil[cacheKey] = DateTimeOffset.UtcNow + PullRequestGraphQlRefreshFailureCooldown;
+                graphQlState.RefreshErrors[cacheKey] = ex.Message;
             }
             finally
             {

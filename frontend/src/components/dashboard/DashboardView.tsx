@@ -67,7 +67,6 @@ type DashboardViewProps = {
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: VisiblePullRequestHandler;
-  visibleChecksRefreshKey: number;
 };
 
 function DashboardView({
@@ -118,7 +117,6 @@ function DashboardView({
   onSelectBucket,
   onSelectPullRequest,
   onVisiblePullRequest,
-  visibleChecksRefreshKey,
 }: DashboardViewProps) {
   const shipModeActive = dashboardMode === 'ship';
   const issuesModeActive = dashboardMode === 'issues';
@@ -182,7 +180,6 @@ function DashboardView({
               onDownloadSnapshot={onDownloadShipWeekSnapshot}
               onSelectPullRequest={onSelectPullRequest}
               onVisiblePullRequest={onVisiblePullRequest}
-              visibleChecksRefreshKey={visibleChecksRefreshKey}
             />
           ) : issuesModeActive ? (
             <IssuesOverview
@@ -204,7 +201,6 @@ function DashboardView({
               onSelectBucket={onSelectBucket}
               onSelectPullRequest={onSelectPullRequest}
               onVisiblePullRequest={onVisiblePullRequest}
-              visibleChecksRefreshKey={visibleChecksRefreshKey}
             />
           )}
         </section>
