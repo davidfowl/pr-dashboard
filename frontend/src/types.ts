@@ -110,14 +110,9 @@ export type ReviewLoadPerfStats = {
   staleSnapshotCount: number;
 };
 
-export type VisiblePullRequestOptions = {
-  forceRefresh?: boolean;
-};
-
 export type VisiblePullRequestHandler = (
   repository: string,
   pullRequest: PullRequestSummary,
-  options?: VisiblePullRequestOptions,
 ) => boolean;
 
 export type IssueListResponse = {

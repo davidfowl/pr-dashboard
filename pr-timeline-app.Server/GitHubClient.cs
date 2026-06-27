@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
@@ -15,6 +14,7 @@ sealed partial class GitHubClient(
     GitHubPublicCacheStore publicCacheStore,
     GitHubCacheScopeResolver cacheScopeResolver,
     GitHubResponseCache cache,
+    GitHubPullRequestGraphQlState graphQlState,
     IHostEnvironment environment,
     IOptions<GitHubReviewPolicyOptions> reviewPolicyOptions)
 {
@@ -23,6 +23,7 @@ sealed partial class GitHubClient(
     private static readonly TimeSpan LastGoodCacheDuration = TimeSpan.FromHours(24);
     private static readonly TimeSpan MaxStaleDisplayAge = TimeSpan.FromMinutes(10);
     private const int PullRequestPageSize = 100;
+    private const int GraphQlLabelPageSize = 100;
     private const int PullRequestStreamBatchSize = 20;
     private const int MaxLinkedIssuesPerPullRequest = 10;
     private static readonly string PullRequestsGraphQlQuery =
@@ -32,7 +33,7 @@ sealed partial class GitHubClient(
         "pageInfo{hasNextPage endCursor}" +
         "nodes{" +
         "number title state isDraft author{login ... on User{databaseId}} url createdAt updatedAt " +
-        "labels(first:20){nodes{name}} " +
+        "labels(first:" + GraphQlLabelPageSize + "){nodes{name}} " +
         "assignees(first:10){nodes{login databaseId}} " +
         "reviewRequests(first:100){nodes{requestedReviewer{__typename ... on User{login databaseId}}}} " +
         "milestone{title} " +
@@ -41,7 +42,7 @@ sealed partial class GitHubClient(
         "additions deletions changedFiles headRefOid headRefName baseRefName mergeable " +
         "reviews(last:100){pageInfo{hasPreviousPage startCursor}nodes{author{login}state submittedAt}} " +
         "reviewThreads(first:" + PullRequestPageSize + "){pageInfo{hasNextPage endCursor}nodes{isResolved}} " +
-        "closingIssuesReferences(first:" + MaxLinkedIssuesPerPullRequest + "){nodes{number title url repository{nameWithOwner} labels(first:20){nodes{name}} milestone{title}}}" +
+        "closingIssuesReferences(first:" + MaxLinkedIssuesPerPullRequest + "){nodes{number title url repository{nameWithOwner} labels(first:" + GraphQlLabelPageSize + "){nodes{name}} milestone{title}}}" +
         "}}}}";
     private const int FocusIssueGraphQlBatchSize = 20;
     private const int FocusIssueCrossReferenceEventLimit = 20;
@@ -60,17 +61,6 @@ sealed partial class GitHubClient(
     private const string CtiTeamSearchTerm = "AspireE2E";
     private static readonly SemaphoreSlim s_githubRequestThrottle = new(MaxConcurrentGitHubRequests, MaxConcurrentGitHubRequests);
     private static readonly SemaphoreSlim s_checksFetchThrottle = new(MaxConcurrentChecksFetches, MaxConcurrentChecksFetches);
-    private readonly ConcurrentDictionary<string, Task> _pullRequestGraphQlRefreshTasks = new(StringComparer.Ordinal);
-    private readonly ConcurrentDictionary<string, string> _pullRequestGraphQlRefreshErrors = new(StringComparer.Ordinal);
-    // The fetched-at timestamp is normally derived from the cached PR summaries, but an empty list
-    // (a repo/state that legitimately has zero PRs) carries none, which would otherwise fall back to
-    // "now" on every read and make empty cached results look perpetually fresh. Remember when each
-    // cache key was last fetched so empty lists keep correct age semantics for the lifetime of the
-    // process (consistent with the in-memory single-flight/error state above).
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _pullRequestGraphQlListFetchedAt = new(StringComparer.Ordinal);
-    // When a background refresh fails, hold off re-queueing for this key until the cooldown elapses so
-    // a polling client cannot spin up a tight retry loop against a persistently failing upstream.
-    private readonly ConcurrentDictionary<string, DateTimeOffset> _pullRequestGraphQlRefreshCooldownUntil = new(StringComparer.Ordinal);
     private static readonly TimeSpan PullRequestGraphQlRefreshFailureCooldown = TimeSpan.FromSeconds(30);
 
     private readonly HashSet<string> _conversationResolutionRepositories =
@@ -568,7 +558,7 @@ sealed partial class GitHubClient(
         }
 
         var scope = GitHubCachePolicy.CreatePublicRepositoryScope();
-        var cacheKey = CreateRepositoryCacheKey(
+        var restCacheKey = CreateRepositoryCacheKey(
             scope,
             repositoryName,
             "pulls",
@@ -581,7 +571,22 @@ sealed partial class GitHubClient(
             cacheOnly: false,
             transientFallbackCacheKey: null,
             cancellationToken);
-        await publicCacheStore.TrackAsync(repositoryName, cacheKey, cancellationToken);
+        await publicCacheStore.TrackAsync(repositoryName, restCacheKey, cancellationToken);
+
+        var graphQlCacheKey = CreateRepositoryCacheKey(
+            scope,
+            repositoryName,
+            "pulls-graphql",
+            state);
+        await GetPullRequestsGraphQlAsync(
+            repositoryName,
+            state,
+            forceRefresh: true,
+            scope,
+            cacheOnly: false,
+            transientFallbackCacheKey: null,
+            cancellationToken);
+        await publicCacheStore.TrackAsync(repositoryName, graphQlCacheKey, cancellationToken);
         return true;
     }
 
@@ -666,7 +671,7 @@ sealed partial class GitHubClient(
                     state,
                     scope,
                     cancellationToken);
-                _pullRequestGraphQlListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
+                graphQlState.ListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
                 return result;
             },
             cancellationToken,
@@ -695,10 +700,10 @@ sealed partial class GitHubClient(
                 state,
                 scope,
                 cancellationToken);
-            _pullRequestGraphQlListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
+            graphQlState.ListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
             await SetLastGoodAsync(cacheKey, livePullRequests, cancellationToken);
             await SetCacheEntryAsync(cacheKey, livePullRequests, CacheDurationForScope(scope), cancellationToken);
-            _pullRequestGraphQlRefreshErrors.TryRemove(cacheKey, out var ignoredError);
+            graphQlState.RefreshErrors.TryRemove(cacheKey, out var ignoredError);
             _ = ignoredError;
             return CreatePullRequestListResponse(
                 repositoryName,
@@ -802,30 +807,147 @@ sealed partial class GitHubClient(
                 }
             }
 
+            var publicRestFallback = await GetPublicRestPullRequestSnapshotFallbackAsync(
+                scope,
+                repositoryName,
+                state,
+                cancellationToken);
+            if (publicRestFallback.Found)
+            {
+                return CreatePullRequestListResponse(
+                    repositoryName,
+                    publicRestFallback.PullRequests!,
+                    publicRestFallback.Source,
+                    publicRestFallback.Stale,
+                    refreshInProgress: false,
+                    refreshQueued: false,
+                    error: GetPullRequestGraphQlRefreshError(cacheKey),
+                    cacheKey: cacheKey);
+            }
+
             if (cacheOnly)
             {
                 throw CreatePublicCacheUnavailableException();
             }
         }
 
-        var pullRequests = await GetPullRequestsGraphQlAsync(
-            repositoryName,
-            state,
-            refreshCache,
+        try
+        {
+            var pullRequests = await FetchPullRequestGraphQlSummariesAsync(
+                repositoryName,
+                state,
+                scope,
+                cancellationToken);
+            graphQlState.ListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
+            await SetLastGoodAsync(cacheKey, pullRequests, cancellationToken);
+            await SetCacheEntryAsync(cacheKey, pullRequests, CacheDurationForScope(scope), cancellationToken);
+            graphQlState.RefreshErrors.TryRemove(cacheKey, out _);
+            graphQlState.RefreshCooldownUntil.TryRemove(cacheKey, out _);
+            return CreatePullRequestListResponse(
+                repositoryName,
+                pullRequests,
+                "live",
+                stale: false,
+                refreshInProgress: false,
+                refreshQueued: false,
+                error: null,
+                cacheKey: cacheKey);
+        }
+        catch (Exception ex) when (IsTransientGitHubFailure(ex, cancellationToken))
+        {
+            var fallback = await GetPullRequestGraphQlTransientFallbackAsync(
+                cacheKey,
+                transientFallbackCacheKey,
+                cancellationToken);
+            if (!fallback.Found)
+            {
+                throw;
+            }
+
+            graphQlState.RefreshErrors[cacheKey] = ex.Message;
+            return CreatePullRequestListResponse(
+                repositoryName,
+                fallback.PullRequests!,
+                fallback.Source,
+                fallback.Stale,
+                refreshInProgress: false,
+                refreshQueued: false,
+                error: ex.Message,
+                cacheKey: fallback.CacheKey);
+        }
+    }
+
+    private async Task<PullRequestGraphQlSnapshotFallback> GetPublicRestPullRequestSnapshotFallbackAsync(
+        GitHubCacheScope scope,
+        RepositoryName repositoryName,
+        string state,
+        CancellationToken cancellationToken)
+    {
+        if (!scope.IsShared)
+        {
+            return default;
+        }
+
+        var cacheKey = CreateRepositoryCacheKey(
             scope,
-            cacheOnly,
+            repositoryName,
+            "pulls",
+            state);
+        var cached = await GetCachedFallbackAsync<IReadOnlyList<PullRequestSummary>>(
+            cacheKey,
+            cancellationToken);
+        if (cached is { Found: true, Value: not null })
+        {
+            return new PullRequestGraphQlSnapshotFallback(cached.Value, "shared-cache", false, cacheKey);
+        }
+
+        var lastGood = await GetLastGoodAsync<IReadOnlyList<PullRequestSummary>>(
+            cacheKey,
+            cancellationToken);
+        return lastGood is { Found: true, Value: not null }
+            ? new PullRequestGraphQlSnapshotFallback(lastGood.Value, "last-good", true, cacheKey)
+            : default;
+    }
+
+    private async Task<PullRequestGraphQlSnapshotFallback> GetPullRequestGraphQlTransientFallbackAsync(
+        string cacheKey,
+        string? transientFallbackCacheKey,
+        CancellationToken cancellationToken)
+    {
+        var cachedFallback = await GetCachedFallbackAsync<IReadOnlyList<PullRequestSummary>>(
             transientFallbackCacheKey,
             cancellationToken);
-        _pullRequestGraphQlRefreshErrors.TryRemove(cacheKey, out _);
-        return CreatePullRequestListResponse(
-            repositoryName,
-            pullRequests,
-            "live",
-            stale: false,
-            refreshInProgress: false,
-            refreshQueued: false,
-            error: null,
-            cacheKey: cacheKey);
+        if (cachedFallback is { Found: true, Value: not null } && transientFallbackCacheKey is not null)
+        {
+            return new PullRequestGraphQlSnapshotFallback(cachedFallback.Value, "shared-cache", false, transientFallbackCacheKey);
+        }
+
+        if (transientFallbackCacheKey is not null)
+        {
+            var fallbackLastGood = await GetLastGoodAsync<IReadOnlyList<PullRequestSummary>>(
+                transientFallbackCacheKey,
+                cancellationToken);
+            if (fallbackLastGood is { Found: true, Value: not null })
+            {
+                return new PullRequestGraphQlSnapshotFallback(fallbackLastGood.Value, "last-good", true, transientFallbackCacheKey);
+            }
+        }
+
+        var lastGood = await GetLastGoodAsync<IReadOnlyList<PullRequestSummary>>(
+            cacheKey,
+            cancellationToken);
+        return lastGood is { Found: true, Value: not null }
+            ? new PullRequestGraphQlSnapshotFallback(lastGood.Value, "last-good", true, cacheKey)
+            : default;
+    }
+
+    private readonly record struct PullRequestGraphQlSnapshotFallback(
+        IReadOnlyList<PullRequestSummary>? PullRequests,
+        string Source,
+        bool Stale,
+        string CacheKey)
+    {
+        public bool Found => PullRequests is not null;
     }
 
     private async Task<IReadOnlyList<PullRequestSummary>> FetchPullRequestGraphQlSummariesAsync(
@@ -898,7 +1020,7 @@ sealed partial class GitHubClient(
         // Reserve the slot synchronously before starting any work so concurrent callers
         // for the same key cannot each launch a background fetch (true single-flight).
         var reservation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_pullRequestGraphQlRefreshTasks.TryAdd(cacheKey, reservation.Task))
+        if (!graphQlState.RefreshTasks.TryAdd(cacheKey, reservation.Task))
         {
             return false;
         }
@@ -912,27 +1034,27 @@ sealed partial class GitHubClient(
                     state,
                     token,
                     CancellationToken.None);
-                _pullRequestGraphQlListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
+                graphQlState.ListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
                 await SetLastGoodAsync(cacheKey, pullRequests, CancellationToken.None);
                 await SetCacheEntryAsync(
                     cacheKey,
                     pullRequests,
                     CacheDurationForScope(scope),
                     CancellationToken.None);
-                _pullRequestGraphQlRefreshErrors.TryRemove(cacheKey, out _);
-                _pullRequestGraphQlRefreshCooldownUntil.TryRemove(cacheKey, out _);
+                graphQlState.RefreshErrors.TryRemove(cacheKey, out _);
+                graphQlState.RefreshCooldownUntil.TryRemove(cacheKey, out _);
             }
             catch (Exception ex)
             {
-                _pullRequestGraphQlRefreshErrors[cacheKey] = ex.Message;
                 // Back off before another refresh can be queued for this key so a polling client
                 // cannot drive a tight retry loop against a persistently failing upstream.
-                _pullRequestGraphQlRefreshCooldownUntil[cacheKey] = DateTimeOffset.UtcNow + PullRequestGraphQlRefreshFailureCooldown;
+                graphQlState.RefreshCooldownUntil[cacheKey] = DateTimeOffset.UtcNow + PullRequestGraphQlRefreshFailureCooldown;
+                graphQlState.RefreshErrors[cacheKey] = ex.Message;
             }
             finally
             {
                 // Remove only our own reservation so we can never evict a newer in-flight refresh.
-                _pullRequestGraphQlRefreshTasks.TryRemove(new KeyValuePair<string, Task>(cacheKey, reservation.Task));
+                graphQlState.RefreshTasks.TryRemove(new KeyValuePair<string, Task>(cacheKey, reservation.Task));
                 reservation.SetResult();
             }
         });
@@ -953,7 +1075,7 @@ sealed partial class GitHubClient(
             return false;
         }
 
-        if (_pullRequestGraphQlRefreshCooldownUntil.TryGetValue(cacheKey, out var cooldownUntil)
+        if (graphQlState.RefreshCooldownUntil.TryGetValue(cacheKey, out var cooldownUntil)
             && cooldownUntil > DateTimeOffset.UtcNow)
         {
             // A recent background refresh for this key failed; skip queueing until the cooldown
@@ -964,7 +1086,7 @@ sealed partial class GitHubClient(
         var token = await GetGraphQlTokenAsync(scope.RequestAuthorization, cancellationToken);
         if (token is null)
         {
-            _pullRequestGraphQlRefreshErrors[cacheKey] = scope.RequestAuthorization == GitHubRequestAuthorization.PublicCacheToken
+            graphQlState.RefreshErrors[cacheKey] = scope.RequestAuthorization == GitHubRequestAuthorization.PublicCacheToken
                 ? "GitHub authentication is required. Configure the public cache identity token."
                 : "GitHub authentication is required. Sign in with GitHub.";
             return false;
@@ -974,10 +1096,10 @@ sealed partial class GitHubClient(
     }
 
     private bool IsPullRequestGraphQlRefreshInProgress(string cacheKey) =>
-        _pullRequestGraphQlRefreshTasks.ContainsKey(cacheKey);
+        graphQlState.RefreshTasks.ContainsKey(cacheKey);
 
     private string? GetPullRequestGraphQlRefreshError(string cacheKey) =>
-        _pullRequestGraphQlRefreshErrors.TryGetValue(cacheKey, out var error) ? error : null;
+        graphQlState.RefreshErrors.TryGetValue(cacheKey, out var error) ? error : null;
 
     private PullRequestListResponse CreatePullRequestListResponse(
         RepositoryName repositoryName,
@@ -1005,7 +1127,7 @@ sealed partial class GitHubClient(
         // fetched rather than "now" -- otherwise an empty cached result would look fresh on every read
         // and defeat the max-stale-age gate. UtcNow is only used when nothing has been tracked yet
         // (e.g. immediately after a process restart, before the first fetch completes).
-        var emptyListFetchedAt = _pullRequestGraphQlListFetchedAt.TryGetValue(cacheKey, out var tracked)
+        var emptyListFetchedAt = graphQlState.ListFetchedAt.TryGetValue(cacheKey, out var tracked)
             ? tracked
             : DateTimeOffset.UtcNow;
         var fetchedAt = pullRequests

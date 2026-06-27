@@ -30,7 +30,6 @@ type QueueOverviewProps = {
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: VisiblePullRequestHandler;
-  visibleChecksRefreshKey: number;
 };
 
 const pullRequestListLimit = 10;
@@ -48,7 +47,6 @@ function QueueOverview({
   onSelectBucket,
   onSelectPullRequest,
   onVisiblePullRequest,
-  visibleChecksRefreshKey,
 }: QueueOverviewProps) {
   const [showAllCoreMembers, setShowAllCoreMembers] = useState(false);
   const [showFilterInfo, setShowFilterInfo] = useState(false);
@@ -188,7 +186,6 @@ function QueueOverview({
             emptyState={loading ? 'Loading review queue...' : 'No PRs with recent action-relevant activity need attention in the current results.'}
             onSelectPullRequest={onSelectPullRequest}
             onVisiblePullRequest={onVisiblePullRequest}
-            visibleChecksRefreshKey={visibleChecksRefreshKey}
           />
         )}
       </section>
@@ -236,7 +233,6 @@ function QueueOverview({
           onSelectBucket={onSelectBucket}
           onSelectPullRequest={onSelectPullRequest}
           onVisiblePullRequest={onVisiblePullRequest}
-          visibleChecksRefreshKey={visibleChecksRefreshKey}
         />
       )}
     </section>

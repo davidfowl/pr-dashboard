@@ -18,7 +18,6 @@ type AttentionBoardProps = {
   onSelectBucket: (bucketId: string) => void;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest: VisiblePullRequestHandler;
-  visibleChecksRefreshKey: number;
 };
 
 type ReviewBucketTile = DrilldownTile & {
@@ -44,7 +43,6 @@ function AttentionBoard({
   onSelectBucket,
   onSelectPullRequest,
   onVisiblePullRequest,
-  visibleChecksRefreshKey,
 }: AttentionBoardProps) {
   const [copyStatus, setCopyStatus] = useState<CopyStatus | null>(null);
   const bucketTiles = createReviewBucketTiles(buckets, loading, hasLoaded);
@@ -176,7 +174,6 @@ function AttentionBoard({
                 preserveOrder={bucket.preserveItemOrder}
                 onSelectPullRequest={onSelectPullRequest}
                 onVisiblePullRequest={onVisiblePullRequest}
-                visibleChecksRefreshKey={visibleChecksRefreshKey}
               />
             </section>
           );
