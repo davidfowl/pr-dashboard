@@ -933,7 +933,10 @@ public sealed class GitHubClientTests
         await WaitForGraphQlStateRemovalAsync(
             graphQlState,
             cacheKey,
-            () => cache.TryGetValue($"last-good:{cacheKey}", out _));
+            () =>
+            {
+                cache.TryGetValue($"last-good:{cacheKey}", out _);
+            });
     }
 
     [Fact]
