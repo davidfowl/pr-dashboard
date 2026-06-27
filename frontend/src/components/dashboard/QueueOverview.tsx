@@ -35,7 +35,7 @@ type QueueOverviewProps = {
 
 const pullRequestListLimit = 10;
 const queueOverviewHelp = 'Needs attention is the focused action queue: each PR appears once under its highest-priority actionable lane when that lane has fresh activity. Activity is lane-specific, such as the latest approval/review for merge lanes, the newest commit for re-review, or the PR update time for review-needed work. PRs with failing CI are excluded until their checks are green again.';
-const needsAttentionHelp = 'Being in Needs attention means the PR has an actionable reason for someone to review, respond, or merge, and that reason was refreshed in the last 14 days. PRs with failing CI are excluded until their checks pass, and standalone signal lanes like stalled, docs, automation, community, drafts, merge conflicts, and Copilot feedback stay out of this top queue.';
+const needsAttentionHelp = 'Being in Needs attention means the PR has an actionable reason for someone to review, respond, or merge, and that reason was refreshed in the last 14 days. PRs with failing CI are excluded until their checks pass, and standalone signal lanes like stalled, docs, automation, community, drafts, merge conflicts, and unresolved feedback stay out of this top queue.';
 
 function QueueOverview({
   counts,

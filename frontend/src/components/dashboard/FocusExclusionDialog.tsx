@@ -28,8 +28,8 @@ const exclusionReasons: ExclusionReason[] = [
     detail: 'A conflicting PR is waiting on the author to rebase, not on a reviewer, so it moves to the "Merge conflicts" bucket instead.',
   },
   {
-    title: 'It has unresolved Copilot review feedback',
-    detail: 'A PR with open feedback from the Copilot review bot is treated as waiting on the author and routes to the "Copilot feedback" bucket.',
+    title: 'It has unresolved review feedback',
+    detail: 'A PR with open review threads (human or Copilot) is treated as waiting on the author to resolve them and routes to the "Unresolved feedback" bucket.',
   },
   {
     title: 'It belongs to a specialized lane',

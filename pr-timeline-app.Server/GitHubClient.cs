@@ -3335,26 +3335,22 @@ sealed partial class GitHubClient(
                 latestByReviewer.Any(review => review.State == "COMMENTED") ? "reviewed" :
                 "waiting";
 
-            // Unresolved review threads matter in two cases, both of which need GraphQL (thread
-            // resolution is GraphQL-only) and a token:
+            // Unresolved review threads (count) need GraphQL (thread resolution is GraphQL-only) and
+            // a token. They surface a unified "unresolved feedback" signal that pulls a PR out of the
+            // Needs-attention queue — the author has feedback to address, so it is not reviewer-ready.
+            // Fetch the count for any PR that has actually been reviewed (approved or commented), plus
+            // waiting PRs the Copilot bot reviewed (its reviews are filtered out of the human review
+            // state, so the PR still reads as "waiting").
             //
-            //  1. Approved PRs in repositories whose branch protection requires conversation
-            //     resolution — there an unresolved thread blocks merge. Enrollment is configured
-            //     per repo (GitHubReviewPolicy:RequireConversationResolution) because the
-            //     branch-protection API needs admin access this app's tokens don't have.
-            //  2. Waiting PRs that the Copilot review bot has commented on. The bot's reviews are
-            //     filtered out of the human review state, so such a PR looks like it "needs a
-            //     reviewer" when it is really waiting on the author to address Copilot's feedback.
-            //     Surfacing the unresolved thread count lets the dashboard route it to a
-            //     "Copilot feedback" lane instead of the needs-review queue.
-            //
-            // The Copilot case is bounded to waiting PRs the bot actually reviewed to keep the
-            // extra GraphQL calls off PRs that have no review threads at all.
+            // Skipped: plain awaiting-review PRs (no review yet, so no threads) and changes-requested
+            // PRs (already author-blocked in the "Author response" lane). This keeps the extra GraphQL
+            // calls off PRs where the count would add nothing.
             var copilotReviewed = reviews
                 .Select(ReviewEvent.FromDto)
                 .Any(review => IsCopilotReviewer(review.Actor));
             var shouldCountUnresolvedThreads =
-                (state == "approved" && RequiresConversationResolution(repositoryName))
+                state == "approved"
+                || state == "reviewed"
                 || (state == "waiting" && copilotReviewed);
             var unresolvedThreadCount = shouldCountUnresolvedThreads
                 ? await GetUnresolvedReviewThreadCountAsync(
@@ -3373,7 +3369,10 @@ sealed partial class GitHubClient(
                 CommentedReviewCount: humanReviews.Count(review => review.State == "COMMENTED"),
                 LastApprovedAt: humanReviews.LastOrDefault(review => review.State == "APPROVED")?.SubmittedAt,
                 LastReviewedAt: humanReviews.LastOrDefault()?.SubmittedAt,
-                UnresolvedThreadCount: unresolvedThreadCount);
+                UnresolvedThreadCount: unresolvedThreadCount,
+                // Only repos that require conversation resolution treat an unresolved thread as a
+                // merge blocker; elsewhere the signal is informational and must not gate Ready to merge.
+                RequiresConversationResolution: RequiresConversationResolution(repositoryName));
         },
             cancellationToken) ?? ReviewStatus.Waiting;
     }

@@ -65,6 +65,7 @@ export type ReviewStatus = {
   lastApprovedAt?: string | null;
   lastReviewedAt?: string | null;
   unresolvedThreadCount: number;
+  requiresConversationResolution: boolean;
 };
 
 export type CheckState = 'unknown' | 'success' | 'failure' | 'pending' | 'none';
