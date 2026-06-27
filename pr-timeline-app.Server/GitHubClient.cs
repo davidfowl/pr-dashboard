@@ -1239,9 +1239,11 @@ sealed partial class GitHubClient(
             latestByReviewer.Any(review => review.State == "APPROVED") ? "approved" :
             latestByReviewer.Any(review => review.State == "COMMENTED") ? "reviewed" :
             "waiting";
+        var requiresConversationResolution = RequiresConversationResolution(repositoryName);
         var copilotReviewed = reviewEvents.Any(review => IsCopilotReviewer(review.Actor));
         var shouldCountUnresolvedThreads =
-            (state == "approved" && RequiresConversationResolution(repositoryName))
+            state == "approved"
+            || state == "reviewed"
             || (state == "waiting" && copilotReviewed);
         var unresolvedThreadCount = shouldCountUnresolvedThreads
             ? await CountUnresolvedReviewThreadsFromGraphQlAsync(
@@ -1261,7 +1263,8 @@ sealed partial class GitHubClient(
             CommentedReviewCount: humanReviews.Count(review => review.State == "COMMENTED"),
             LastApprovedAt: humanReviews.LastOrDefault(review => review.State == "APPROVED")?.SubmittedAt,
             LastReviewedAt: humanReviews.LastOrDefault()?.SubmittedAt,
-            UnresolvedThreadCount: unresolvedThreadCount);
+            UnresolvedThreadCount: unresolvedThreadCount,
+            RequiresConversationResolution: requiresConversationResolution);
     }
 
     public IAsyncEnumerable<PullRequestSummary> StreamPullRequestsAsync(
