@@ -186,6 +186,7 @@ function QueueOverview({
             emptyState={loading ? 'Loading review queue...' : 'No PRs with recent action-relevant activity need attention in the current results.'}
             onSelectPullRequest={onSelectPullRequest}
             onVisiblePullRequest={onVisiblePullRequest}
+            login={login}
           />
         )}
       </section>
@@ -233,6 +234,7 @@ function QueueOverview({
           onSelectBucket={onSelectBucket}
           onSelectPullRequest={onSelectPullRequest}
           onVisiblePullRequest={onVisiblePullRequest}
+          login={login}
         />
       )}
     </section>

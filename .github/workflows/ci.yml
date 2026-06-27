@@ -36,7 +36,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
           dotnet-quality: preview
 
       - name: Setup Node.js
@@ -69,23 +69,26 @@ jobs:
 
           exit "$exit_code"
 
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci --no-audit --no-fund
+
       - name: Check Aspire environment
         run: aspire doctor
 
-      - name: Install frontend dependencies
-        run: npm --prefix frontend ci --no-audit --no-fund
+      - name: Check Aspire AppHost
+        run: aspire publish --list-steps --non-interactive
 
       - name: Test frontend
         run: npm --prefix frontend test
 
       - name: Restore
-        run: dotnet restore pr-timeline-app.slnx --nologo
+        run: dotnet restore pr-timeline-app.Tests/pr-timeline-app.Tests.csproj --nologo
 
       - name: Build
-        run: dotnet build pr-timeline-app.slnx --no-restore --nologo
+        run: dotnet build pr-timeline-app.Tests/pr-timeline-app.Tests.csproj --no-restore --nologo
 
       - name: Test
-        run: dotnet test pr-timeline-app.slnx --no-build --nologo --logger "console;verbosity=detailed"
+        run: dotnet test pr-timeline-app.Tests/pr-timeline-app.Tests.csproj --no-build --nologo --logger "console;verbosity=detailed"
 
       - name: Collect Aspire diagnostics
         if: failure()

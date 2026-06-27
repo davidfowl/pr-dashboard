@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import LoadingBadge from '../LoadingBadge';
 import LoadingMetric from '../LoadingMetric';
 
@@ -36,13 +36,24 @@ function TileDrilldown<TId extends string, TTile extends DrilldownTile<TId>>({
   onSelect,
   renderDetails,
 }: TileDrilldownProps<TId, TTile>) {
+  const selectedButtonRef = useRef<HTMLButtonElement | null>(null);
+  const selectedPanelRef = useRef<HTMLDivElement | null>(null);
   const selectedTile = tiles.find((tile) => tile.id === selectedId) ?? tiles[0];
+  const activeId = selectedTile?.id;
 
-  if (!selectedTile) {
+  useEffect(() => {
+    if (!selectedId || selectedId !== activeId) {
+      return;
+    }
+
+    selectedButtonRef.current?.focus({ preventScroll: true });
+    selectedButtonRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    selectedPanelRef.current?.scrollIntoView?.({ block: 'start', inline: 'nearest' });
+  }, [activeId, selectedId]);
+
+  if (!selectedTile || !activeId) {
     return null;
   }
-
-  const activeId = selectedTile.id;
 
   return (
     <section className={['tile-drilldown', className].filter(Boolean).join(' ')} aria-label={ariaLabel}>
@@ -50,6 +61,7 @@ function TileDrilldown<TId extends string, TTile extends DrilldownTile<TId>>({
         {tiles.map((tile) => (
           <button
             key={tile.id}
+            ref={activeId === tile.id ? selectedButtonRef : undefined}
             type="button"
             id={tabId(idPrefix, tile.id)}
             className={[
@@ -81,6 +93,7 @@ function TileDrilldown<TId extends string, TTile extends DrilldownTile<TId>>({
       </div>
 
       <div
+        ref={selectedPanelRef}
         id={panelId(idPrefix, activeId)}
         className="drilldown-content"
         role="tabpanel"

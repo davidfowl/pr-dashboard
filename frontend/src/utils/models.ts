@@ -248,7 +248,7 @@ function pickReason(pullRequest: PullRequestSummary) {
   return signals.join(' · ');
 }
 
-function sameLogin(first: string, second: string) {
+export function sameLogin(first: string, second: string) {
   return actorIdentityKey(first) === actorIdentityKey(second);
 }
 
@@ -1414,7 +1414,7 @@ function mergeDevelopers(developers: DeveloperStats[], actor: string): Developer
   };
 }
 
-function actorIdentityKey(actor: string) {
+export function actorIdentityKey(actor: string) {
   // A "{human}/copilot" author identifies as the human who started the Copilot PR, so ownership,
   // core-team matching, and dedupe all key off that human.
   const normalized = actor.toLowerCase();

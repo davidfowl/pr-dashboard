@@ -1,5 +1,6 @@
 import type { AttentionSignal, PullRequestSummary } from '../types';
 import { createAttentionSignals } from '../utils/models';
+import { isRowMetadataSignal } from '../utils/rowMetadataSignals';
 import SignalPills from './SignalPills';
 
 export type PullRequestSignalPillsProps = {
@@ -27,7 +28,9 @@ function PullRequestSignalPills({
     ? [actionSignal, ...stateSignals]
     : stateSignals;
 
-  computedSignals = computedSignals.filter((signal) => !excludedComputedLabels.has(signal.label.toLowerCase()));
+  computedSignals = computedSignals.filter((signal) =>
+    !excludedComputedLabels.has(signal.label.toLowerCase())
+    && !isRowMetadataSignal(signal));
 
   if (computedSignalLimit !== undefined) {
     computedSignals = computedSignals.slice(0, computedSignalLimit);

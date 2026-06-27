@@ -1,5 +1,8 @@
+const invariantCountLabels = new Set(['shown']);
+
 export function formatCount(count: number, singular: string, plural = `${singular}s`) {
-  return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
+  const label = count === 1 || invariantCountLabels.has(singular) ? singular : plural;
+  return `${count.toLocaleString()} ${label}`;
 }
 
 export function formatRelative(value: string) {

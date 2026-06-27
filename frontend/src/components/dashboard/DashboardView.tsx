@@ -121,13 +121,24 @@ function DashboardView({
   const shipModeActive = dashboardMode === 'ship';
   const issuesModeActive = dashboardMode === 'issues';
   const refreshing = shipModeActive ? shipWeekLoading : issuesModeActive ? issuesLoading : pullsLoading;
-  const hasLoadedData = lastUpdatedAt !== null;
+  const hasLoadedData = lastUpdatedAt !== null
+    || (!shipModeActive && !issuesModeActive && pullRequests.length > 0)
+    || (issuesModeActive && issues.length > 0)
+    || (shipModeActive && shipWeek !== null);
+  const refreshButtonLoading = refreshing;
+  const visiblePullsLoading = pullsLoading && !hasLoadedData;
+  const visibleIssuesLoading = issuesLoading && !hasLoadedData;
+  const displayedLastUpdatedAt = lastUpdatedAt
+    ?? (!shipModeActive && !issuesModeActive && pullRequests.length > 0
+      ? getLatestFetchedAt(pullRequests)
+      : null);
   const autoRefreshCadence = formatDuration(autoRefreshIntervalMs);
   const dataTitle = shipModeActive
     ? 'Ship mode data'
     : issuesModeActive
       ? 'Issue focus data'
       : 'Review queue data';
+  const refreshStatus = !shipModeActive && !issuesModeActive ? pullRequestSnapshotStatus : null;
   const showQueuePanel = shipModeActive
     || (issuesModeActive
       ? issuesLoading || issues.length > 0 || issueBuckets.length > 0
@@ -141,9 +152,9 @@ function DashboardView({
           <p className="eyebrow">Refresh</p>
           <h2>{dataTitle}</h2>
           <p>
-            {lastUpdatedAt ? (
+            {displayedLastUpdatedAt ? (
               <>
-                List updated {formatRelative(lastUpdatedAt)} at {formatTime(lastUpdatedAt)}.
+                List updated {formatRelative(displayedLastUpdatedAt)} at {formatTime(displayedLastUpdatedAt)}.
                 {pullRequestLoadPerfStats && (
                   <span className="load-perf-stats"> {formatLoadPerfStats(pullRequestLoadPerfStats)}</span>
                 )}
@@ -152,11 +163,15 @@ function DashboardView({
             {' '}
             Auto-refreshes about every {autoRefreshCadence} using cached data.
           </p>
-          {pullRequestSnapshotStatus && <p>{pullRequestSnapshotStatus}</p>}
+          {refreshStatus && (
+            <p className="dashboard-refresh-status" role="status">
+              {refreshStatus}
+            </p>
+          )}
           {pullRequestSnapshotError && <p className="error">{pullRequestSnapshotError}</p>}
         </div>
-        <button type="button" onClick={onRefresh} disabled={refreshing}>
-          {refreshing ? (hasLoadedData ? 'Refreshing...' : 'Loading...') : 'Refresh now'}
+        <button type="button" onClick={onRefresh} disabled={refreshButtonLoading}>
+          {refreshButtonLoading ? (hasLoadedData ? 'Refreshing...' : 'Loading...') : 'Refresh now'}
         </button>
       </section>
 
@@ -180,21 +195,23 @@ function DashboardView({
               onDownloadSnapshot={onDownloadShipWeekSnapshot}
               onSelectPullRequest={onSelectPullRequest}
               onVisiblePullRequest={onVisiblePullRequest}
+              login={login}
             />
           ) : issuesModeActive ? (
             <IssuesOverview
               issueBuckets={issueBuckets}
-              loading={issuesLoading}
+              loading={visibleIssuesLoading}
               hasLoaded={hasLoadedData}
               selectedBucketId={selectedBucketId}
               onSelectBucket={onSelectBucket}
+              login={login}
             />
           ) : (pullsLoading || pullRequests.length > 0) && (
             <QueueOverview
               counts={developerPullRequestCounts}
               attentionBuckets={attentionBuckets}
               forMeItems={forMeItems}
-              loading={pullsLoading}
+              loading={visiblePullsLoading}
               hasLoaded={hasLoadedData}
               selectedBucketId={selectedBucketId}
               login={login}
@@ -210,10 +227,10 @@ function DashboardView({
         dashboardMode={dashboardMode}
         repo={repo}
         state={state}
-        pullsLoading={pullsLoading}
+        pullsLoading={visiblePullsLoading}
         pullRequests={pullRequests}
         error={error}
-        issuesLoading={issuesLoading}
+        issuesLoading={visibleIssuesLoading}
         issues={issues}
         issuesError={issuesError}
         shipWeekRepo={shipWeekRepo}
@@ -254,3 +271,10 @@ function formatLoadDuration(durationMs: number) {
 }
 
 export default DashboardView;
+
+function getLatestFetchedAt(pullRequests: PullRequestSummary[]) {
+  return pullRequests
+    .map((pullRequest) => pullRequest.fetchedAt)
+    .filter(Boolean)
+    .sort((first, second) => new Date(second).getTime() - new Date(first).getTime())[0] ?? null;
+}

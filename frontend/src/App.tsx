@@ -34,7 +34,7 @@ import type {
 } from './types';
 import { colorForText } from './utils/format';
 import { readJson } from './utils/http';
-import { beginAbortableLoad } from './utils/loadLifecycle';
+import { beginAbortableLoad, cancelAbortableLoad } from './utils/loadLifecycle';
 import { useMediaQuery } from './utils/useMediaQuery';
 import {
   fetchPullRequestList,
@@ -176,6 +176,7 @@ function App() {
     milestoneInput: initialShipWeekRouteParams.milestoneInput,
     releaseBranchInput: initialShipWeekRouteParams.releaseBranchInput,
   });
+  const initializedRef = useRef(false);
 
   const selectedTitle = selectedPullRequest
     ? `#${selectedPullRequest.number} ${selectedPullRequest.title}`
@@ -218,6 +219,11 @@ function App() {
   );
 
   useEffect(() => {
+    if (initializedRef.current) {
+      return;
+    }
+
+    initializedRef.current = true;
     void loadAuthStatus();
     if (dashboardMode === 'ship') {
       const params = shipWeekRefreshParamsRef.current;
@@ -416,6 +422,10 @@ function App() {
       });
       await readJson(response);
       await loadAuthStatus();
+      cancelAbortableLoad(pullRequestsLoadVersionRef, pullRequestsAbortControllerRef);
+      cancelAbortableLoad(issuesLoadVersionRef, issuesAbortControllerRef);
+      cancelAbortableLoad(shipWeekLoadVersionRef, shipWeekAbortControllerRef);
+      cancelVisibleChecksRequests();
       setPullRequests([]);
       setIssues([]);
       setIssuesError(null);
@@ -433,6 +443,10 @@ function App() {
       setTimelineItems([]);
       setTimelineStats(null);
       setMergeableState(null);
+      setPullsLoading(false);
+      setIssuesLoading(false);
+      setShipWeekLoading(false);
+      setTimelineLoading(false);
       setViewMode('dashboard');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to sign out.');
@@ -1340,7 +1354,9 @@ function combineShipWeekResponses(
     releaseBranch,
     pullRequests: [
       ...releaseResponses.flatMap((response) => response.pullRequests),
-      ...docsPullRequests.map(createDocsFromCodeShipWeekPullRequest),
+      ...docsPullRequests
+        .filter((pullRequest) => docsFromCodeMatchesReleaseBranch(pullRequest, releaseBranch))
+        .map(createDocsFromCodeShipWeekPullRequest),
     ].sort(compareShipWeekPullRequests),
     issues: releaseResponses
       .flatMap((response) => response.issues)
@@ -1359,6 +1375,14 @@ function createDocsFromCodeShipWeekPullRequest(pullRequest: PullRequestSummary) 
       docsFromCode: true,
     },
   };
+}
+
+function docsFromCodeMatchesReleaseBranch(pullRequest: PullRequestSummary, releaseBranch: string) {
+  if (!releaseBranch || releaseBranch === 'release branches') {
+    return true;
+  }
+
+  return pullRequest.baseRef === releaseBranch;
 }
 
 function compareShipWeekPullRequests(first: ShipWeekResponse['pullRequests'][number], second: ShipWeekResponse['pullRequests'][number]) {

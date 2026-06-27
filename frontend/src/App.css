@@ -386,6 +386,34 @@ select:focus-visible {
   text-decoration: none;
 }
 
+.signed-in-user-entry {
+  border-color: rgba(122, 185, 255, 0.8) !important;
+  background:
+    linear-gradient(90deg, rgba(31, 143, 255, 0.3), rgba(116, 85, 221, 0.16)),
+    var(--panel);
+  box-shadow:
+    inset 4px 0 0 rgba(122, 185, 255, 0.9),
+    0 0 0 1px rgba(122, 185, 255, 0.28),
+    var(--shadow);
+}
+
+.signed-in-user-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.45rem;
+  vertical-align: middle;
+  border: 1px solid rgba(122, 185, 255, 0.5);
+  border-radius: 999px;
+  padding: 0.16rem 0.45rem;
+  color: var(--link);
+  background: var(--sky-wash);
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+
 .app-footer {
   display: flex;
   flex-wrap: wrap;
@@ -2277,6 +2305,12 @@ select:focus-visible {
   font-weight: 800;
 }
 
+.dashboard-refresh-status {
+  margin-top: 0.35rem;
+  color: var(--accent-blue);
+  font-weight: 800;
+}
+
 .bucket-limit-note {
   margin: 0.4rem 0 0;
   color: var(--accent-strong);
@@ -2302,12 +2336,12 @@ select:focus-visible {
 .attention-list {
   display: grid;
   margin-top: 0.65rem;
+  --attention-pr-grid-columns: 5rem minmax(10rem, 14rem) minmax(0, 1fr) 12rem 7.25rem;
 }
 
 .attention-pr-row,
 .attention-issue-row {
   display: grid;
-  grid-template-columns: 5rem minmax(10rem, 14rem) minmax(0, 1fr) minmax(8rem, auto) auto;
   column-gap: 0.75rem;
   row-gap: 0.35rem;
   align-items: start;
@@ -2318,6 +2352,19 @@ select:focus-visible {
   color: inherit;
   background: transparent;
   text-align: left;
+}
+
+.attention-pr-row {
+  grid-template-columns: var(--attention-pr-grid-columns);
+  column-gap: 0.75rem;
+}
+
+.attention-pr-row.compact-pr-action-marker-layout {
+  grid-template-columns: var(--attention-pr-grid-columns);
+}
+
+.attention-issue-row {
+  grid-template-columns: 5rem minmax(10rem, 14rem) minmax(0, 1fr) minmax(8rem, auto) auto;
 }
 
 .attention-pr-row:hover .attention-pr-title,
@@ -2331,7 +2378,22 @@ select:focus-visible {
   font-weight: 800;
 }
 
-.attention-pr-title,
+.attention-pr-title {
+  grid-column: 3;
+  grid-row: 1;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attention-pr-row.compact-pr-action-marker-layout .attention-pr-title {
+  grid-column: 3;
+}
+
 .attention-issue-title {
   grid-column: 3;
   grid-row: 1;
@@ -2357,6 +2419,22 @@ select:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
+}
+
+.attention-pr-number-link,
+.attention-issue-number-link,
+.attention-pr-repo-link,
+.attention-issue-repo-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.attention-pr-number-link:hover,
+.attention-issue-number-link:hover,
+.attention-pr-repo-link:hover,
+.attention-issue-repo-link:hover {
+  color: var(--link-hover);
+  text-decoration: underline;
 }
 
 .attention-list .attention-pr-check-badge {
@@ -2406,7 +2484,22 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.attention-pr-meta,
+.attention-pr-meta {
+  grid-column: 4;
+  grid-row: 1;
+  display: flex;
+  min-width: 0;
+  gap: 0.2rem;
+  justify-content: flex-end;
+  text-align: right;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.attention-pr-row.compact-pr-action-marker-layout .attention-pr-meta {
+  grid-column: 4;
+}
+
 .attention-issue-meta {
   grid-column: 4;
   grid-row: 1;
@@ -2415,7 +2508,41 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.attention-pr-actions,
+.attention-pr-author {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attention-pr-updated {
+  flex: 0 0 auto;
+}
+
+.attention-list .signed-in-user-badge {
+  color: var(--brand-white);
+  background: linear-gradient(135deg, var(--accent-blue), var(--brand-primary));
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 6px 16px rgba(31, 143, 255, 0.22);
+  font-size: 0.62rem;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.attention-pr-actions {
+  grid-column: 5;
+  grid-row: 1 / span 2;
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+  align-items: center;
+  min-width: 0;
+}
+
+.attention-pr-row.compact-pr-action-marker-layout .attention-pr-actions {
+  grid-column: 5;
+}
+
 .attention-issue-actions {
   grid-column: 5;
   grid-row: 1 / span 2;
@@ -2438,16 +2565,23 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.attention-pr-github-link,
 .attention-issue-github-link {
   color: var(--on-success);
   background: var(--success);
 }
 
 .attention-pr-timeline-button {
-  color: var(--muted);
-  background: transparent;
+  color: var(--on-accent);
+  background: var(--accent-strong);
   cursor: pointer;
+}
+
+.attention-pr-updated-age.age-tone-warning {
+  color: var(--warning);
+}
+
+.attention-pr-updated-age.age-tone-danger {
+  color: var(--danger-soft);
 }
 
 .attention-pr-actions a:hover,
@@ -2457,7 +2591,18 @@ select:focus-visible {
   background: var(--panel-strong);
 }
 
-.attention-pr-signals,
+.attention-pr-signals {
+  grid-column: 3 / 5;
+  grid-row: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.attention-pr-row.compact-pr-action-marker-layout .attention-pr-signals {
+  grid-column: 3 / 5;
+}
+
 .attention-issue-signals {
   grid-column: 3 / 5;
   grid-row: 2;
@@ -2466,7 +2611,18 @@ select:focus-visible {
   gap: 0.3rem;
 }
 
-.attention-pr-linked-issues,
+.attention-pr-linked-issues {
+  grid-column: 3 / 5;
+  grid-row: 3;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+
+.attention-pr-row.compact-pr-action-marker-layout .attention-pr-linked-issues {
+  grid-column: 3 / 5;
+}
+
 .attention-issue-linked-pulls {
   grid-column: 3 / 5;
   grid-row: 3;
@@ -3597,6 +3753,35 @@ img.avatar-dot {
   border-top-color: var(--hairline);
 }
 
+.attention-pr-row.signed-in-user-entry,
+.attention-issue-row.signed-in-user-entry {
+  margin-inline: -0.75rem;
+  border-top-color: rgba(122, 185, 255, 0.72);
+  border-radius: var(--radius-md);
+  padding-inline: 0.95rem;
+  background:
+    linear-gradient(90deg, rgba(31, 143, 255, 0.34), rgba(116, 85, 221, 0.18)),
+    rgba(24, 21, 45, 0.86);
+  box-shadow:
+    inset 4px 0 0 rgba(122, 185, 255, 0.95),
+    0 0 0 1px rgba(122, 185, 255, 0.22),
+    0 10px 28px rgba(31, 143, 255, 0.14);
+}
+
+.attention-pr-row.ready-to-merge-entry {
+  margin-inline: -0.75rem;
+  border-top-color: var(--success-border);
+  border-radius: var(--radius-md);
+  padding-inline: 0.95rem;
+  background:
+    linear-gradient(90deg, rgba(42, 203, 116, 0.2), rgba(42, 203, 116, 0.06)),
+    rgba(24, 21, 45, 0.72);
+  box-shadow:
+    inset 4px 0 0 rgba(46, 182, 125, 0.9),
+    0 0 0 1px rgba(46, 182, 125, 0.2),
+    0 10px 28px rgba(42, 203, 116, 0.1);
+}
+
 .pull-card {
   background: rgba(31, 30, 51, 0.66);
 }
@@ -3615,13 +3800,16 @@ img.avatar-dot {
   color: var(--link-hover);
 }
 
-.attention-pr-github-link,
 .attention-issue-github-link {
   color: var(--on-accent);
   background: var(--accent-strong);
 }
 
-.attention-pr-timeline-button,
+.attention-pr-timeline-button {
+  color: var(--on-accent);
+  background: var(--accent-strong);
+}
+
 .bucket-link-button {
   color: var(--text);
   background: rgba(24, 21, 45, 0.46);
@@ -3856,6 +4044,16 @@ img.avatar-dot {
     background: rgba(24, 21, 45, 0.5);
   }
 
+  .attention-pr-row.compact-pr-action-marker-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .attention-pr-row.signed-in-user-entry,
+  .attention-issue-row.signed-in-user-entry {
+    margin-inline: 0;
+    padding-inline: 0.9rem;
+  }
+
   .drilldown-tiles,
   .core-member-row {
     grid-template-columns: 1fr;
@@ -3866,17 +4064,30 @@ img.avatar-dot {
   .attention-pr-repo,
   .attention-issue-repo,
   .attention-pr-title,
+  .attention-pr-row.compact-pr-action-marker-layout .attention-pr-title,
   .attention-issue-title,
   .attention-pr-meta,
+  .attention-pr-row.compact-pr-action-marker-layout .attention-pr-meta,
   .attention-issue-meta,
   .attention-pr-actions,
+  .attention-pr-row.compact-pr-action-marker-layout .attention-pr-actions,
   .attention-issue-actions,
   .attention-pr-signals,
+  .attention-pr-row.compact-pr-action-marker-layout .attention-pr-signals,
   .attention-issue-signals,
   .attention-pr-linked-issues,
+  .attention-pr-row.compact-pr-action-marker-layout .attention-pr-linked-issues,
   .attention-issue-linked-pulls {
     grid-column: 1;
     grid-row: auto;
+  }
+
+  .attention-pr-row.ready-to-merge-entry {
+    margin-inline: 0;
+    padding-inline: 0.9rem;
+    background:
+      linear-gradient(90deg, rgba(42, 203, 116, 0.2), rgba(42, 203, 116, 0.06)),
+      rgba(24, 21, 45, 0.72);
   }
 
   .attention-pr-number,
