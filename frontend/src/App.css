@@ -806,8 +806,12 @@ select:focus-visible {
   display: flex;
   align-items: center;
   gap: 0.65rem;
-  height: 52px;
-  padding: 0 0.85rem;
+  /* Extend the bar up into the iOS status-bar area so the blurred background
+     fills behind the clock/battery, while the top padding keeps the logo and
+     menu button below the safe area. */
+  height: calc(52px + env(safe-area-inset-top, 0px));
+  padding: env(safe-area-inset-top, 0px) calc(0.85rem + env(safe-area-inset-right, 0px)) 0
+    calc(0.85rem + env(safe-area-inset-left, 0px));
   border-bottom: 1px solid var(--border-strong);
   background: var(--panel-strong);
   box-shadow: var(--shadow);
@@ -886,7 +890,8 @@ select:focus-visible {
   gap: 1rem;
   width: min(86vw, 22rem);
   height: 100%;
-  padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  padding: calc(1rem + env(safe-area-inset-top, 0px)) calc(1rem + env(safe-area-inset-right, 0px))
+    calc(1rem + env(safe-area-inset-bottom, 0px)) 1rem;
   border-left: 1px solid var(--border-strong);
   background: var(--panel-strong);
   box-shadow: var(--shadow-strong);
@@ -3692,7 +3697,7 @@ img.avatar-dot {
 
 @media (max-width: 720px) {
   .app-shell {
-    padding-top: calc(52px + 1.1rem);
+    padding-top: calc(52px + 1.1rem + env(safe-area-inset-top, 0px));
   }
 
   .hero-mode-row {
