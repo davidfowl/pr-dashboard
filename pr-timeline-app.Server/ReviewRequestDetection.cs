@@ -65,6 +65,14 @@ static class ReviewRequestDetection
 
             foreach (var reviewerId in pullRequest.RequestedReviewerIds)
             {
+                // Don't notify the PR's own human owner that they need to review it. GitHub can
+                // list the human behind a Copilot PR as both the (sole) assignee and a requested
+                // reviewer; pinging them would be a self-review notification.
+                if (reviewerId == pullRequest.OwnerUserId)
+                {
+                    continue;
+                }
+
                 if (subscribedUserIds.Contains(reviewerId))
                 {
                     yield return new DetectedReviewRequest(

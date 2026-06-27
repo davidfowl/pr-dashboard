@@ -62,9 +62,22 @@ sealed class GitHubResponseCache(IMemoryCache memoryCache, GitHubPublicCacheStor
         string cacheKey,
         T value,
         TimeSpan cacheDuration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? onLocalEvicted = null)
     {
-        memoryCache.Set(cacheKey, value, CreateCacheEntryOptions(cacheDuration));
+        var options = CreateCacheEntryOptions(cacheDuration);
+        if (onLocalEvicted is not null)
+        {
+            options.RegisterPostEvictionCallback(static (_, _, reason, state) =>
+            {
+                if (reason is EvictionReason.Expired or EvictionReason.TokenExpired or EvictionReason.Capacity)
+                {
+                    ((Action)state!).Invoke();
+                }
+            }, onLocalEvicted);
+        }
+
+        memoryCache.Set(cacheKey, value, options);
 
         // Public entries use write-through caching: memory is the hot path, Blob is the
         // durable shared path used after process restarts or scale-to-zero.

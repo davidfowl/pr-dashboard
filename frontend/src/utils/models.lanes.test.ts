@@ -23,6 +23,7 @@ function pr(overrides: PrOverrides): PullRequestSummary {
     changesRequestedCount: 0,
     commentedReviewCount: 0,
     unresolvedThreadCount: 0,
+    requiresConversationResolution: false,
     ...reviewOverride,
   };
 
@@ -78,12 +79,20 @@ describe('createAttentionBuckets lane routing', () => {
     expect(inBucket(buckets, 'Ready to merge', 1)).toBe(true);
   });
 
-  it('keeps an approved PR with unresolved threads out of Ready to merge', () => {
+  it('keeps an approved PR with merge-blocking unresolved threads out of Ready to merge', () => {
     const buckets = createAttentionBuckets([
-      pr({ number: 2, review: { state: 'approved', approvalCount: 1, unresolvedThreadCount: 2 } }),
+      pr({ number: 2, review: { state: 'approved', approvalCount: 1, unresolvedThreadCount: 2, requiresConversationResolution: true } }),
     ]);
     expect(inBucket(buckets, 'Ready to merge', 2)).toBe(false);
     expect(inBucket(buckets, 'Unresolved feedback', 2)).toBe(true);
+  });
+
+  it('keeps an approved PR with non-blocking unresolved threads in Ready to merge while still flagging feedback', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 22, review: { state: 'approved', approvalCount: 1, unresolvedThreadCount: 2, requiresConversationResolution: false } }),
+    ]);
+    expect(inBucket(buckets, 'Ready to merge', 22)).toBe(true);
+    expect(inBucket(buckets, 'Unresolved feedback', 22)).toBe(true);
   });
 
   it('keeps a conflicted approved PR out of Ready to merge and in Merge conflicts', () => {
@@ -94,11 +103,11 @@ describe('createAttentionBuckets lane routing', () => {
     expect(inBucket(buckets, 'Merge conflicts', 3)).toBe(true);
   });
 
-  it('routes a waiting PR with Copilot threads to Copilot feedback', () => {
+  it('routes a waiting PR with Copilot threads to Unresolved feedback', () => {
     const buckets = createAttentionBuckets([
       pr({ number: 4, review: { state: 'waiting', unresolvedThreadCount: 1 } }),
     ]);
-    expect(inBucket(buckets, 'Copilot feedback', 4)).toBe(true);
+    expect(inBucket(buckets, 'Unresolved feedback', 4)).toBe(true);
   });
 
   it('hides a NO-MERGE-labelled PR from every lane', () => {

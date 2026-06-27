@@ -33,7 +33,18 @@ record TokenResult(string Value, string Source);
 
 record AuthStatusResponse(bool Authenticated, bool Configured, bool CanLogin, string? Source, string? Login, string Message);
 
-record PullRequestListResponse(string Repository, IReadOnlyList<PullRequestSummary> PullRequests);
+record PullRequestListResponse(
+    string Repository,
+    IReadOnlyList<PullRequestSummary> PullRequests,
+    PullRequestListSnapshot? Snapshot = null);
+
+record PullRequestListSnapshot(
+    string Source,
+    DateTimeOffset FetchedAt,
+    bool Stale,
+    bool RefreshInProgress,
+    bool RefreshQueued,
+    string? Error = null);
 
 record IssueListResponse(string Repository, IReadOnlyList<ShipWeekIssueSummary> Issues);
 
@@ -162,6 +173,12 @@ record PullRequestSummary(
 
     public IReadOnlyList<long> RequestedReviewerIds { get; init; } = [];
 
+    // GitHub numeric id of the human who owns the PR: the author for a human-authored PR, or the
+    // sole human assignee for a Copilot-authored PR (mirrors ResolveAuthor's attribution).
+    // Used to avoid notifying that human to "review" their own work. Null when no unambiguous
+    // human owner exists (e.g. a Copilot PR with zero or multiple human assignees).
+    public long? OwnerUserId { get; init; }
+
     public static PullRequestSummary FromDto(GitHubPullRequestDto pullRequest)
     {
         var requestedReviewerLogins = pullRequest.RequestedReviewers
@@ -175,7 +192,11 @@ record PullRequestSummary(
             pullRequest.Title ?? "",
             pullRequest.State ?? "",
             pullRequest.Draft,
-            ResolveAuthor(pullRequest),
+            ResolveAuthor(
+                pullRequest.User?.Login,
+                pullRequest.Assignees?
+                    .Select(assignee => assignee.Login)
+                ?? []),
             pullRequest.HtmlUrl ?? "",
             pullRequest.CreatedAt,
             pullRequest.UpdatedAt,
@@ -209,13 +230,38 @@ record PullRequestSummary(
                 .Where(id => id is > 0)
                 .Select(id => id!.Value)
                 .Distinct()
-                .ToArray()
+                .ToArray(),
+            OwnerUserId = ResolveOwnerUserId(pullRequest)
         };
     }
 
-    private static string ResolveAuthor(GitHubPullRequestDto pullRequest)
+    // The human who owns the PR, for self-notification suppression. Keep this in lockstep with
+    // ResolveAuthor: a human author owns their own PR; a Copilot-authored PR is owned by its
+    // sole human assignee (ambiguous when there are zero or several, so no owner is returned).
+    private static long? ResolveOwnerUserId(GitHubPullRequestDto pullRequest) =>
+        ResolveOwnerUserId(
+            pullRequest.User?.Login,
+            pullRequest.User?.Id,
+            (pullRequest.Assignees ?? []).Select(assignee => (assignee.Login, assignee.Id)));
+
+    public static long? ResolveOwnerUserId(string? authorLogin, long? authorId, IEnumerable<(string? Login, long? Id)> assignees)
     {
-        var login = pullRequest.User?.Login;
+        if (!IsCopilotLogin(authorLogin) && authorId is > 0)
+        {
+            return authorId;
+        }
+
+        var humanAssigneeIds = assignees
+            .Where(assignee => !IsCopilotLogin(assignee.Login) && assignee.Id is > 0)
+            .Select(assignee => assignee.Id!.Value)
+            .Distinct()
+            .ToArray();
+
+        return humanAssigneeIds.Length == 1 ? humanAssigneeIds[0] : null;
+    }
+
+    public static string ResolveAuthor(string? login, IEnumerable<string?> assigneeLogins)
+    {
         if (string.IsNullOrWhiteSpace(login))
         {
             return "unknown";
@@ -229,8 +275,7 @@ record PullRequestSummary(
         // Copilot-authored PRs are assigned to both Copilot and the human who started the work.
         // Attribute the PR to that human while keeping the Copilot marker, but only when there is
         // exactly one human assignee; otherwise the human is ambiguous, so keep the Copilot login.
-        var humans = pullRequest.Assignees
-            .Select(assignee => assignee.Login)
+        var humans = assigneeLogins
             .Where(assignee => !string.IsNullOrWhiteSpace(assignee) && !IsCopilotLogin(assignee))
             .ToArray();
 
@@ -281,7 +326,8 @@ record ReviewStatus(
     int CommentedReviewCount,
     DateTimeOffset? LastApprovedAt,
     DateTimeOffset? LastReviewedAt,
-    int UnresolvedThreadCount = 0)
+    int UnresolvedThreadCount = 0,
+    bool RequiresConversationResolution = false)
 {
     public static ReviewStatus Waiting { get; } = new(
         State: "waiting",
@@ -335,6 +381,12 @@ record ReviewEvent(string Actor, string State, DateTimeOffset SubmittedAt)
     public static ReviewEvent FromDto(GitHubReviewDto review) =>
         new(
             Actor: review.User?.Login ?? "unknown",
+            State: review.State ?? "UNKNOWN",
+            SubmittedAt: review.SubmittedAt);
+
+    public static ReviewEvent FromGraphQl(GitHubGraphQlReviewNodeDto review) =>
+        new(
+            Actor: review.Author?.Login ?? "unknown",
             State: review.State ?? "UNKNOWN",
             SubmittedAt: review.SubmittedAt);
 }
@@ -524,7 +576,17 @@ record TimelineItem(
     string? Body,
     string? HtmlUrl)
 {
-    public static TimelineItem FromDto(GitHubTimelineItemDto item)
+    public static TimelineItem FromDto(GitHubTimelineItemDto item) =>
+        FromDto(item, commitAuthorLoginsBySha: null);
+
+    // commitAuthorLoginsBySha maps a commit SHA to the GitHub login that authored it. The REST
+    // issues-timeline "committed" event only carries the raw git author name (no login/id), so
+    // without this map a commit surfaces under the git name (e.g. "Ankit Jain") and is counted as
+    // a different person from that same user's logged-in activity (e.g. "radical"). Resolving the
+    // login here collapses them into one participant.
+    public static TimelineItem FromDto(
+        GitHubTimelineItemDto item,
+        IReadOnlyDictionary<string, string>? commitAuthorLoginsBySha)
     {
         var eventName = item.Event ?? "event";
         var occurredAt = item.CreatedAt
@@ -533,9 +595,18 @@ record TimelineItem(
             ?? item.Author?.Date
             ?? item.Committer?.Date
             ?? DateTimeOffset.MinValue;
+
+        string? commitAuthorLogin = null;
+        if (commitAuthorLoginsBySha is not null
+            && item.Sha is { Length: > 0 } sha)
+        {
+            commitAuthorLoginsBySha.TryGetValue(sha, out commitAuthorLogin);
+        }
+
         var actor = item.Actor?.Login
             ?? item.User?.Login
             ?? item.Author?.Login
+            ?? commitAuthorLogin
             ?? item.Author?.Name
             ?? item.Committer?.Login
             ?? item.Committer?.Name
@@ -601,6 +672,8 @@ record TimelineItem(
 [JsonSerializable(typeof(GitHubPullRequestDto[]))]
 [JsonSerializable(typeof(GitHubReviewDto[]))]
 [JsonSerializable(typeof(GitHubGraphQlRequestDto))]
+[JsonSerializable(typeof(GitHubPullRequestsGraphQlRequestDto))]
+[JsonSerializable(typeof(GitHubPullRequestsGraphQlResponseDto))]
 [JsonSerializable(typeof(GitHubLinkedPullRequestsGraphQlRequestDto))]
 [JsonSerializable(typeof(GitHubReviewThreadsResponseDto))]
 [JsonSerializable(typeof(GitHubLinkedPullRequestsResponseDto))]
@@ -754,7 +827,14 @@ sealed class GitHubCommitDto
 
 sealed class GitHubPullRequestCommitDto
 {
+    public string? Sha { get; init; }
     public GitHubCommitDto? Commit { get; init; }
+
+    // Top-level author/committer carry the GitHub user (login + id) that GitHub linked to the
+    // commit. The nested Commit.Author/Committer only carry the raw git identity (name/email),
+    // so these are what let us resolve a commit's git name to a GitHub login.
+    public GitHubActorDto? Author { get; init; }
+    public GitHubActorDto? Committer { get; init; }
 }
 
 sealed class GitHubReviewDto
@@ -795,6 +875,288 @@ sealed class GitHubReviewThreadsResponseDto
 {
     [JsonPropertyName("data")]
     public GitHubReviewThreadsDataDto? Data { get; init; }
+}
+
+sealed class GitHubPullRequestsGraphQlRequestDto
+{
+    [JsonPropertyName("query")]
+    public string? Query { get; init; }
+
+    [JsonPropertyName("variables")]
+    public GitHubPullRequestsGraphQlVariablesDto? Variables { get; init; }
+}
+
+sealed class GitHubPullRequestsGraphQlVariablesDto
+{
+    [JsonPropertyName("owner")]
+    public string? Owner { get; init; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("states")]
+    public IReadOnlyList<string>? States { get; init; }
+
+    [JsonPropertyName("orderField")]
+    public string? OrderField { get; init; }
+
+    [JsonPropertyName("orderDirection")]
+    public string? OrderDirection { get; init; }
+
+    [JsonPropertyName("after")]
+    public string? After { get; init; }
+}
+
+sealed class GitHubPullRequestsGraphQlResponseDto
+{
+    [JsonPropertyName("data")]
+    public GitHubPullRequestsGraphQlDataDto? Data { get; init; }
+
+    [JsonPropertyName("errors")]
+    public IReadOnlyList<GitHubGraphQlErrorDto>? Errors { get; init; }
+}
+
+sealed class GitHubGraphQlErrorDto
+{
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+}
+
+sealed class GitHubPullRequestsGraphQlDataDto
+{
+    [JsonPropertyName("repository")]
+    public GitHubPullRequestsGraphQlRepositoryDto? Repository { get; init; }
+}
+
+sealed class GitHubPullRequestsGraphQlRepositoryDto
+{
+    [JsonPropertyName("pullRequests")]
+    public GitHubPullRequestsGraphQlConnectionDto? PullRequests { get; init; }
+}
+
+sealed class GitHubPullRequestsGraphQlConnectionDto
+{
+    [JsonPropertyName("pageInfo")]
+    public GitHubGraphQlPageInfoDto? PageInfo { get; init; }
+
+    [JsonPropertyName("nodes")]
+    public IReadOnlyList<GitHubPullRequestGraphQlNodeDto?>? Nodes { get; init; }
+}
+
+sealed class GitHubGraphQlPageInfoDto
+{
+    [JsonPropertyName("hasNextPage")]
+    public bool HasNextPage { get; init; }
+
+    [JsonPropertyName("hasPreviousPage")]
+    public bool HasPreviousPage { get; init; }
+
+    [JsonPropertyName("endCursor")]
+    public string? EndCursor { get; init; }
+
+    [JsonPropertyName("startCursor")]
+    public string? StartCursor { get; init; }
+}
+
+sealed class GitHubPullRequestGraphQlNodeDto
+{
+    [JsonPropertyName("number")]
+    public int Number { get; init; }
+
+    [JsonPropertyName("title")]
+    public string? Title { get; init; }
+
+    [JsonPropertyName("state")]
+    public string? State { get; init; }
+
+    [JsonPropertyName("isDraft")]
+    public bool IsDraft { get; init; }
+
+    [JsonPropertyName("author")]
+    public GitHubGraphQlActorDto? Author { get; init; }
+
+    [JsonPropertyName("url")]
+    public string? Url { get; init; }
+
+    [JsonPropertyName("createdAt")]
+    public DateTimeOffset CreatedAt { get; init; }
+
+    [JsonPropertyName("updatedAt")]
+    public DateTimeOffset UpdatedAt { get; init; }
+
+    [JsonPropertyName("labels")]
+    public GitHubGraphQlLabelConnectionDto? Labels { get; init; }
+
+    [JsonPropertyName("assignees")]
+    public GitHubGraphQlActorConnectionDto? Assignees { get; init; }
+
+    [JsonPropertyName("reviewRequests")]
+    public GitHubGraphQlReviewRequestConnectionDto? ReviewRequests { get; init; }
+
+    [JsonPropertyName("milestone")]
+    public GitHubGraphQlMilestoneDto? Milestone { get; init; }
+
+    [JsonPropertyName("commits")]
+    public GitHubGraphQlCommitConnectionDto? Commits { get; init; }
+
+    [JsonPropertyName("additions")]
+    public int Additions { get; init; }
+
+    [JsonPropertyName("deletions")]
+    public int Deletions { get; init; }
+
+    [JsonPropertyName("changedFiles")]
+    public int ChangedFiles { get; init; }
+
+    [JsonPropertyName("headRefOid")]
+    public string? HeadRefOid { get; init; }
+
+    [JsonPropertyName("headRefName")]
+    public string? HeadRefName { get; init; }
+
+    [JsonPropertyName("baseRefName")]
+    public string? BaseRefName { get; init; }
+
+    [JsonPropertyName("mergeable")]
+    public string? Mergeable { get; init; }
+
+    [JsonPropertyName("reviews")]
+    public GitHubGraphQlReviewConnectionDto? Reviews { get; init; }
+
+    [JsonPropertyName("reviewThreads")]
+    public GitHubReviewThreadsConnectionDto? ReviewThreads { get; init; }
+
+    [JsonPropertyName("closingIssuesReferences")]
+    public GitHubGraphQlLinkedIssueConnectionDto? ClosingIssuesReferences { get; init; }
+}
+
+sealed class GitHubGraphQlActorDto
+{
+    [JsonPropertyName("login")]
+    public string? Login { get; init; }
+
+    [JsonPropertyName("databaseId")]
+    public long? DatabaseId { get; init; }
+}
+
+sealed class GitHubGraphQlLabelConnectionDto
+{
+    [JsonPropertyName("nodes")]
+    public IReadOnlyList<GitHubLabelDto?>? Nodes { get; init; }
+}
+
+sealed class GitHubGraphQlActorConnectionDto
+{
+    [JsonPropertyName("nodes")]
+    public IReadOnlyList<GitHubGraphQlActorDto?>? Nodes { get; init; }
+}
+
+sealed class GitHubGraphQlReviewRequestConnectionDto
+{
+    [JsonPropertyName("nodes")]
+    public IReadOnlyList<GitHubGraphQlReviewRequestNodeDto?>? Nodes { get; init; }
+}
+
+sealed class GitHubGraphQlReviewRequestNodeDto
+{
+    [JsonPropertyName("requestedReviewer")]
+    public GitHubGraphQlRequestedReviewerDto? RequestedReviewer { get; init; }
+}
+
+sealed class GitHubGraphQlRequestedReviewerDto
+{
+    [JsonPropertyName("__typename")]
+    public string? TypeName { get; init; }
+
+    [JsonPropertyName("login")]
+    public string? Login { get; init; }
+
+    [JsonPropertyName("databaseId")]
+    public long? DatabaseId { get; init; }
+}
+
+sealed class GitHubGraphQlMilestoneDto
+{
+    [JsonPropertyName("title")]
+    public string? Title { get; init; }
+}
+
+sealed class GitHubGraphQlCommitConnectionDto
+{
+    [JsonPropertyName("totalCount")]
+    public int TotalCount { get; init; }
+
+    [JsonPropertyName("nodes")]
+    public IReadOnlyList<GitHubGraphQlCommitNodeDto?>? Nodes { get; init; }
+}
+
+sealed class GitHubGraphQlCommitNodeDto
+{
+    [JsonPropertyName("commit")]
+    public GitHubGraphQlCommitDto? Commit { get; init; }
+}
+
+sealed class GitHubGraphQlCommitDto
+{
+    [JsonPropertyName("committedDate")]
+    public DateTimeOffset? CommittedDate { get; init; }
+
+    [JsonPropertyName("statusCheckRollup")]
+    public GitHubGraphQlStatusCheckRollupDto? StatusCheckRollup { get; init; }
+}
+
+sealed class GitHubGraphQlStatusCheckRollupDto
+{
+    [JsonPropertyName("state")]
+    public string? State { get; init; }
+}
+
+sealed class GitHubGraphQlReviewConnectionDto
+{
+    [JsonPropertyName("pageInfo")]
+    public GitHubGraphQlPageInfoDto? PageInfo { get; init; }
+
+    [JsonPropertyName("nodes")]
+    public IReadOnlyList<GitHubGraphQlReviewNodeDto?>? Nodes { get; init; }
+}
+
+sealed class GitHubGraphQlReviewNodeDto
+{
+    [JsonPropertyName("author")]
+    public GitHubGraphQlActorDto? Author { get; init; }
+
+    [JsonPropertyName("state")]
+    public string? State { get; init; }
+
+    [JsonPropertyName("submittedAt")]
+    public DateTimeOffset SubmittedAt { get; init; }
+}
+
+sealed class GitHubGraphQlLinkedIssueConnectionDto
+{
+    [JsonPropertyName("nodes")]
+    public IReadOnlyList<GitHubGraphQlLinkedIssueNodeDto?>? Nodes { get; init; }
+}
+
+sealed class GitHubGraphQlLinkedIssueNodeDto
+{
+    [JsonPropertyName("number")]
+    public int Number { get; init; }
+
+    [JsonPropertyName("title")]
+    public string? Title { get; init; }
+
+    [JsonPropertyName("url")]
+    public string? Url { get; init; }
+
+    [JsonPropertyName("repository")]
+    public GitHubLinkedPullRequestsRepositoryDto? Repository { get; init; }
+
+    [JsonPropertyName("labels")]
+    public GitHubGraphQlLabelConnectionDto? Labels { get; init; }
+
+    [JsonPropertyName("milestone")]
+    public GitHubGraphQlMilestoneDto? Milestone { get; init; }
 }
 
 sealed class GitHubReviewThreadsDataDto

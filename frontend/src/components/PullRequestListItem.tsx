@@ -8,7 +8,6 @@ type PullRequestListItemProps = {
   pullRequest: PullRequestSummary;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest?: VisiblePullRequestHandler;
-  visibleChecksRefreshKey?: number;
   signalProps?: Omit<PullRequestSignalPillsProps, 'pullRequest'>;
   linkedIssues?: LinkedIssueSummary[];
 };
@@ -24,16 +23,11 @@ function PullRequestListItem({
   pullRequest,
   onSelectPullRequest,
   onVisiblePullRequest,
-  visibleChecksRefreshKey = 0,
   signalProps,
   linkedIssues = [],
 }: PullRequestListItemProps) {
   const itemRef = useRef<HTMLElement | null>(null);
-  const lastForcedVisibleChecksRefreshRef = useRef(0);
   const checksState = pullRequest.checks?.state;
-  const shouldForceVisibleChecksRefresh =
-    visibleChecksRefreshKey > 0
-    && lastForcedVisibleChecksRefreshRef.current !== visibleChecksRefreshKey;
   const badge = checksState && checksState !== 'none' ? checkBadgeGlyphs[checksState] : null;
   const badgeTitle = badge
     ? `${badge.label}${pullRequest.checks?.failingChecks?.length
@@ -46,18 +40,13 @@ function PullRequestListItem({
       !onVisiblePullRequest
       || pullRequest.state !== 'open'
       || !pullRequest.headSha
-      || (checksState !== 'unknown' && !shouldForceVisibleChecksRefresh)
+      || checksState !== 'unknown'
     ) {
       return;
     }
 
     const reportVisible = () => {
-      const accepted = onVisiblePullRequest(pullRequest.repository, pullRequest, {
-        forceRefresh: shouldForceVisibleChecksRefresh,
-      });
-      if (accepted) {
-        lastForcedVisibleChecksRefreshRef.current = visibleChecksRefreshKey;
-      }
+      onVisiblePullRequest(pullRequest.repository, pullRequest);
     };
 
     const node = itemRef.current;
@@ -81,7 +70,7 @@ function PullRequestListItem({
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [checksState, onVisiblePullRequest, pullRequest, shouldForceVisibleChecksRefresh, visibleChecksRefreshKey]);
+  }, [checksState, onVisiblePullRequest, pullRequest]);
 
   return (
     <article ref={itemRef} className="attention-pr-row">
