@@ -48,6 +48,7 @@ const approvedButAgingBucketLabel = 'Approved but aging';
 const releaseBlockingSignalLabel = 'Blocking release';
 const regressionBucketLabel = 'Regression';
 const ctiTeamIssueBucketLabel = 'CTI team';
+const myIssuesBucketLabel = 'My issues';
 const ctiTeamTitleMarker = '[aspiree2e]';
 const releaseBlockingLabelMarker = 'blocking-release';
 // Labels that mark a PR as "do not merge / waiting on the author"; matched case-insensitively.
@@ -425,8 +426,22 @@ export function pullRequestFocusActivityAt(pullRequest: PullRequestSummary, buck
   }
 }
 
-export function createFocusIssueBuckets(issues: ShipWeekIssueSummary[]): AttentionIssueBucket[] {
-  return focusIssueBucketDefinitions
+export function createFocusIssueBuckets(issues: ShipWeekIssueSummary[], login?: string): AttentionIssueBucket[] {
+  const bucketDefinitions = login
+    ? [
+      ...focusIssueBucketDefinitions,
+      {
+        label: myIssuesBucketLabel,
+        summary: `Issues assigned to ${login}.`,
+        tone: 'accent',
+        metric: 'personal queue',
+        matches: (issue: ShipWeekIssueSummary) =>
+          issue.assignees.some((assignee) => sameLogin(assignee, login)),
+      } satisfies FocusIssueBucketDefinition,
+    ]
+    : focusIssueBucketDefinitions;
+
+  return bucketDefinitions
     .map(({ matches, ...definition }) => createFocusIssueBucket({
       ...definition,
       issues: issues.filter(matches),

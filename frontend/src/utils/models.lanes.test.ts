@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PullRequestSummary, ReviewStatus } from '../types';
+import type { PullRequestSummary, ReviewStatus, ShipWeekIssueSummary } from '../types';
 import {
   createAttentionBuckets,
   createAttentionSignals,
+  createFocusIssueBuckets,
   isPullRequestWithinFocusAgeLimit,
   pullRequestFocusActivityAt,
 } from './models';
@@ -67,6 +68,25 @@ function inBucket(buckets: ReturnType<typeof createAttentionBuckets>, label: str
   return buckets.some(
     (bucket) => bucket.label === label && bucket.items.some((item) => item.pullRequest.number === number),
   );
+}
+
+function issue(overrides: Partial<ShipWeekIssueSummary> & { number: number }): ShipWeekIssueSummary {
+  const { number, ...rest } = overrides;
+
+  return {
+    repository: 'example/repo',
+    number,
+    title: `Issue ${number}`,
+    htmlUrl: `https://github.com/example/repo/issues/${number}`,
+    author: 'reporter',
+    labels: [],
+    assignees: [],
+    milestone: null,
+    updatedAt: '2026-01-01T00:00:00Z',
+    fetchedAt: '2026-01-01T00:00:00Z',
+    linkedOpenPullRequests: [],
+    ...rest,
+  };
 }
 
 describe('createAttentionBuckets lane routing', () => {
@@ -254,5 +274,19 @@ describe('createAttentionSignals review progress', () => {
       .map((signal) => signal.label);
 
     expect(limitedLabels).toContain('2 approvals');
+  });
+});
+
+describe('createFocusIssueBuckets personal lanes', () => {
+  it('adds a My issues bucket for issues assigned to the signed-in user', () => {
+    const buckets = createFocusIssueBuckets([
+      issue({ number: 1, assignees: ['other'] }),
+      issue({ number: 2, assignees: ['davidfowl'] }),
+      issue({ number: 3, assignees: ['DavidFowl'] }),
+    ], 'davidfowl');
+
+    const myIssues = buckets.find((bucket) => bucket.label === 'My issues');
+
+    expect(myIssues?.issues.map((item) => item.number)).toEqual([2, 3]);
   });
 });

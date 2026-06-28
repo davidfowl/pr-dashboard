@@ -2376,6 +2376,7 @@ public sealed class GitHubClientTests
             requestedPaths.Add(path);
             return path switch
             {
+                "user" => Json("""{ "login": "octocat" }"""),
                 "repos/example/repo/labels?per_page=100" => Json(
                     """
                     [
@@ -2428,6 +2429,7 @@ public sealed class GitHubClientTests
                       }
                     ]
                     """),
+                _ when path == AssignedIssuesPath("open", "octocat") => Json("[]"),
                 "graphql" => Json(EmptyLinkedFocusGraphQlResponse()),
                 _ when path == CtiTeamIssueSearchPath("open") => Json("""{ "total_count": 0, "incomplete_results": false, "items": [] }"""),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
@@ -2462,7 +2464,9 @@ public sealed class GitHubClientTests
             requestedPaths.Add(path);
             return path switch
             {
+                "user" => Json("""{ "login": "octocat" }"""),
                 "repos/example/repo/labels?per_page=100" => Json("[]"),
+                _ when path == AssignedIssuesPath("open", "octocat") => Json("[]"),
                 "graphql" => Json(EmptyLinkedFocusGraphQlResponse()),
                 _ when path == CtiTeamIssueSearchPath("open") => Json(
                     """
@@ -2532,10 +2536,73 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task FocusIssuesIncludeIssuesAssignedToCurrentUser()
+    {
+        var requestedPaths = new List<string>();
+        var client = CreateClient(path =>
+        {
+            requestedPaths.Add(path);
+            return path switch
+            {
+                "user" => Json("""{ "login": "octocat" }"""),
+                "repos/example/repo/labels?per_page=100" => Json("[]"),
+                _ when path == AssignedIssuesPath("open", "octocat") => Json(
+                    """
+                    [
+                      {
+                        "number": 30,
+                        "node_id": "I_focus_30",
+                        "title": "Assigned follow-up",
+                        "state": "open",
+                        "user": { "login": "reporter" },
+                        "html_url": "https://github.com/example/repo/issues/30",
+                        "repository_url": "https://api.github.com/repos/example/repo",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-11T00:00:00Z",
+                        "labels": [{ "name": "area-cli" }],
+                        "assignees": [{ "login": "octocat" }]
+                      },
+                      {
+                        "number": 31,
+                        "node_id": "PR_focus_31",
+                        "title": "Assigned PR mirror",
+                        "state": "open",
+                        "user": { "login": "contributor" },
+                        "html_url": "https://github.com/example/repo/pull/31",
+                        "repository_url": "https://api.github.com/repos/example/repo",
+                        "created_at": "2026-01-02T00:00:00Z",
+                        "updated_at": "2026-01-12T00:00:00Z",
+                        "labels": [],
+                        "assignees": [{ "login": "octocat" }],
+                        "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/31" }
+                      }
+                    ]
+                    """),
+                "graphql" => Json(EmptyLinkedFocusGraphQlResponse()),
+                _ when path == CtiTeamIssueSearchPath("open") => Json("""{ "total_count": 0, "incomplete_results": false, "items": [] }"""),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var issues = await client.GetFocusIssuesAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var issue = Assert.Single(issues);
+        Assert.Equal(30, issue.Number);
+        Assert.Equal("Assigned follow-up", issue.Title);
+        Assert.Equal(["octocat"], issue.Assignees);
+        Assert.Contains(AssignedIssuesPath("open", "octocat"), requestedPaths);
+    }
+
+    [Fact]
     public async Task FocusIssuesUseLinkedOpenPullRequestActivityForUpdatedAt()
     {
         var client = CreateClient(path => path switch
         {
+            "user" => Json("""{ "login": "octocat" }"""),
             "repos/example/repo/labels?per_page=100" => Json(
                 """
                 [
@@ -2617,6 +2684,7 @@ public sealed class GitHubClientTests
                   }
                 }
                 """),
+            _ when path == AssignedIssuesPath("open", "octocat") => Json("[]"),
             _ when path == CtiTeamIssueSearchPath("open") => Json("""{ "total_count": 0, "incomplete_results": false, "items": [] }"""),
             _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
         });
@@ -5698,6 +5766,9 @@ public sealed class GitHubClientTests
 
     private static string CtiTeamIssueSearchPath(string state) =>
         $"search/issues?q=repo%3Aexample%2Frepo%20is%3Aissue%20state%3A{state}%20in%3Atitle%20AspireE2E&sort=updated&order=desc&per_page=100";
+
+    private static string AssignedIssuesPath(string state, string assignee) =>
+        $"repos/example/repo/issues?state={state}&assignee={Uri.EscapeDataString(assignee)}&sort=updated&direction=desc&per_page=100";
 
     private static string EmptyLinkedFocusGraphQlResponse() =>
         """{ "data": { "nodes": [] } }""";
