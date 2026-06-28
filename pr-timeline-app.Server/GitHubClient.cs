@@ -1806,6 +1806,7 @@ sealed partial class GitHubClient(
                 throw CreatePublicCacheUnavailableException();
             }
 
+            var currentUserLoginTask = GetCurrentUserLoginAsync(cancellationToken);
             var regressionIssuesTask = GetIssuesMatchingLabelMarkerAsync(
                 repositoryName,
                 state,
@@ -1821,13 +1822,23 @@ sealed partial class GitHubClient(
                 scope,
                 cancellationToken);
 
-            await Task.WhenAll(regressionIssuesTask, ctiTeamIssuesTask);
+            await Task.WhenAll(regressionIssuesTask, ctiTeamIssuesTask, currentUserLoginTask);
+
+            IReadOnlyList<GitHubIssueDto> assignedIssues = string.IsNullOrWhiteSpace(currentUserLoginTask.Result)
+                ? []
+                : await GetIssuesAssignedToAsync(
+                    repositoryName,
+                    state,
+                    currentUserLoginTask.Result,
+                    scope,
+                    cancellationToken);
 
             // "Focus issues" are the actual issue cards shown in the issues dashboard. The
             // source searches can overlap and GitHub's issues APIs can return PRs, so normalize
             // them to a unique set of non-PR issues before applying linked-PR activity.
             var focusIssues = regressionIssuesTask.Result
                 .Concat(ctiTeamIssuesTask.Result)
+                .Concat(assignedIssues)
                 .Where(issue => issue.PullRequest is null)
                 .GroupBy(issue => issue.Number)
                 .Select(group => group.OrderByDescending(issue => issue.UpdatedAt).First())
@@ -2673,6 +2684,23 @@ sealed partial class GitHubClient(
             scope: scope,
             cancellationToken: cancellationToken);
 
+    private async Task<IReadOnlyList<GitHubIssueDto>> GetIssuesAssignedToAsync(
+        RepositoryName repositoryName,
+        string state,
+        string assignee,
+        GitHubCacheScope scope,
+        CancellationToken cancellationToken) =>
+        await GetIssuesAsync(
+            repositoryName,
+            state,
+            label: null,
+            milestoneNumber: null,
+            sort: "updated",
+            direction: "desc",
+            scope: scope,
+            cancellationToken: cancellationToken,
+            assignee: assignee);
+
     private async Task<IReadOnlyList<GitHubIssueDto>> GetIssuesAsync(
         RepositoryName repositoryName,
         string state,
@@ -2681,9 +2709,10 @@ sealed partial class GitHubClient(
         string? sort,
         string? direction,
         GitHubCacheScope scope,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        string? assignee = null) =>
         await SendPagedGitHubRequestAsync(
-            CreateIssuesUrl(repositoryName, state, label, milestoneNumber, sort, direction),
+            CreateIssuesUrl(repositoryName, state, label, milestoneNumber, sort, direction, assignee),
             GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
             scope.RequestAuthorization,
             cancellationToken);
@@ -2726,7 +2755,8 @@ sealed partial class GitHubClient(
                 label,
                 milestoneNumber: null,
                 sort,
-                direction),
+                direction,
+                assignee: null),
             GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
             scope.RequestAuthorization,
             cancellationToken))
@@ -2741,7 +2771,8 @@ sealed partial class GitHubClient(
         string? label,
         int? milestoneNumber,
         string? sort,
-        string? direction)
+        string? direction,
+        string? assignee = null)
     {
         var queryParts = new List<string>
         {
@@ -2756,6 +2787,11 @@ sealed partial class GitHubClient(
         if (milestoneNumber is { } milestone)
         {
             queryParts.Add($"milestone={milestone}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(assignee))
+        {
+            queryParts.Add($"assignee={Uri.EscapeDataString(assignee)}");
         }
 
         if (!string.IsNullOrWhiteSpace(sort))

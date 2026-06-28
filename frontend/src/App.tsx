@@ -201,8 +201,8 @@ function App() {
   const developerPullRequestCounts = useMemo(() => createDeveloperPullRequestCounts(pullRequests), [pullRequests]);
   const attentionBuckets = useMemo(() => createAttentionBuckets(pullRequests), [pullRequests]);
   const issueBuckets = useMemo(
-    () => createFocusIssueBuckets(issues),
-    [issues],
+    () => createFocusIssueBuckets(issues, authStatus?.login),
+    [authStatus?.login, issues],
   );
   const forMeItems = useMemo(
     () => createForMeItems(pullRequests, authStatus?.login),
