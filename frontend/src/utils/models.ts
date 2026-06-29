@@ -1452,7 +1452,7 @@ function mergeDevelopers(developers: DeveloperStats[], actor: string): Developer
   };
 }
 
-function actorIdentityKey(actor: string) {
+export function actorIdentityKey(actor: string) {
   // A "{human}/copilot" author identifies as the human who started the Copilot PR, so ownership,
   // core-team matching, and dedupe all key off that human.
   const normalized = actor.toLowerCase();

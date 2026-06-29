@@ -8,8 +8,8 @@ import type {
   VisiblePullRequestHandler,
 } from '../../types';
 import { colorForText, formatCount, formatRelative } from '../../utils/format';
-import { computeFocusItems } from './focusQueue';
-import type { FocusItem } from './focusQueue';
+import { computeFocusExclusionItems, computeFocusItems } from './focusQueue';
+import type { FocusExclusionItem, FocusItem } from './focusQueue';
 import GitHubAvatar from '../GitHubAvatar';
 import HelpTooltip from '../HelpTooltip';
 import LoadingBadge from '../LoadingBadge';
@@ -21,6 +21,7 @@ import FocusExclusionDialog from './FocusExclusionDialog';
 
 type QueueOverviewProps = {
   counts: DeveloperPullRequestCount[];
+  pullRequests: PullRequestSummary[];
   attentionBuckets: AttentionBucket[];
   forMeItems: PickItem[];
   loading: boolean;
@@ -38,6 +39,7 @@ const needsAttentionHelp = 'Being in Needs attention means the PR has an actiona
 
 function QueueOverview({
   counts,
+  pullRequests,
   attentionBuckets,
   forMeItems,
   loading,
@@ -55,11 +57,16 @@ function QueueOverview({
     () => computeFocusItems(attentionBuckets),
     [attentionBuckets],
   );
+  const focusExclusionItems = useMemo<FocusExclusionItem[]>(
+    () => computeFocusExclusionItems(pullRequests, attentionBuckets, focusItems, login),
+    [attentionBuckets, focusItems, login, pullRequests],
+  );
 
   const coreOpenCount = counts.reduce((total, count) => total + count.openPullRequestCount, 0);
   const activeCoreCounts = counts.filter((count) => count.openPullRequestCount > 0);
   const visibleCoreCounts = showAllCoreMembers ? counts : activeCoreCounts;
   const focusShownCount = Math.min(focusItems.length, pullRequestListLimit);
+  const focusExclusionShownCount = Math.min(focusExclusionItems.length, pullRequestListLimit);
   const loadingLabel = hasLoaded ? 'Refreshing' : 'Loading';
   const reviewBuckets = useMemo<AttentionBucket[]>(
     () => forMeItems.length === 0
@@ -187,6 +194,55 @@ function QueueOverview({
             onSelectPullRequest={onSelectPullRequest}
             onVisiblePullRequest={onVisiblePullRequest}
           />
+        )}
+
+        {login && (
+          <section className="outside-focus-list" aria-label="Your pull requests outside Needs attention">
+            <div className="attention-card-header">
+              <span>Your PRs outside Needs attention</span>
+              <div className="section-loading-meta">
+                {loading && <LoadingBadge label={loadingLabel} />}
+                <LoadingMetric
+                  value={focusExclusionShownCount}
+                  loading={loading}
+                  hasLoaded={hasLoaded}
+                  formatValue={(count) => formatCount(count, 'shown')}
+                  pendingLabel="Outside queue count is loading"
+                />
+              </div>
+            </div>
+            <p>
+              Open non-draft PRs authored by {login} that do not currently qualify for the focused queue.
+            </p>
+            {loading && !hasLoaded && focusExclusionItems.length === 0 ? (
+              <LoadingCardPlaceholders count={2} label="Loading out-of-queue pull request cards" />
+            ) : (
+              <>
+                <PullRequestList
+                  entries={focusExclusionItems.map((item) => ({
+                    pullRequest: item.pullRequest,
+                    bucketLabel: item.reason.label,
+                    annotation: item.reason.detail,
+                    signalProps: {
+                      leadingSignals: [{ label: item.reason.label, tone: item.reason.tone }],
+                      computedSignalLimit: 4,
+                      showActionSignal: false,
+                    },
+                  }))}
+                  limit={pullRequestListLimit}
+                  preserveOrder
+                  emptyState={loading ? 'Loading your out-of-queue PRs...' : 'No open non-draft PRs authored by you are outside Needs attention.'}
+                  onSelectPullRequest={onSelectPullRequest}
+                  onVisiblePullRequest={onVisiblePullRequest}
+                />
+                {focusExclusionItems.length > pullRequestListLimit && (
+                  <p className="focus-info-note">
+                    Showing the first {pullRequestListLimit} by exclusion priority and latest update.
+                  </p>
+                )}
+              </>
+            )}
+          </section>
         )}
       </section>
 

@@ -1,33 +1,43 @@
-import type { AttentionBucket, AttentionItem, PullRequestSummary } from '../../types';
-import { isChecksFailing, isPullRequestWithinFocusAgeLimit } from '../../utils/models';
+import type { AttentionBucket, AttentionItem, AttentionSignal, PullRequestSummary } from '../../types';
+import {
+  actorIdentityKey,
+  hasMergeConflicts,
+  hasNeedsAuthorActionLabel,
+  isChecksFailing,
+  isPullRequestWithinFocusAgeLimit,
+} from '../../utils/models';
 
 export type FocusItem = AttentionItem & {
   bucketLabel: string;
   bucketTone: AttentionBucket['tone'];
 };
 
-const excludedFocusBucketLabels = new Set([
-  'Stalled',
-  'Draft',
-  'My draft PRs',
-  'Docs',
-  'Community Toolkit',
-  'Bots / automation',
-  'Community',
-  'Unresolved feedback',
-  'Merge conflicts',
-  'CI failing',
-]);
-const disqualifyingFocusBucketLabels = new Set([
-  'Draft',
-  'My draft PRs',
-  'Docs',
-  'Community Toolkit',
-  'Bots / automation',
-  'Community',
-  'Unresolved feedback',
-  'Merge conflicts',
-]);
+type FocusExclusionReasonKind =
+  | 'ci-failing'
+  | 'merge-conflicts'
+  | 'unresolved-feedback'
+  | 'held-by-label'
+  | 'stale-activity'
+  | 'specialized-lane'
+  | 'stalled-only'
+  | 'outside-queue';
+
+export type FocusExclusionReason = {
+  kind: FocusExclusionReasonKind;
+  label: string;
+  detail: string;
+  tone: AttentionSignal['tone'];
+};
+
+export type FocusExclusionItem = {
+  pullRequest: PullRequestSummary;
+  reason: FocusExclusionReason;
+  bucketLabels: string[];
+};
+
+const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Unresolved feedback', 'Merge conflicts', 'CI failing']);
+const disqualifyingFocusBucketLabels = new Set(['Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Unresolved feedback', 'Merge conflicts']);
+const specializedFocusBucketLabels = new Set(['Docs', 'Community Toolkit', 'Bots / automation', 'Community']);
 const focusBucketRanks = new Map([
   ['Regression', -2],
   ['Approved but aging', 0],
@@ -59,12 +69,147 @@ export function computeFocusItems(attentionBuckets: AttentionBucket[]): FocusIte
     .filter((item) => !isChecksFailing(item.pullRequest));
 }
 
+export function computeFocusExclusionItems(
+  pullRequests: PullRequestSummary[],
+  attentionBuckets: AttentionBucket[],
+  focusItems: FocusItem[],
+  login?: string,
+): FocusExclusionItem[] {
+  if (!login) {
+    return [];
+  }
+
+  const loginKey = actorIdentityKey(login);
+  const focusKeys = new Set(focusItems.map((item) => pullRequestKey(item.pullRequest)));
+  const bucketLabelsByPullRequest = createBucketLabelsByPullRequest(attentionBuckets);
+
+  return pullRequests
+    .filter((pullRequest) =>
+      pullRequest.state === 'open'
+      && !pullRequest.draft
+      && actorIdentityKey(pullRequest.author) === loginKey
+      && !focusKeys.has(pullRequestKey(pullRequest)))
+    .map((pullRequest) => {
+      const bucketLabels = bucketLabelsByPullRequest.get(pullRequestKey(pullRequest)) ?? [];
+      return {
+        pullRequest,
+        reason: focusExclusionReason(pullRequest, bucketLabels),
+        bucketLabels,
+      };
+    })
+    .sort(compareFocusExclusionItems);
+}
+
 function blockedFocusKeys(buckets: AttentionBucket[]) {
   return new Set(
     buckets
       .filter((bucket) => disqualifyingFocusBucketLabels.has(bucket.label))
       .flatMap((bucket) => bucket.items.map((item) => pullRequestKey(item.pullRequest))),
   );
+}
+
+function createBucketLabelsByPullRequest(buckets: AttentionBucket[]) {
+  const labelsByPullRequest = new Map<string, string[]>();
+
+  for (const bucket of buckets) {
+    for (const item of bucket.items) {
+      const key = pullRequestKey(item.pullRequest);
+      const labels = labelsByPullRequest.get(key);
+      if (labels) {
+        labels.push(bucket.label);
+      } else {
+        labelsByPullRequest.set(key, [bucket.label]);
+      }
+    }
+  }
+
+  return labelsByPullRequest;
+}
+
+function focusExclusionReason(
+  pullRequest: PullRequestSummary,
+  bucketLabels: string[],
+): FocusExclusionReason {
+  if (isChecksFailing(pullRequest)) {
+    return {
+      kind: 'ci-failing',
+      label: 'CI failing',
+      detail: 'Failing checks keep it out until CI is green again.',
+      tone: 'danger',
+    };
+  }
+
+  if (hasMergeConflicts(pullRequest)) {
+    return {
+      kind: 'merge-conflicts',
+      label: 'Merge conflicts',
+      detail: 'The author needs to rebase before reviewers or maintainers can finish it.',
+      tone: 'danger',
+    };
+  }
+
+  if (pullRequest.review.unresolvedThreadCount > 0) {
+    return {
+      kind: 'unresolved-feedback',
+      label: 'Unresolved feedback',
+      detail: 'Open review threads make it author-blocked instead of reviewer-blocked.',
+      tone: 'danger',
+    };
+  }
+
+  if (hasNeedsAuthorActionLabel(pullRequest)) {
+    return {
+      kind: 'held-by-label',
+      label: 'Held by label',
+      detail: 'A do-not-merge or needs-author-action label keeps it out of the focused queue.',
+      tone: 'danger',
+    };
+  }
+
+  const specializedBucketLabel = bucketLabels.find((label) => specializedFocusBucketLabels.has(label));
+  if (specializedBucketLabel) {
+    return {
+      kind: 'specialized-lane',
+      label: `${specializedBucketLabel} lane`,
+      detail: `It is routed to the ${specializedBucketLabel} lane instead of Needs attention.`,
+      tone: 'accent',
+    };
+  }
+
+  const focusCandidateBucketLabel = bestFocusCandidateBucketLabel(bucketLabels);
+  if (
+    focusCandidateBucketLabel
+    && !isPullRequestWithinFocusAgeLimit(pullRequest, focusCandidateBucketLabel)
+  ) {
+    return {
+      kind: 'stale-activity',
+      label: 'Stale activity',
+      detail: 'Its actionable lane has not had fresh activity in the last 14 days.',
+      tone: 'warning',
+    };
+  }
+
+  if (bucketLabels.includes('Stalled')) {
+    return {
+      kind: 'stalled-only',
+      label: 'Stalled only',
+      detail: 'It has gone quiet and has no fresher actionable lane for Needs attention.',
+      tone: 'warning',
+    };
+  }
+
+  return {
+    kind: 'outside-queue',
+    label: 'Outside queue',
+    detail: 'It does not currently match a focused, actionable Needs attention lane.',
+    tone: 'muted',
+  };
+}
+
+function bestFocusCandidateBucketLabel(bucketLabels: string[]) {
+  return [...bucketLabels]
+    .filter((label) => !excludedFocusBucketLabels.has(label))
+    .sort((first, second) => focusBucketRank(first) - focusBucketRank(second))[0] ?? null;
 }
 
 function dedupeFocusItems(items: FocusItem[], blockedKeys: Set<string>) {
@@ -87,6 +232,38 @@ function dedupeFocusItems(items: FocusItem[], blockedKeys: Set<string>) {
 
 function focusBucketRank(label: string) {
   return focusBucketRanks.get(label) ?? Number.MAX_SAFE_INTEGER;
+}
+
+function compareFocusExclusionItems(first: FocusExclusionItem, second: FocusExclusionItem) {
+  return focusExclusionReasonRank(first.reason.kind) - focusExclusionReasonRank(second.reason.kind)
+    || updatedTime(second.pullRequest) - updatedTime(first.pullRequest)
+    || first.pullRequest.repository.localeCompare(second.pullRequest.repository)
+    || first.pullRequest.number - second.pullRequest.number;
+}
+
+function focusExclusionReasonRank(kind: FocusExclusionReasonKind) {
+  switch (kind) {
+    case 'ci-failing':
+      return 0;
+    case 'merge-conflicts':
+      return 1;
+    case 'unresolved-feedback':
+      return 2;
+    case 'held-by-label':
+      return 3;
+    case 'stale-activity':
+      return 4;
+    case 'specialized-lane':
+      return 5;
+    case 'stalled-only':
+      return 6;
+    case 'outside-queue':
+      return 7;
+  }
+}
+
+function updatedTime(pullRequest: PullRequestSummary) {
+  return new Date(pullRequest.updatedAt).getTime();
 }
 
 function pullRequestKey(pullRequest: PullRequestSummary) {

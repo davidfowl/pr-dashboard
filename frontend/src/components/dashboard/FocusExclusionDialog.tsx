@@ -94,7 +94,7 @@ function FocusExclusionDialog({ open, onClose }: FocusExclusionDialogProps) {
           ))}
         </ul>
         <p className="focus-info-dialog-footnote">
-          A hidden PR is never lost — it still shows in its specific bucket on the board below.
+          A hidden PR is not lost — most still show in a specific bucket below, and your own non-draft PRs can appear in the outside queue list.
         </p>
       </div>
     </dialog>

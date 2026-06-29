@@ -1733,6 +1733,16 @@ select:focus-visible {
   margin-top: 0.35rem;
 }
 
+.outside-focus-list {
+  margin-top: 0.9rem;
+  border-top: 1px solid var(--hairline);
+  padding-top: 0.85rem;
+}
+
+.outside-focus-list .attention-list {
+  margin-top: 0.55rem;
+}
+
 .focus-info-trigger {
   appearance: none;
   -webkit-appearance: none;
@@ -2466,6 +2476,15 @@ select:focus-visible {
   gap: 0.3rem;
 }
 
+.attention-pr-note {
+  grid-column: 3 / 5;
+  grid-row: 3;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
 .attention-pr-linked-issues,
 .attention-issue-linked-pulls {
   grid-column: 3 / 5;
@@ -2473,6 +2492,10 @@ select:focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 0.3rem;
+}
+
+.attention-pr-note + .attention-pr-linked-issues {
+  grid-row: 4;
 }
 
 .attention-pr-linked-issues a,
@@ -3873,6 +3896,7 @@ img.avatar-dot {
   .attention-issue-actions,
   .attention-pr-signals,
   .attention-issue-signals,
+  .attention-pr-note,
   .attention-pr-linked-issues,
   .attention-issue-linked-pulls {
     grid-column: 1;
