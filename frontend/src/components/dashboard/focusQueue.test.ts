@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AttentionBucket, CheckState, PullRequestSummary } from '../../types';
-import { computeFocusExclusionItems, computeFocusItems } from './focusQueue';
+import { computeCommunityItems, computeFocusExclusionItems, computeFocusItems } from './focusQueue';
 
 function checks(state: CheckState): PullRequestSummary['checks'] {
   return {
@@ -28,7 +28,7 @@ function pr(
     title: `PR ${number}`,
     state: 'open',
     draft: false,
-    author: 'octocat',
+    author: 'davidfowl',
     htmlUrl: `https://github.com/example/repo/pull/${number}`,
     createdAt: now,
     updatedAt: now,
@@ -66,6 +66,10 @@ function bucket(label: string, prs: PullRequestSummary[]): AttentionBucket {
 }
 
 describe('computeFocusItems', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('excludes PRs with failing checks from the Needs attention focus queue', () => {
     const failing = pr(1, 'failure');
     const pending = pr(2, 'pending');
@@ -129,6 +133,60 @@ describe('computeFocusItems', () => {
 
     expect(computeFocusItems(buckets)).toHaveLength(0);
   });
+
+  it('excludes recent community PRs even when they qualify for an actionable lane', () => {
+    const community = { ...pr(41, 'success'), author: 'external-contributor' };
+    const buckets: AttentionBucket[] = [
+      bucket('Ready to merge', [community]),
+    ];
+
+    expect(computeFocusItems(buckets)).toHaveLength(0);
+  });
+});
+
+describe('computeCommunityItems', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows recent community PRs outside the review buckets', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const recent = {
+      ...pr(70, 'success'),
+      author: 'external-contributor',
+      updatedAt: '2026-06-22T23:06:18Z',
+    };
+    const newer = {
+      ...pr(71, 'success'),
+      author: 'another-contributor',
+      updatedAt: '2026-06-23T20:06:18Z',
+    };
+
+    expect(computeCommunityItems([recent, newer]).map((item) => item.pullRequest.number)).toEqual([71, 70]);
+  });
+
+  it('excludes aged-out community PRs from the recent community list', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const agedOut = {
+      ...pr(72, 'success'),
+      author: 'external-contributor',
+      updatedAt: '2026-06-08T23:06:18Z',
+    };
+
+    expect(computeCommunityItems([agedOut])).toHaveLength(0);
+  });
+
+  it('excludes core-team, draft, and held PRs from the recent community list', () => {
+    const coreTeam = pr(73, 'success');
+    const draft = { ...pr(74, 'success'), author: 'external-contributor', draft: true };
+    const held = { ...pr(75, 'success'), author: 'external-contributor', labels: ['needs-author-action'] };
+
+    expect(computeCommunityItems([coreTeam, draft, held])).toHaveLength(0);
+  });
 });
 
 describe('computeFocusExclusionItems', () => {
@@ -147,7 +205,7 @@ describe('computeFocusExclusionItems', () => {
       [failing, inFocus, otherAuthor, draft],
       buckets,
       computeFocusItems(buckets),
-      'octocat',
+      'davidfowl',
     );
 
     expect(exclusions.map((item) => item.pullRequest.number)).toEqual([1]);
@@ -157,7 +215,7 @@ describe('computeFocusExclusionItems', () => {
   it('explains held PRs that are hidden from attention buckets', () => {
     const held = { ...pr(50, 'success'), labels: ['needs-author-action'] };
 
-    const exclusions = computeFocusExclusionItems([held], [], [], 'octocat');
+    const exclusions = computeFocusExclusionItems([held], [], [], 'davidfowl');
 
     expect(exclusions).toHaveLength(1);
     expect(exclusions[0]?.reason.label).toBe('Held by label');
@@ -172,7 +230,7 @@ describe('computeFocusExclusionItems', () => {
       [stale],
       buckets,
       computeFocusItems(buckets),
-      'octocat',
+      'davidfowl',
     );
 
     expect(exclusions).toHaveLength(1);

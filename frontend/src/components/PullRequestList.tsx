@@ -109,6 +109,7 @@ function bucketWaitTime(pullRequest: PullRequestSummary, bucketLabel: string) {
     case 'Community Toolkit':
     case 'Bots / automation':
     case 'Community':
+    case 'Aged out community':
     case 'Draft':
       return updatedTime(pullRequest);
     default:

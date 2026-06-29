@@ -33,7 +33,7 @@ const exclusionReasons: ExclusionReason[] = [
   },
   {
     title: 'It belongs to a specialized lane',
-    detail: 'Docs, Community Toolkit, bot/automation, and community PRs are routed to their own lanes rather than the main queue.',
+    detail: 'Docs, Community Toolkit, bot/automation, and aged-out community PRs are routed to their own lanes rather than the main queue. Recently active community PRs show in the Community PRs list.',
   },
   {
     title: 'It has gone quiet for 7+ days (stalled)',

@@ -3,7 +3,9 @@ import {
   actorIdentityKey,
   hasMergeConflicts,
   hasNeedsAuthorActionLabel,
+  isAgedOutCommunityPullRequest,
   isChecksFailing,
+  isCommunityPullRequest,
   isPullRequestWithinFocusAgeLimit,
 } from '../../utils/models';
 
@@ -12,12 +14,18 @@ export type FocusItem = AttentionItem & {
   bucketTone: AttentionBucket['tone'];
 };
 
+export type CommunityQueueItem = AttentionItem & {
+  bucketLabel: 'Community';
+  bucketTone: 'accent';
+};
+
 type FocusExclusionReasonKind =
   | 'ci-failing'
   | 'merge-conflicts'
   | 'unresolved-feedback'
   | 'held-by-label'
   | 'stale-activity'
+  | 'community-list'
   | 'specialized-lane'
   | 'stalled-only'
   | 'outside-queue';
@@ -35,9 +43,9 @@ export type FocusExclusionItem = {
   bucketLabels: string[];
 };
 
-const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Unresolved feedback', 'Merge conflicts', 'CI failing']);
-const disqualifyingFocusBucketLabels = new Set(['Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Unresolved feedback', 'Merge conflicts']);
-const specializedFocusBucketLabels = new Set(['Docs', 'Community Toolkit', 'Bots / automation', 'Community']);
+const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Aged out community', 'Unresolved feedback', 'Merge conflicts', 'CI failing']);
+const disqualifyingFocusBucketLabels = new Set(['Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Aged out community', 'Unresolved feedback', 'Merge conflicts']);
+const specializedFocusBucketLabels = new Set(['Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Aged out community']);
 const focusBucketRanks = new Map([
   ['Regression', -2],
   ['Approved but aging', 0],
@@ -66,7 +74,28 @@ export function computeFocusItems(attentionBuckets: AttentionBucket[]): FocusIte
     blockedKeys,
   )
     .filter((item) => isPullRequestWithinFocusAgeLimit(item.pullRequest, item.bucketLabel))
+    .filter((item) => !isCommunityPullRequest(item.pullRequest))
     .filter((item) => !isChecksFailing(item.pullRequest));
+}
+
+export function computeCommunityItems(pullRequests: PullRequestSummary[]): CommunityQueueItem[] {
+  return pullRequests
+    .filter((pullRequest) =>
+      pullRequest.state === 'open'
+      && !pullRequest.draft
+      && !hasNeedsAuthorActionLabel(pullRequest)
+      && isCommunityPullRequest(pullRequest)
+      && !isAgedOutCommunityPullRequest(pullRequest))
+    .map((pullRequest): CommunityQueueItem => ({
+      pullRequest,
+      reason: 'Community',
+      bucketLabel: 'Community',
+      bucketTone: 'accent',
+    }))
+    .sort((first, second) =>
+      updatedTime(second.pullRequest) - updatedTime(first.pullRequest)
+      || first.pullRequest.repository.localeCompare(second.pullRequest.repository)
+      || first.pullRequest.number - second.pullRequest.number);
 }
 
 export function computeFocusExclusionItems(
@@ -166,6 +195,15 @@ function focusExclusionReason(
     };
   }
 
+  if (isCommunityPullRequest(pullRequest) && !isAgedOutCommunityPullRequest(pullRequest)) {
+    return {
+      kind: 'community-list',
+      label: 'Community list',
+      detail: 'Recently active external-contributor PRs show in the Community list instead of Needs attention.',
+      tone: 'accent',
+    };
+  }
+
   const specializedBucketLabel = bucketLabels.find((label) => specializedFocusBucketLabels.has(label));
   if (specializedBucketLabel) {
     return {
@@ -253,12 +291,14 @@ function focusExclusionReasonRank(kind: FocusExclusionReasonKind) {
       return 3;
     case 'stale-activity':
       return 4;
-    case 'specialized-lane':
+    case 'community-list':
       return 5;
-    case 'stalled-only':
+    case 'specialized-lane':
       return 6;
-    case 'outside-queue':
+    case 'stalled-only':
       return 7;
+    case 'outside-queue':
+      return 8;
   }
 }
 

@@ -36,7 +36,7 @@ function pr(overrides: PrOverrides): PullRequestSummary {
     title: `PR ${number}`,
     state: 'open',
     draft: false,
-    author: 'octocat',
+    author: 'davidfowl',
     htmlUrl: `https://github.com/example/repo/pull/${number}`,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
@@ -250,6 +250,59 @@ describe('createAttentionBuckets lane routing', () => {
 
     expect(inBucket(buckets, 'Needs review', 6)).toBe(true);
     expect(inBucket(buckets, 'Stalled', 6)).toBe(true);
+  });
+
+  it('routes aged-out community PRs to a separate bucket', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 35,
+        author: 'external-contributor',
+        createdAt: '2026-06-01T20:28:55Z',
+        updatedAt: '2026-06-08T23:06:18Z',
+      }),
+    ]);
+
+    expect(inBucket(buckets, 'Aged out community', 35)).toBe(true);
+    expect(inBucket(buckets, 'Community', 35)).toBe(false);
+    expect(inBucket(buckets, 'Stalled', 35)).toBe(true);
+  });
+
+  it('keeps recently active community PRs out of review buckets', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 36,
+        author: 'external-contributor',
+        createdAt: '2026-06-01T20:28:55Z',
+        updatedAt: '2026-06-22T23:06:18Z',
+      }),
+    ]);
+
+    expect(buckets.every((bucket) => bucket.items.every((item) => item.pullRequest.number !== 36))).toBe(true);
+    expect(inBucket(buckets, 'Aged out community', 36)).toBe(false);
+  });
+
+  it('keeps high-priority signal buckets for recently active community PRs', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 37,
+        author: 'external-contributor',
+        labels: ['regression'],
+        createdAt: '2026-06-01T20:28:55Z',
+        updatedAt: '2026-06-22T23:06:18Z',
+      }),
+    ]);
+
+    expect(inBucket(buckets, 'Regression', 37)).toBe(true);
+    expect(inBucket(buckets, 'Aged out community', 37)).toBe(false);
   });
 
   it('keeps old ready-to-merge PRs in focus when they were approved recently', () => {
