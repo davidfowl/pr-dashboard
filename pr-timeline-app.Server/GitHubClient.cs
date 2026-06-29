@@ -1364,6 +1364,7 @@ sealed partial class GitHubClient(
         var reviewEvents = pullRequest.Reviews?.Nodes?
             .Where(review => review is not null)
             .Select(review => ReviewEvent.FromGraphQl(review!))
+            .OfType<ReviewEvent>()
             .ToArray()
         ?? [];
         var humanReviews = reviewEvents
