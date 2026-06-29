@@ -1933,7 +1933,9 @@ sealed partial class GitHubClient(
             await Task.WhenAll(milestoneIssuesTask, releaseBranchPullRequestsTask);
 
             var milestoneIssues = await milestoneIssuesTask;
-            var releaseBranchPullRequestDtos = await releaseBranchPullRequestsTask;
+            var releaseBranchPullRequestDtos = (await releaseBranchPullRequestsTask)
+                .Where(pullRequest => !pullRequest.Draft)
+                .ToArray();
             var pullRequestDtosByNumber = releaseBranchPullRequestDtos
                 .GroupBy(pullRequest => pullRequest.Number)
                 .ToDictionary(group => group.Key, group => group.First());
@@ -1953,7 +1955,7 @@ sealed partial class GitHubClient(
 
             foreach (var (number, task) in missingMilestonePullRequestTasks)
             {
-                if (await task is { } pullRequest)
+                if (await task is { Draft: false } pullRequest)
                 {
                     pullRequestDtosByNumber[number] = pullRequest;
                 }

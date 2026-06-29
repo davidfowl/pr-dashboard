@@ -317,7 +317,7 @@ function ShipWeekLoadingProgress({
 
 function createShipModeModel(shipWeek: ShipWeekResponse) {
   const visiblePullRequests = shipWeek.pullRequests
-    .filter((item) => !item.pullRequest.draft && !shouldHideFromSharedPullRequestLists(item.pullRequest));
+    .filter((item) => !shouldHideFromSharedPullRequestLists(item.pullRequest));
   const milestonePullRequests = visiblePullRequests
     .filter((item) => item.releaseScope.inMilestone)
     .map(createShipModePullRequestItem);
