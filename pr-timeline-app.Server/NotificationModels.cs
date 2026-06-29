@@ -42,6 +42,9 @@ sealed class NotificationPreferences
     // Default ON: the whole point of opting in is to learn when you are asked to review.
     public bool ReviewRequested { get; set; } = true;
 
+    // Default ON: nag the author and approver(s) when one of their PRs is ready to merge.
+    public bool ReadyToMerge { get; set; } = true;
+
     public static NotificationPreferences CreateDefault() => new();
 }
 
@@ -82,7 +85,7 @@ readonly record struct NotificationDedupeStateResult(
 
 sealed record VapidPublicKeyResponse(string PublicKey, string KeyId);
 
-sealed record NotificationPreferencesDto(bool ReviewRequested);
+sealed record NotificationPreferencesDto(bool ReviewRequested, bool ReadyToMerge);
 
 sealed record PushSubscriptionKeysDto(string? P256dh, string? Auth);
 

@@ -15,6 +15,7 @@ import {
   syncSubscription,
   unsubscribeFromPush,
 } from '../utils/notifications';
+import type { NotificationPreferences } from '../utils/notifications';
 
 type NotificationSettingsProps = {
   authStatus: AuthStatus | null;
@@ -72,9 +73,20 @@ function CheckXIcon() {
   );
 }
 
-// The catalog of notification types. Only `reviewRequested` is wired today; the
-// rest are placeholders so the UI advertises what's coming and gives us a single
-// place to add new types as the server learns to detect them.
+function MergeIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        fill="currentColor"
+        d="M5 3.5a1.5 1.5 0 1 0-2 1.415v6.17a1.5 1.5 0 1 0 1 0V8.06A4.5 4.5 0 0 0 7.5 9.5h.585a1.5 1.5 0 1 0 0-1H7.5A3.5 3.5 0 0 1 4 5.06v-.145A1.5 1.5 0 0 0 5 3.5Z"
+      />
+    </svg>
+  );
+}
+
+// The catalog of notification types. `reviewRequested` and `readyToMerge` are wired today;
+// the rest are placeholders so the UI advertises what's coming and gives us a single place to
+// add new types as the server learns to detect them.
 type NotificationType = {
   id: string;
   title: string;
@@ -89,6 +101,12 @@ const NOTIFICATION_TYPES: NotificationType[] = [
     title: 'Review requested',
     description: 'When you’re added as a requested reviewer on an open PR.',
     icon: <EyeIcon />,
+  },
+  {
+    id: 'readyToMerge',
+    title: 'Ready to merge',
+    description: 'When a PR you authored or approved is approved and ready to merge.',
+    icon: <MergeIcon />,
   },
   {
     id: 'mentioned',
@@ -188,6 +206,7 @@ function NotificationSettings({ authStatus, variant = 'bell' }: NotificationSett
   );
   const [subscribed, setSubscribed] = useState(false);
   const [reviewRequested, setReviewRequested] = useState(true);
+  const [readyToMerge, setReadyToMerge] = useState(true);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<Status>(idleStatus);
 
@@ -243,6 +262,7 @@ function NotificationSettings({ authStatus, variant = 'bell' }: NotificationSett
             const prefs = await getPreferences();
             if (!cancelled) {
               setReviewRequested(prefs.reviewRequested);
+              setReadyToMerge(prefs.readyToMerge);
             }
           } catch {
             // Non-fatal: leave the default toggle state.
@@ -333,6 +353,7 @@ function NotificationSettings({ authStatus, variant = 'bell' }: NotificationSett
       try {
         const prefs = await getPreferences();
         setReviewRequested(prefs.reviewRequested);
+        setReadyToMerge(prefs.readyToMerge);
       } catch {
         // Ignore; defaults apply.
       }
@@ -358,21 +379,35 @@ function NotificationSettings({ authStatus, variant = 'bell' }: NotificationSett
     }
   }, []);
 
-  const toggleReviewRequested = useCallback(async () => {
+  const persistPreferences = useCallback(
+    async (next: NotificationPreferences, rollback: () => void) => {
+      setBusy(true);
+      setStatus(idleStatus);
+      try {
+        const saved = await savePreferences(next);
+        setReviewRequested(saved.reviewRequested);
+        setReadyToMerge(saved.readyToMerge);
+      } catch (error) {
+        rollback();
+        setStatus({ kind: 'error', text: error instanceof Error ? error.message : 'Could not save preference.' });
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
+
+  const toggleReviewRequested = useCallback(() => {
     const next = !reviewRequested;
     setReviewRequested(next);
-    setBusy(true);
-    setStatus(idleStatus);
-    try {
-      const saved = await savePreferences({ reviewRequested: next });
-      setReviewRequested(saved.reviewRequested);
-    } catch (error) {
-      setReviewRequested(!next);
-      setStatus({ kind: 'error', text: error instanceof Error ? error.message : 'Could not save preference.' });
-    } finally {
-      setBusy(false);
-    }
-  }, [reviewRequested]);
+    void persistPreferences({ reviewRequested: next, readyToMerge }, () => setReviewRequested(!next));
+  }, [reviewRequested, readyToMerge, persistPreferences]);
+
+  const toggleReadyToMerge = useCallback(() => {
+    const next = !readyToMerge;
+    setReadyToMerge(next);
+    void persistPreferences({ reviewRequested, readyToMerge: next }, () => setReadyToMerge(!next));
+  }, [reviewRequested, readyToMerge, persistPreferences]);
 
   const test = useCallback(async () => {
     setBusy(true);
@@ -402,7 +437,8 @@ function NotificationSettings({ authStatus, variant = 'bell' }: NotificationSett
   // The live preference wiring, keyed by notification-type id. Adding a future type means
   // adding an entry here and to NOTIFICATION_TYPES — no other UI changes required.
   const liveControls: Record<string, { checked: boolean; toggle: () => void }> = {
-    reviewRequested: { checked: reviewRequested, toggle: () => void toggleReviewRequested() },
+    reviewRequested: { checked: reviewRequested, toggle: toggleReviewRequested },
+    readyToMerge: { checked: readyToMerge, toggle: toggleReadyToMerge },
   };
 
   let body: ReactNode;

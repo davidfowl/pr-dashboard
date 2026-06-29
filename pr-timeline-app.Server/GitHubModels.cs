@@ -329,6 +329,11 @@ record ReviewStatus(
     int UnresolvedThreadCount = 0,
     bool RequiresConversationResolution = false)
 {
+    // Numeric GitHub ids of the reviewers whose latest review is an approval. Used by the
+    // notification detector to nag approvers when a PR is ready to merge; empty unless the
+    // review source supplied reviewer ids.
+    public IReadOnlyList<long> ApprovedReviewerIds { get; init; } = [];
+
     public static ReviewStatus Waiting { get; } = new(
         State: "waiting",
         LatestState: null,
@@ -376,20 +381,22 @@ record ChecksStatus(
 
 record FailingCheck(string Name, string? Conclusion, string? HtmlUrl);
 
-record ReviewEvent(string Actor, string State, DateTimeOffset SubmittedAt)
+record ReviewEvent(string Actor, string State, DateTimeOffset SubmittedAt, long? ActorId = null)
 {
     public static ReviewEvent FromDto(GitHubReviewDto review) =>
         new(
             Actor: review.User?.Login ?? "unknown",
             State: review.State ?? "UNKNOWN",
-            SubmittedAt: review.SubmittedAt);
+            SubmittedAt: review.SubmittedAt,
+            ActorId: review.User?.Id);
 
     public static ReviewEvent? FromGraphQl(GitHubGraphQlReviewNodeDto review) =>
         review.SubmittedAt is { } submittedAt
             ? new(
                 Actor: review.Author?.Login ?? "unknown",
                 State: review.State ?? "UNKNOWN",
-                SubmittedAt: submittedAt)
+                SubmittedAt: submittedAt,
+                ActorId: review.Author?.DatabaseId)
             : null;
 }
 

@@ -51,6 +51,23 @@ static class NotificationPayloads
             Tag: $"review-requested:{repository}#{number}",
             Icon: DefaultIcon));
 
+    public static string ReadyToMerge(ReadyToMergeRole role, string repository, int number, string title, string url) =>
+        Serialize(new NotificationPayload(
+            Title: $"Ready to merge · {repository}#{number}",
+            Body: ReadyToMergeBody(role, title),
+            Url: url,
+            // Coalesce repeats for the same PR into one notification slot.
+            Tag: $"ready-to-merge:{repository}#{number}",
+            Icon: DefaultIcon));
+
+    private static string ReadyToMergeBody(ReadyToMergeRole role, string title)
+    {
+        var prefix = role == ReadyToMergeRole.Author
+            ? "Your PR is approved and ready to merge."
+            : "A PR you approved is ready to merge.";
+        return string.IsNullOrWhiteSpace(title) ? prefix : $"{prefix} {title}";
+    }
+
     private static string Serialize(NotificationPayload payload) =>
         JsonSerializer.Serialize(payload, s_jsonOptions);
 }
