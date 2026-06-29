@@ -85,7 +85,9 @@ readonly record struct NotificationDedupeStateResult(
 
 sealed record VapidPublicKeyResponse(string PublicKey, string KeyId);
 
-sealed record NotificationPreferencesDto(bool ReviewRequested, bool ReadyToMerge);
+// ReadyToMerge defaults to true so an older PWA client that PUTs only { reviewRequested }
+// doesn't deserialize ReadyToMerge as false and silently disable the new default-on preference.
+sealed record NotificationPreferencesDto(bool ReviewRequested, bool ReadyToMerge = true);
 
 sealed record PushSubscriptionKeysDto(string? P256dh, string? Auth);
 

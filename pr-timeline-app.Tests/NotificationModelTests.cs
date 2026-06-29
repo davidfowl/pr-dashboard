@@ -42,6 +42,18 @@ public sealed class NotificationModelTests
     }
 
     [Fact]
+    public void PreferencesDtoDefaultsReadyToMergeWhenAbsentFromJson()
+    {
+        // Older PWA clients PUT only { reviewRequested }; ReadyToMerge must stay default-on.
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var dto = JsonSerializer.Deserialize<NotificationPreferencesDto>("{\"reviewRequested\":true}", options);
+
+        Assert.NotNull(dto);
+        Assert.True(dto!.ReviewRequested);
+        Assert.True(dto.ReadyToMerge);
+    }
+
+    [Fact]
     public void PayloadsUseServiceWorkerContractFields()
     {
         foreach (var json in new[]
