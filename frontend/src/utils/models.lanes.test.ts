@@ -103,6 +103,17 @@ describe('createDeveloperPullRequestCounts', () => {
     expect(david?.openPullRequestCount).toBe(1);
     expect(david?.repositories).toEqual(['example/repo']);
   });
+
+  it('counts karolz-ms as a core team member', () => {
+    const counts = createDeveloperPullRequestCounts([
+      pr({ number: 3, author: 'karolz-ms' }),
+    ]);
+
+    const karol = counts.find((count) => count.actor === 'karolz-ms');
+
+    expect(karol?.openPullRequestCount).toBe(1);
+    expect(karol?.repositories).toEqual(['example/repo']);
+  });
 });
 
 describe('createShipWeekScopeGroups', () => {
@@ -285,6 +296,25 @@ describe('createAttentionBuckets lane routing', () => {
 
     expect(buckets.every((bucket) => bucket.items.every((item) => item.pullRequest.number !== 36))).toBe(true);
     expect(inBucket(buckets, 'Aged out community', 36)).toBe(false);
+  });
+
+  it('routes karolz-ms PRs as core-team review work', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 38, author: 'karolz-ms' }),
+    ]);
+
+    expect(inBucket(buckets, 'Needs review', 38)).toBe(true);
+    expect(inBucket(buckets, 'Community', 38)).toBe(false);
+  });
+
+  it('routes dotnet-maestro PRs to automation', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 39, author: 'dotnet-maestro' }),
+    ]);
+
+    expect(inBucket(buckets, 'Bots / automation', 39)).toBe(true);
+    expect(inBucket(buckets, 'Community', 39)).toBe(false);
+    expect(inBucket(buckets, 'Needs review', 39)).toBe(false);
   });
 
   it('keeps high-priority signal buckets for recently active community PRs', () => {

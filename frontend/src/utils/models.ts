@@ -57,6 +57,7 @@ const releaseBlockingLabelMarker = 'blocking-release';
 // Different repos in the dashboard use different names (e.g. needs-author-action, NO-MERGE), so
 // honor any of them.
 const doNotMergeLabels = new Set(['needs-author-action', 'no-merge']);
+const knownBotAuthors = new Set(['dotnet-maestro']);
 
 type FocusIssueBucketDefinition = Omit<AttentionIssueBucket, 'issues'> & {
   matches: (issue: ShipWeekIssueSummary) => boolean;
@@ -1914,7 +1915,8 @@ function isBotAuthor(author: string) {
   return normalized.endsWith('[bot]')
     || normalized.includes('bot')
     || normalized === 'copilot'
-    || normalized === 'github-actions';
+    || normalized === 'github-actions'
+    || knownBotAuthors.has(normalized);
 }
 
 function isCopilotAttributedAuthor(author: string) {
