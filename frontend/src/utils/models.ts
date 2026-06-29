@@ -50,6 +50,7 @@ const regressionBucketLabel = 'Regression';
 const ctiTeamIssueBucketLabel = 'CTI team';
 const myIssuesBucketLabel = 'My issues';
 const myDraftPullRequestsBucketLabel = 'My draft PRs';
+const agedOutCommunityBucketLabel = 'Aged out community';
 const ctiTeamTitleMarker = '[aspiree2e]';
 const releaseBlockingLabelMarker = 'blocking-release';
 // Labels that mark a PR as "do not merge / waiting on the author"; matched case-insensitively.
@@ -336,10 +337,10 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[], login
       items: [],
     },
     {
-      label: 'Community',
-      summary: 'External-contributor PRs kept out of the core-team focus lanes.',
-      tone: 'accent',
-      metric: 'external contributors',
+      label: agedOutCommunityBucketLabel,
+      summary: 'External-contributor PRs with no community-lane activity in the last 14 days.',
+      tone: 'warning',
+      metric: 'stale community',
       items: [],
     },
     {
@@ -675,6 +676,10 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
     return labels;
   }
 
+  if (isCommunityPullRequest(pullRequest) && !isAgedOutCommunityPullRequest(pullRequest)) {
+    return [];
+  }
+
   if (isBotAuthor(pullRequest.author)) {
     labels.push('Bots / automation');
   }
@@ -740,8 +745,8 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
     labels.push('Stalled');
   }
 
-  if (isCommunityAuthor(pullRequest.author) && !isCommunityToolkitPullRequest(pullRequest)) {
-    labels.push('Community');
+  if (isCommunityPullRequest(pullRequest)) {
+    labels.push(isAgedOutCommunityPullRequest(pullRequest) ? agedOutCommunityBucketLabel : 'Community');
   }
 
   // A small PR with red CI is not a "drain queue" candidate until CI is fixed.
@@ -795,6 +800,8 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
       return isCommunityWaiting(pullRequest)
         ? `Community · waiting ${formatAge(pullRequest.createdAt)}`
         : 'community';
+    case agedOutCommunityBucketLabel:
+      return agedOutCommunityBucketLabel;
     case 'Quick wins':
       return reviewFootprint(pullRequest);
     case 'Needs review':
@@ -899,6 +906,16 @@ export function isGeneratedDocsPullRequest(pullRequest: PullRequestSummary) {
 
 function isCommunityToolkitPullRequest(pullRequest: PullRequestSummary) {
   return pullRequest.repository.toLowerCase() === 'communitytoolkit/aspire';
+}
+
+export function isCommunityPullRequest(pullRequest: PullRequestSummary) {
+  return isCommunityAuthor(pullRequest.author)
+    && !isCommunityToolkitPullRequest(pullRequest);
+}
+
+export function isAgedOutCommunityPullRequest(pullRequest: PullRequestSummary) {
+  return isCommunityPullRequest(pullRequest)
+    && ageMs(pullRequest.updatedAt) > focusAgeLimitMs;
 }
 
 function isCommunityWaiting(pullRequest: PullRequestSummary) {
@@ -1016,7 +1033,9 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
     signals.push({ label: 'community toolkit', tone: 'accent' });
   }
 
-  if (isCommunityWaiting(pullRequest)) {
+  if (isAgedOutCommunityPullRequest(pullRequest)) {
+    signals.push({ label: agedOutCommunityBucketLabel.toLowerCase(), tone: 'warning' });
+  } else if (isCommunityWaiting(pullRequest)) {
     signals.push({ label: 'community wait', tone: 'warning' });
   }
 
@@ -1230,6 +1249,10 @@ function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {
 
   if (pullRequest.review.state === 'changes_requested') {
     return { label: 'author fix', tone: 'danger' };
+  }
+
+  if (isAgedOutCommunityPullRequest(pullRequest)) {
+    return { label: agedOutCommunityBucketLabel.toLowerCase(), tone: 'warning' };
   }
 
   if (isIdle(pullRequest)) {
