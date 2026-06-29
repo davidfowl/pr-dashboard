@@ -137,6 +137,30 @@ describe('createAttentionBuckets lane routing', () => {
     expect(buckets.every((bucket) => bucket.items.every((item) => item.pullRequest.number !== 5))).toBe(true);
   });
 
+  it('adds a My draft PRs bucket for draft PRs authored by the signed-in user', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 30, author: 'octocat', draft: true }),
+      pr({ number: 31, author: 'hubot', draft: true }),
+      pr({ number: 32, author: 'octocat' }),
+      pr({ number: 34, author: 'octocat', draft: true, labels: ['NO-MERGE'] }),
+    ], 'OctoCat');
+
+    const myDrafts = buckets.find((bucket) => bucket.label === 'My draft PRs');
+
+    expect(myDrafts?.items.map((item) => item.pullRequest.number)).toEqual([30, 34]);
+    expect(inBucket(buckets, 'Draft', 30)).toBe(true);
+    expect(inBucket(buckets, 'Draft', 31)).toBe(true);
+    expect(inBucket(buckets, 'Draft', 34)).toBe(false);
+  });
+
+  it('omits My draft PRs when there is no signed-in user', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 33, author: 'octocat', draft: true }),
+    ]);
+
+    expect(buckets.some((bucket) => bucket.label === 'My draft PRs')).toBe(false);
+  });
+
   it('keeps quiet recent core-team PRs in Needs review instead of Stalled', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));

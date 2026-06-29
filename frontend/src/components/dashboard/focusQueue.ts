@@ -6,8 +6,28 @@ export type FocusItem = AttentionItem & {
   bucketTone: AttentionBucket['tone'];
 };
 
-const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Unresolved feedback', 'Merge conflicts', 'CI failing']);
-const disqualifyingFocusBucketLabels = new Set(['Draft', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Unresolved feedback', 'Merge conflicts']);
+const excludedFocusBucketLabels = new Set([
+  'Stalled',
+  'Draft',
+  'My draft PRs',
+  'Docs',
+  'Community Toolkit',
+  'Bots / automation',
+  'Community',
+  'Unresolved feedback',
+  'Merge conflicts',
+  'CI failing',
+]);
+const disqualifyingFocusBucketLabels = new Set([
+  'Draft',
+  'My draft PRs',
+  'Docs',
+  'Community Toolkit',
+  'Bots / automation',
+  'Community',
+  'Unresolved feedback',
+  'Merge conflicts',
+]);
 const focusBucketRanks = new Map([
   ['Regression', -2],
   ['Approved but aging', 0],

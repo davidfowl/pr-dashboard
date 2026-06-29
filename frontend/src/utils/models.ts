@@ -49,6 +49,7 @@ const releaseBlockingSignalLabel = 'Blocking release';
 const regressionBucketLabel = 'Regression';
 const ctiTeamIssueBucketLabel = 'CTI team';
 const myIssuesBucketLabel = 'My issues';
+const myDraftPullRequestsBucketLabel = 'My draft PRs';
 const ctiTeamTitleMarker = '[aspiree2e]';
 const releaseBlockingLabelMarker = 'blocking-release';
 // Labels that mark a PR as "do not merge / waiting on the author"; matched case-insensitively.
@@ -262,7 +263,7 @@ function isOwnCopilotAuthor(author: string, login: string) {
   return sameLogin(author.slice(0, author.length - suffix.length), login);
 }
 
-export function createAttentionBuckets(pullRequests: PullRequestSummary[]): AttentionBucket[] {
+export function createAttentionBuckets(pullRequests: PullRequestSummary[], login?: string): AttentionBucket[] {
   const buckets: AttentionBucket[] = [
     {
       label: regressionBucketLabel,
@@ -384,12 +385,22 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
       items: [],
     },
   ];
+  if (login) {
+    buckets.push({
+      label: myDraftPullRequestsBucketLabel,
+      summary: `Draft pull requests authored by ${login}.`,
+      tone: 'accent',
+      metric: 'personal drafts',
+      items: [],
+    });
+  }
+
   const bucketsByLabel = new Map(buckets.map((bucket) => [bucket.label, bucket]));
   // Unlike the other shared lists (core-team ownership, Ship week) which use
   // shouldHideFromSharedPullRequestLists, the attention board surfaces merge-conflict PRs in their
   // own "Merge conflicts" lane (kept out of the Needs attention focus queue). Only PRs carrying a
   // do-not-merge label (any name in doNotMergeLabels, e.g. NO-MERGE or needs-author-action) are
-  // hidden here.
+  // hidden from these shared lanes.
   const visibleOpenPullRequests = pullRequests.filter((item) =>
     item.state === 'open' && !hasNeedsAuthorActionLabel(item));
 
@@ -399,6 +410,18 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[]): Atte
         pullRequest,
         reason: reviewSignal(pullRequest, bucketLabel),
       });
+    }
+  }
+
+  if (login) {
+    const myDraftPullRequestsBucket = bucketsByLabel.get(myDraftPullRequestsBucketLabel);
+    for (const pullRequest of pullRequests) {
+      if (pullRequest.state === 'open' && pullRequest.draft && sameLogin(pullRequest.author, login)) {
+        myDraftPullRequestsBucket?.items.push({
+          pullRequest,
+          reason: reviewSignal(pullRequest, myDraftPullRequestsBucketLabel),
+        });
+      }
     }
   }
 

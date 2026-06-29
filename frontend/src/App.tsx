@@ -199,7 +199,10 @@ function App() {
 
   const repoAccent = useMemo(() => colorForText(activeRepo), [activeRepo]);
   const developerPullRequestCounts = useMemo(() => createDeveloperPullRequestCounts(pullRequests), [pullRequests]);
-  const attentionBuckets = useMemo(() => createAttentionBuckets(pullRequests), [pullRequests]);
+  const attentionBuckets = useMemo(
+    () => createAttentionBuckets(pullRequests, authStatus?.login),
+    [authStatus?.login, pullRequests],
+  );
   const issueBuckets = useMemo(
     () => createFocusIssueBuckets(issues, authStatus?.login),
     [authStatus?.login, issues],

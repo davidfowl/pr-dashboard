@@ -997,11 +997,7 @@ sealed partial class GitHubClient(
             token,
             cancellationToken);
 
-        var activePullRequests = pullRequests
-            .Where(pullRequest => !pullRequest.IsDraft)
-            .ToArray();
-
-        var summaries = activePullRequests.Select(pullRequest =>
+        var summaries = pullRequests.Select(pullRequest =>
             CreatePullRequestSummaryFromGraphQlAsync(
                 repositoryName,
                 pullRequest,

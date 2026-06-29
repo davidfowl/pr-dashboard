@@ -441,6 +441,47 @@ public sealed class GitHubClientTests
         Assert.Contains(graphQlBodies, body => GetGraphQlVariable(body, "after") == "THREAD_PAGE_1");
     }
 
+    [Fact]
+    public async Task GraphQlPullListIncludesDraftPullRequests()
+    {
+        var client = CreateClientCapturingRequests((_, path, _) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                GraphQlPullRequestNode(
+                    1,
+                    title: "Work in progress",
+                    reviewState: "COMMENTED",
+                    reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                    lastCommitAt: "2026-01-03T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: [],
+                    isDraft: true),
+                GraphQlPullRequestNode(
+                    2,
+                    title: "Ready for review",
+                    reviewState: "APPROVED",
+                    reviewSubmittedAt: "2026-01-04T00:00:00Z",
+                    lastCommitAt: "2026-01-05T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: []))));
+        });
+
+        var pullRequests = await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal([1, 2], pullRequests.Select(pullRequest => pullRequest.Number));
+        Assert.True(pullRequests[0].Draft);
+        Assert.False(pullRequests[1].Draft);
+    }
+
     [Theory]
     [InlineData("APPROVED", "approved", false)]
     [InlineData("COMMENTED", "reviewed", true)]
@@ -5607,7 +5648,8 @@ public sealed class GitHubClientTests
         string? reviewThreadsEndCursor,
         bool[] reviewThreadsResolved,
         string? statusCheckRollupJson = null,
-        long? authorDatabaseId = null)
+        long? authorDatabaseId = null,
+        bool isDraft = false)
     {
         var reviewThreadNodes = string.Join(
             ",\n",
@@ -5622,7 +5664,7 @@ public sealed class GitHubClientTests
               "number": {{number}},
               "title": {{JsonSerializer.Serialize(title)}},
               "state": "OPEN",
-              "isDraft": false,
+              "isDraft": {{isDraft.ToString().ToLowerInvariant()}},
               "author": { "login": "octocat"{{authorDatabaseIdJson}} },
               "url": "https://github.com/example/repo/pull/{{number}}",
               "createdAt": "2026-01-01T00:00:00Z",
