@@ -677,7 +677,7 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
   }
 
   if (isCommunityPullRequest(pullRequest) && !isAgedOutCommunityPullRequest(pullRequest)) {
-    return [];
+    return labels;
   }
 
   if (isBotAuthor(pullRequest.author)) {

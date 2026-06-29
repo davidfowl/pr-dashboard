@@ -287,6 +287,24 @@ describe('createAttentionBuckets lane routing', () => {
     expect(inBucket(buckets, 'Aged out community', 36)).toBe(false);
   });
 
+  it('keeps high-priority signal buckets for recently active community PRs', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 37,
+        author: 'external-contributor',
+        labels: ['regression'],
+        createdAt: '2026-06-01T20:28:55Z',
+        updatedAt: '2026-06-22T23:06:18Z',
+      }),
+    ]);
+
+    expect(inBucket(buckets, 'Regression', 37)).toBe(true);
+    expect(inBucket(buckets, 'Aged out community', 37)).toBe(false);
+  });
+
   it('keeps old ready-to-merge PRs in focus when they were approved recently', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));

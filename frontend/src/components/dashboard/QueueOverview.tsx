@@ -284,6 +284,7 @@ function QueueOverview({
               },
             }))}
             limit={pullRequestListLimit}
+            preserveOrder
             emptyState={loading ? 'Loading community PRs...' : 'No recently active community PRs in the current results.'}
             onSelectPullRequest={onSelectPullRequest}
             onVisiblePullRequest={onVisiblePullRequest}
