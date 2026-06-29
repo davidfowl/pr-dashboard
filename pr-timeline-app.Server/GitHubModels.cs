@@ -384,11 +384,13 @@ record ReviewEvent(string Actor, string State, DateTimeOffset SubmittedAt)
             State: review.State ?? "UNKNOWN",
             SubmittedAt: review.SubmittedAt);
 
-    public static ReviewEvent FromGraphQl(GitHubGraphQlReviewNodeDto review) =>
-        new(
-            Actor: review.Author?.Login ?? "unknown",
-            State: review.State ?? "UNKNOWN",
-            SubmittedAt: review.SubmittedAt);
+    public static ReviewEvent? FromGraphQl(GitHubGraphQlReviewNodeDto review) =>
+        review.SubmittedAt is { } submittedAt
+            ? new(
+                Actor: review.Author?.Login ?? "unknown",
+                State: review.State ?? "UNKNOWN",
+                SubmittedAt: submittedAt)
+            : null;
 }
 
 record PullRequestDetails(
@@ -1129,7 +1131,7 @@ sealed class GitHubGraphQlReviewNodeDto
     public string? State { get; init; }
 
     [JsonPropertyName("submittedAt")]
-    public DateTimeOffset SubmittedAt { get; init; }
+    public DateTimeOffset? SubmittedAt { get; init; }
 }
 
 sealed class GitHubGraphQlLinkedIssueConnectionDto

@@ -268,6 +268,39 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task GraphQlPullListIgnoresReviewNodesWithoutSubmittedAt()
+    {
+        var client = CreateClientCapturingRequests((request, path, cancellationToken) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                GraphQlPullRequestNode(
+                    42,
+                    title: "Review without timestamp",
+                    reviewState: "APPROVED",
+                    reviewSubmittedAt: null,
+                    lastCommitAt: "2026-01-03T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: [false]))));
+        });
+
+        var pullRequest = Assert.Single(await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("waiting", pullRequest.Review.State);
+        Assert.Null(pullRequest.Review.LatestState);
+        Assert.Equal(0, pullRequest.Review.ReviewerCount);
+        Assert.Null(pullRequest.Review.LastReviewedAt);
+        Assert.Equal(0, pullRequest.Review.UnresolvedThreadCount);
+    }
+
+    [Fact]
     public async Task GraphQlSnapshotKeepsPartialDataWhenAFieldErrorAccompaniesIt()
     {
         // GitHub returns a partial `data` payload alongside field-level `errors` when a single PR's
@@ -5642,7 +5675,7 @@ public sealed class GitHubClientTests
         int number,
         string title,
         string reviewState,
-        string reviewSubmittedAt,
+        string? reviewSubmittedAt,
         string lastCommitAt,
         bool reviewThreadsHasNextPage,
         string? reviewThreadsEndCursor,
