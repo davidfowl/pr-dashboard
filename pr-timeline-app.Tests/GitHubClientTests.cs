@@ -5033,6 +5033,20 @@ public sealed class GitHubClientTests
                     "assignees": [],
                     "milestone": { "number": 7, "title": "13.4" },
                     "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/1" }
+                  },
+                  {
+                    "number": 4,
+                    "title": "Draft release branch PR",
+                    "state": "open",
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/4",
+                    "repository_url": "https://api.github.com/repos/example/repo",
+                    "created_at": "2026-01-04T00:00:00Z",
+                    "updated_at": "2026-01-08T00:00:00Z",
+                    "labels": [],
+                    "assignees": [],
+                    "milestone": { "number": 7, "title": "13.4" },
+                    "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/4" }
                   }
                 ]
                 """),
