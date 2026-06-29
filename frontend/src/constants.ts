@@ -26,7 +26,7 @@ export const coreTeamMembers = [
   'maddymontaquila',
   'DamianEdwards',
   'eerhardt',
-  'karol-ms',
+  'karolz-ms',
 ];
 export const hourMs = 1000 * 60 * 60;
 export const dayMs = hourMs * 24;
