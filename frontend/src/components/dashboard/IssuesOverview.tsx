@@ -110,7 +110,7 @@ function IssuesOverview({
               value={issueFocusShownCount}
               loading={loading}
               hasLoaded={hasLoaded}
-              formatValue={(count) => formatCount(count, 'shown', 'shown')}
+              formatValue={(count) => formatCount(count, 'shown')}
               pendingLabel="Issue focus count is loading"
             />
           </div>
