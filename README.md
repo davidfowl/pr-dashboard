@@ -1,6 +1,6 @@
-# Team Dashboard
+# Aspire Team App
 
-A team dashboard for the Aspire team, built with Aspire.
+Aspire Team App is a team dashboard for the Aspire team, built with Aspire.
 
 It helps the team prioritize GitHub pull request work, focus on urgent reviews, and scan PR timeline details quickly.
 

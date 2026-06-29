@@ -1111,9 +1111,9 @@ function App() {
         <div>
           <div className="hero-brand">
             <img className="hero-brand-logo" src="/aspire-logo-light-horizontal.svg" alt="Aspire" />
-            <p className="eyebrow">Team focus</p>
+            <p className="eyebrow">Aspire Team App</p>
           </div>
-          <h1>Team focus</h1>
+          <h1>Aspire Team App</h1>
           <div className="hero-mode-row">
             <div className="mode-toggle" role="group" aria-label="Dashboard mode">
               <button

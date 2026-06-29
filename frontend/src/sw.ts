@@ -32,7 +32,7 @@ self.addEventListener('push', (event) => {
     }
   }
 
-  const title = payload.title ?? 'Aspire PR Focus';
+  const title = payload.title ?? 'Aspire Team App';
   const options: NotificationOptions = {
     body: payload.body ?? '',
     icon: payload.icon ?? '/pwa-192x192.png',

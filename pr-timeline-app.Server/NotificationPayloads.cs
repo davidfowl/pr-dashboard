@@ -36,10 +36,10 @@ static class NotificationPayloads
 
     public static string Test() =>
         Serialize(new NotificationPayload(
-            Title: "PR Focus",
+            Title: "Aspire Team App",
             Body: "Test notification — push is working. \uD83C\uDF89",
             Url: "/",
-            Tag: "pr-focus-test",
+            Tag: "aspire-team-app-test",
             Icon: DefaultIcon));
 
     public static string ReviewRequested(string repository, int number, string title, string url) =>
