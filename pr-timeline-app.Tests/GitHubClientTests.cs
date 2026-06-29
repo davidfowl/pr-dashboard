@@ -555,6 +555,37 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task GraphQlPullListCapturesApprovedReviewerIdsFromReviewAuthor()
+    {
+        var client = CreateClientCapturingRequests((_, path, _) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                GraphQlPullRequestNode(
+                    42,
+                    title: "Approved work",
+                    reviewState: "APPROVED",
+                    reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                    lastCommitAt: "2026-01-03T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: [],
+                    reviewerDatabaseId: 555))));
+        });
+
+        var pullRequest = Assert.Single(await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("approved", pullRequest.Review.State);
+        Assert.Equal([555L], pullRequest.Review.ApprovedReviewerIds);
+    }
+
+    [Fact]
     public async Task GraphQlSnapshotReturnsLastGoodWhileBackgroundRefreshUpdatesFreshCache()
     {
         using var cache = new MemoryCache(new MemoryCacheOptions());
@@ -5692,7 +5723,8 @@ public sealed class GitHubClientTests
         bool[] reviewThreadsResolved,
         string? statusCheckRollupJson = null,
         long? authorDatabaseId = null,
-        bool isDraft = false)
+        bool isDraft = false,
+        long? reviewerDatabaseId = null)
     {
         var reviewThreadNodes = string.Join(
             ",\n",
@@ -5700,6 +5732,7 @@ public sealed class GitHubClientTests
                 $$"""{ "isResolved": {{isResolved.ToString().ToLowerInvariant()}} }"""));
 
         var authorDatabaseIdJson = authorDatabaseId is { } id ? $", \"databaseId\": {id}" : "";
+        var reviewerDatabaseIdJson = reviewerDatabaseId is { } reviewerId ? $", \"databaseId\": {reviewerId}" : "";
 
         return
             $$"""
@@ -5751,7 +5784,7 @@ public sealed class GitHubClientTests
                 },
                 "nodes": [
                   {
-                    "author": { "login": "reviewer" },
+                    "author": { "login": "reviewer"{{reviewerDatabaseIdJson}} },
                     "state": {{JsonSerializer.Serialize(reviewState)}},
                     "submittedAt": {{JsonSerializer.Serialize(reviewSubmittedAt)}}
                   }

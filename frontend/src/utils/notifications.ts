@@ -8,6 +8,7 @@ export type VapidPublicKey = {
 
 export type NotificationPreferences = {
   reviewRequested: boolean;
+  readyToMerge: boolean;
 };
 
 export type TestNotificationResult = {

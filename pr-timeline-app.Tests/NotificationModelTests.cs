@@ -34,15 +34,34 @@ public sealed class NotificationModelTests
     }
 
     [Fact]
-    public void DefaultPreferencesEnableReviewRequested()
+    public void DefaultPreferencesEnableReviewRequestedAndReadyToMerge()
     {
-        Assert.True(NotificationPreferences.CreateDefault().ReviewRequested);
+        var defaults = NotificationPreferences.CreateDefault();
+        Assert.True(defaults.ReviewRequested);
+        Assert.True(defaults.ReadyToMerge);
+    }
+
+    [Fact]
+    public void PreferencesDtoDefaultsReadyToMergeWhenAbsentFromJson()
+    {
+        // Older PWA clients PUT only { reviewRequested }; ReadyToMerge must stay default-on.
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var dto = JsonSerializer.Deserialize<NotificationPreferencesDto>("{\"reviewRequested\":true}", options);
+
+        Assert.NotNull(dto);
+        Assert.True(dto!.ReviewRequested);
+        Assert.True(dto.ReadyToMerge);
     }
 
     [Fact]
     public void PayloadsUseServiceWorkerContractFields()
     {
-        foreach (var json in new[] { NotificationPayloads.Test(), NotificationPayloads.ReviewRequested("microsoft/aspire", 42, "Fix bug", "/#pr/microsoft%2Faspire/42") })
+        foreach (var json in new[]
+        {
+            NotificationPayloads.Test(),
+            NotificationPayloads.ReviewRequested("microsoft/aspire", 42, "Fix bug", "/#pr/microsoft%2Faspire/42"),
+            NotificationPayloads.ReadyToMerge(ReadyToMergeRole.Author, "microsoft/aspire", 42, "Fix bug", "/#pr/microsoft%2Faspire/42"),
+        })
         {
             using var document = JsonDocument.Parse(json);
             var root = document.RootElement;
@@ -52,6 +71,20 @@ public sealed class NotificationModelTests
                 Assert.False(string.IsNullOrWhiteSpace(value.GetString()));
             }
         }
+    }
+
+    [Fact]
+    public void ReadyToMergePayloadVariesBodyByRoleAndDeepLinks()
+    {
+        var author = JsonDocument.Parse(
+            NotificationPayloads.ReadyToMerge(ReadyToMergeRole.Author, "microsoft/aspire", 42, "Fix bug", "/#pr/microsoft%2Faspire/42"));
+        var approver = JsonDocument.Parse(
+            NotificationPayloads.ReadyToMerge(ReadyToMergeRole.Approver, "microsoft/aspire", 42, "Fix bug", "/#pr/microsoft%2Faspire/42"));
+
+        Assert.Equal("/#pr/microsoft%2Faspire/42", author.RootElement.GetProperty("url").GetString());
+        Assert.Equal("ready-to-merge:microsoft/aspire#42", author.RootElement.GetProperty("tag").GetString());
+        Assert.StartsWith("Your PR is approved", author.RootElement.GetProperty("body").GetString());
+        Assert.StartsWith("A PR you approved", approver.RootElement.GetProperty("body").GetString());
     }
 
     [Fact]

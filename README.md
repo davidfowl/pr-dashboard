@@ -51,17 +51,23 @@ Logged-out users read pull request data only from the shared public cache for re
 
 ## Notifications (PWA + Web Push)
 
-The dashboard is an installable PWA that can deliver Web Push notifications when you are
-added as a requested reviewer on an open PR in a watched repository — even when the app is
-closed.
+The dashboard is an installable PWA that can deliver Web Push notifications for activity on
+open PRs in a watched repository — even when the app is closed. Two triggers are supported:
+
+- **`review_requested`** — you were added as a requested reviewer on an open PR.
+- **`ready_to_merge`** — a PR you authored or approved is approved and clean enough to merge
+  (mirrors the "Ready to merge" lane: not failing CI, no merge-blocking unresolved threads,
+  no conflicts, no `no-merge`/`needs-author-action` label, not an aging approval). Both the
+  author and each approver are nagged once when it first becomes ready, and again only if it
+  leaves and re-enters that state.
 
 - **Install**: in a desktop Chromium browser use the install icon in the address bar; on
   Android use the browser "Install app" prompt. On **iOS/Safari, Web Push only works after
   you add the app to the Home Screen** ("Share → Add to Home Screen"); the in-app panel
   detects this and shows install guidance until then.
 - **Enable**: sign in with GitHub, then use the **Notifications** panel in the footer to
-  grant permission and subscribe. Toggle the `review_requested` preference or send a test
-  push from there. v1 only fires for `review_requested`; additional triggers are planned.
+  grant permission and subscribe. Toggle the `review_requested` and `ready_to_merge`
+  preferences (both default on) or send a test push from there.
 - **Single replica**: while notifications are enabled the server runs as exactly one replica
   (`MinReplicas = MaxReplicas = 1`) so the in-process detector is a single writer for the
   per-user dedupe state. Horizontal scaling needs single-leader election (e.g. an Azure Blob

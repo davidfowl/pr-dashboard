@@ -41,7 +41,7 @@ sealed partial class GitHubClient(
         "commits(last:1){totalCount nodes{commit{committedDate " +
         "statusCheckRollup{state}}}} " +
         "additions deletions changedFiles headRefOid headRefName baseRefName mergeable " +
-        "reviews(last:100){pageInfo{hasPreviousPage startCursor}nodes{author{login}state submittedAt}} " +
+        "reviews(last:100){pageInfo{hasPreviousPage startCursor}nodes{author{login ... on User{databaseId}}state submittedAt}} " +
         "reviewThreads(first:" + PullRequestPageSize + "){pageInfo{hasNextPage endCursor}nodes{isResolved}} " +
         "closingIssuesReferences(first:" + MaxLinkedIssuesPerPullRequest + "){nodes{number title url repository{nameWithOwner} labels(first:" + GraphQlLabelPageSize + "){nodes{name}} milestone{title}}}" +
         "}}}}";
@@ -1407,8 +1407,20 @@ sealed partial class GitHubClient(
             LastApprovedAt: humanReviews.LastOrDefault(review => review.State == "APPROVED")?.SubmittedAt,
             LastReviewedAt: humanReviews.LastOrDefault()?.SubmittedAt,
             UnresolvedThreadCount: unresolvedThreadCount,
-            RequiresConversationResolution: requiresConversationResolution);
+            RequiresConversationResolution: requiresConversationResolution)
+        {
+            ApprovedReviewerIds = ApprovedReviewerIdsOf(latestByReviewer)
+        };
     }
+
+    // Numeric ids of the reviewers whose latest review is an approval, for ready-to-merge
+    // notifications. Reviewers without a known id (older REST data) are skipped.
+    private static IReadOnlyList<long> ApprovedReviewerIdsOf(IEnumerable<ReviewEvent> latestByReviewer) =>
+        latestByReviewer
+            .Where(review => review.State == "APPROVED" && review.ActorId is > 0)
+            .Select(review => review.ActorId!.Value)
+            .Distinct()
+            .ToArray();
 
     public IAsyncEnumerable<PullRequestSummary> StreamPullRequestsAsync(
         RepositoryName repositoryName,
@@ -3569,7 +3581,10 @@ sealed partial class GitHubClient(
                 UnresolvedThreadCount: unresolvedThreadCount,
                 // Only repos that require conversation resolution treat an unresolved thread as a
                 // merge blocker; elsewhere the signal is informational and must not gate Ready to merge.
-                RequiresConversationResolution: RequiresConversationResolution(repositoryName));
+                RequiresConversationResolution: RequiresConversationResolution(repositoryName))
+            {
+                ApprovedReviewerIds = ApprovedReviewerIdsOf(latestByReviewer)
+            };
         },
             cancellationToken) ?? ReviewStatus.Waiting;
     }
