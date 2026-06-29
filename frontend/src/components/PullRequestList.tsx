@@ -9,6 +9,7 @@ export type PullRequestListEntry = {
   bucketLabel: string;
   signalProps?: Omit<PullRequestSignalPillsProps, 'pullRequest'>;
   linkedIssues?: LinkedIssueSummary[];
+  annotation?: string;
 };
 
 type PullRequestListProps = {
@@ -62,6 +63,7 @@ function PullRequestList({
           onVisiblePullRequest={onVisiblePullRequest}
           signalProps={entry.signalProps}
           linkedIssues={entry.linkedIssues}
+          annotation={entry.annotation}
         />
       ))}
     </div>

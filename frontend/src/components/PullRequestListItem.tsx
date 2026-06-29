@@ -10,6 +10,7 @@ type PullRequestListItemProps = {
   onVisiblePullRequest?: VisiblePullRequestHandler;
   signalProps?: Omit<PullRequestSignalPillsProps, 'pullRequest'>;
   linkedIssues?: LinkedIssueSummary[];
+  annotation?: string;
 };
 
 const checkBadgeGlyphs: Record<Exclude<CheckState, 'none'>, { glyph: string; label: string }> = {
@@ -25,6 +26,7 @@ function PullRequestListItem({
   onVisiblePullRequest,
   signalProps,
   linkedIssues = [],
+  annotation,
 }: PullRequestListItemProps) {
   const itemRef = useRef<HTMLElement | null>(null);
   const checksState = pullRequest.checks?.state;
@@ -122,6 +124,9 @@ function PullRequestListItem({
         </button>
       </div>
       <PullRequestSignalPills pullRequest={pullRequest} {...signalProps} />
+      {annotation && (
+        <span className="attention-pr-note">{annotation}</span>
+      )}
       {linkedIssues.length > 0 && (
         <span className="attention-pr-linked-issues" aria-label="Linked issues">
           {linkedIssues.slice(0, 3).map((issue) => (
