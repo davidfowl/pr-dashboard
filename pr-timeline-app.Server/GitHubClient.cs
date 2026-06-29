@@ -1934,7 +1934,14 @@ sealed partial class GitHubClient(
 
             var milestoneIssues = await milestoneIssuesTask;
             var releaseBranchPullRequestDtos = await releaseBranchPullRequestsTask;
-            var pullRequestDtosByNumber = releaseBranchPullRequestDtos
+            var draftReleaseBranchPullRequestNumbers = releaseBranchPullRequestDtos
+                .Where(pullRequest => pullRequest.Draft)
+                .Select(pullRequest => pullRequest.Number)
+                .ToHashSet();
+            var activeReleaseBranchPullRequestDtos = releaseBranchPullRequestDtos
+                .Where(pullRequest => !pullRequest.Draft)
+                .ToArray();
+            var pullRequestDtosByNumber = activeReleaseBranchPullRequestDtos
                 .GroupBy(pullRequest => pullRequest.Number)
                 .ToDictionary(group => group.Key, group => group.First());
             var releaseBranchPullRequestNumbers = pullRequestDtosByNumber.Keys.ToHashSet();
@@ -1945,6 +1952,7 @@ sealed partial class GitHubClient(
 
             var missingMilestonePullRequestTasks = milestonePullRequestNumbers
                 .Where(number => !pullRequestDtosByNumber.ContainsKey(number))
+                .Where(number => !draftReleaseBranchPullRequestNumbers.Contains(number))
                 .ToDictionary(
                     number => number,
                     number => GetPullRequestDtoOrNullAsync(repositoryName, number, scope, cancellationToken));
@@ -1953,7 +1961,7 @@ sealed partial class GitHubClient(
 
             foreach (var (number, task) in missingMilestonePullRequestTasks)
             {
-                if (await task is { } pullRequest)
+                if (await task is { Draft: false } pullRequest)
                 {
                     pullRequestDtosByNumber[number] = pullRequest;
                 }

@@ -5033,6 +5033,20 @@ public sealed class GitHubClientTests
                     "assignees": [],
                     "milestone": { "number": 7, "title": "13.4" },
                     "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/1" }
+                  },
+                  {
+                    "number": 4,
+                    "title": "Draft release branch PR",
+                    "state": "open",
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/4",
+                    "repository_url": "https://api.github.com/repos/example/repo",
+                    "created_at": "2026-01-04T00:00:00Z",
+                    "updated_at": "2026-01-08T00:00:00Z",
+                    "labels": [],
+                    "assignees": [],
+                    "milestone": { "number": 7, "title": "13.4" },
+                    "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/4" }
                   }
                 ]
                 """),
@@ -5040,7 +5054,8 @@ public sealed class GitHubClientTests
                 $$"""
                 [
                   {{PullRequestJson(2, title: "Fix linked issue", body: "Fixes #10", headSha: "sha2", baseRef: "release/13.4", updatedAt: "2026-01-07T00:00:00Z")}},
-                  {{PullRequestJson(3, title: "Hotfix outside milestone", headSha: "sha3", baseRef: "release/13.4")}}
+                  {{PullRequestJson(3, title: "Hotfix outside milestone", headSha: "sha3", baseRef: "release/13.4")}},
+                  {{PullRequestJson(4, title: "Draft release-branch PR", draft: true, headSha: "sha4", baseRef: "release/13.4")}}
                 ]
                 """),
             "repos/example/repo/pulls/1" => Json(PullRequestJson(
@@ -5062,7 +5077,6 @@ public sealed class GitHubClientTests
                 title: "Hotfix outside milestone",
                 headSha: "sha3",
                 baseRef: "release/13.4")),
-            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
             "repos/example/repo/pulls/2/reviews?per_page=100" => Json("[]"),
             "repos/example/repo/pulls/3/reviews?per_page=100" => Json("[]"),
             "repos/example/repo/issues/10" => Json(
@@ -5094,13 +5108,9 @@ public sealed class GitHubClientTests
         Assert.Equal("example/repo", response.Repository);
         Assert.Equal("13.4", response.Milestone);
         Assert.Equal("release/13.4", response.ReleaseBranch);
-        Assert.Equal(3, response.PullRequests.Count);
-
-        var draftMilestonePullRequest = response.PullRequests.Single(item => item.PullRequest.Number == 1);
-        Assert.True(draftMilestonePullRequest.PullRequest.Draft);
-        Assert.True(draftMilestonePullRequest.ReleaseScope.InMilestone);
-        Assert.False(draftMilestonePullRequest.ReleaseScope.TargetsReleaseBranch);
-        Assert.False(draftMilestonePullRequest.ReleaseScope.ReleaseBranchException);
+        Assert.Equal(2, response.PullRequests.Count);
+        Assert.DoesNotContain(response.PullRequests, item => item.PullRequest.Draft);
+        Assert.DoesNotContain(response.PullRequests, item => item.PullRequest.Number is 1 or 4);
 
         var linkedReleasePullRequest = response.PullRequests.Single(item => item.PullRequest.Number == 2);
         Assert.True(linkedReleasePullRequest.ReleaseScope.InMilestone);

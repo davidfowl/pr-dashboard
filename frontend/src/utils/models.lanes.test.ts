@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PullRequestSummary, ReviewStatus, ShipWeekIssueSummary } from '../types';
+import type { PullRequestSummary, ReviewStatus, ShipWeekIssueSummary, ShipWeekResponse } from '../types';
 import {
   createAttentionBuckets,
   createAttentionSignals,
+  createDeveloperPullRequestCounts,
   createFocusIssueBuckets,
+  createShipWeekScopeGroups,
   isPullRequestWithinFocusAgeLimit,
   pullRequestFocusActivityAt,
 } from './models';
@@ -88,6 +90,57 @@ function issue(overrides: Partial<ShipWeekIssueSummary> & { number: number }): S
     ...rest,
   };
 }
+
+describe('createDeveloperPullRequestCounts', () => {
+  it('excludes draft PRs from core team ownership counts', () => {
+    const counts = createDeveloperPullRequestCounts([
+      pr({ number: 1, author: 'davidfowl' }),
+      pr({ number: 2, author: 'davidfowl', draft: true }),
+    ]);
+
+    const david = counts.find((count) => count.actor === 'davidfowl');
+
+    expect(david?.openPullRequestCount).toBe(1);
+    expect(david?.repositories).toEqual(['example/repo']);
+  });
+});
+
+describe('createShipWeekScopeGroups', () => {
+  it('excludes draft PRs from ship week scope groups', () => {
+    const shipWeek: ShipWeekResponse = {
+      repository: 'example/repo',
+      milestone: '13.4',
+      releaseBranch: 'release/13.4',
+      issues: [],
+      pullRequests: [
+        {
+          pullRequest: pr({ number: 1 }),
+          releaseScope: {
+            inMilestone: true,
+            targetsReleaseBranch: false,
+            releaseBranchException: false,
+            milestoneIssueNumbers: [],
+            docsFromCode: false,
+          },
+        },
+        {
+          pullRequest: pr({ number: 2, draft: true, baseRef: 'release/13.4' }),
+          releaseScope: {
+            inMilestone: true,
+            targetsReleaseBranch: true,
+            releaseBranchException: false,
+            milestoneIssueNumbers: [],
+            docsFromCode: false,
+          },
+        },
+      ],
+    };
+
+    const groups = createShipWeekScopeGroups(shipWeek);
+
+    expect(groups.flatMap((group) => group.pullRequests.map((item) => item.pullRequest.number))).toEqual([1]);
+  });
+});
 
 describe('createAttentionBuckets lane routing', () => {
   afterEach(() => {

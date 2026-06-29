@@ -485,27 +485,30 @@ function createFocusIssueBucket(bucket: AttentionIssueBucket): AttentionIssueBuc
 }
 
 export function createShipWeekScopeGroups(shipWeek: ShipWeekResponse): ShipWeekScopeGroup[] {
+  const visiblePullRequests = shipWeek.pullRequests
+    .filter((item) => !shouldHideFromSharedPullRequestLists(item.pullRequest));
+
   return [
     {
       id: 'milestone-prs',
       label: `Milestone ${shipWeek.milestone}`,
       summary: 'PRs in or linked to the milestone',
       tone: 'accent',
-      pullRequests: shipWeek.pullRequests.filter((item) => item.releaseScope.inMilestone),
+      pullRequests: visiblePullRequests.filter((item) => item.releaseScope.inMilestone),
     },
     {
       id: 'release-branch-prs',
       label: shipWeek.releaseBranch,
       summary: 'PRs targeting the selected base branch',
       tone: 'warning',
-      pullRequests: shipWeek.pullRequests.filter((item) => item.releaseScope.targetsReleaseBranch),
+      pullRequests: visiblePullRequests.filter((item) => item.releaseScope.targetsReleaseBranch),
     },
     {
       id: 'release-branch-watchlist',
       label: 'Outside milestone',
       summary: 'Base-branch PRs outside the milestone',
       tone: 'danger',
-      pullRequests: shipWeek.pullRequests.filter((item) => item.releaseScope.releaseBranchException),
+      pullRequests: visiblePullRequests.filter((item) => item.releaseScope.releaseBranchException),
     },
   ];
 }
@@ -841,7 +844,7 @@ function matchingDoNotMergeLabel(pullRequest: PullRequestSummary): string | null
 }
 
 export function shouldHideFromSharedPullRequestLists(pullRequest: PullRequestSummary) {
-  return hasMergeConflicts(pullRequest) || hasNeedsAuthorActionLabel(pullRequest);
+  return pullRequest.draft || hasMergeConflicts(pullRequest) || hasNeedsAuthorActionLabel(pullRequest);
 }
 
 function hasRegressionSignal(pullRequest: PullRequestSummary) {
