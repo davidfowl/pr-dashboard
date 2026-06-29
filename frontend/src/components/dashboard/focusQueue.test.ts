@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AttentionBucket, CheckState, PullRequestSummary } from '../../types';
-import { computeFocusItems } from './focusQueue';
+import { computeFocusExclusionItems, computeFocusItems } from './focusQueue';
 
 function checks(state: CheckState): PullRequestSummary['checks'] {
   return {
@@ -128,5 +128,54 @@ describe('computeFocusItems', () => {
     const buckets: AttentionBucket[] = [bucket('Unresolved feedback', [blocked])];
 
     expect(computeFocusItems(buckets)).toHaveLength(0);
+  });
+});
+
+describe('computeFocusExclusionItems', () => {
+  it('shows only the signed-in user open non-draft PRs that are outside Needs attention', () => {
+    const failing = pr(1, 'failure');
+    const inFocus = pr(2, 'success');
+    const otherAuthor = { ...pr(3, 'failure'), author: 'monalisa' };
+    const draft = { ...pr(4, 'failure'), draft: true };
+
+    const buckets: AttentionBucket[] = [
+      bucket('Needs review', [failing, inFocus, otherAuthor, draft]),
+      bucket('CI failing', [failing, otherAuthor, draft]),
+    ];
+
+    const exclusions = computeFocusExclusionItems(
+      [failing, inFocus, otherAuthor, draft],
+      buckets,
+      computeFocusItems(buckets),
+      'octocat',
+    );
+
+    expect(exclusions.map((item) => item.pullRequest.number)).toEqual([1]);
+    expect(exclusions[0]?.reason.label).toBe('CI failing');
+  });
+
+  it('explains held PRs that are hidden from attention buckets', () => {
+    const held = { ...pr(50, 'success'), labels: ['needs-author-action'] };
+
+    const exclusions = computeFocusExclusionItems([held], [], [], 'octocat');
+
+    expect(exclusions).toHaveLength(1);
+    expect(exclusions[0]?.reason.label).toBe('Held by label');
+  });
+
+  it('explains PRs whose actionable lane has aged out', () => {
+    const oldDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString();
+    const stale = { ...pr(60, 'success'), updatedAt: oldDate };
+    const buckets = [bucket('Needs review', [stale])];
+
+    const exclusions = computeFocusExclusionItems(
+      [stale],
+      buckets,
+      computeFocusItems(buckets),
+      'octocat',
+    );
+
+    expect(exclusions).toHaveLength(1);
+    expect(exclusions[0]?.reason.label).toBe('Stale activity');
   });
 });

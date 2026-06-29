@@ -192,6 +192,7 @@ function DashboardView({
           ) : (pullsLoading || pullRequests.length > 0) && (
             <QueueOverview
               counts={developerPullRequestCounts}
+              pullRequests={pullRequests}
               attentionBuckets={attentionBuckets}
               forMeItems={forMeItems}
               loading={pullsLoading}
