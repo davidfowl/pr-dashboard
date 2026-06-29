@@ -67,6 +67,7 @@ public sealed class NotificationModelTests
     [InlineData("https://fcm.googleapis.com/fcm/send/token")]
     [InlineData("https://updates.push.services.mozilla.com/wpush/v2/token")]
     [InlineData("https://web.push.apple.com/v1/pushes/abc")]
+    [InlineData("https://abc.push.apple.com/v1/pushes/token")]
     [InlineData("https://wns2-by3p.notify.windows.com/w/?token=abc")]
     public void PushEndpointValidatorAllowsKnownBrowserPushServices(string endpoint)
     {
@@ -80,6 +81,8 @@ public sealed class NotificationModelTests
     [InlineData("http://fcm.googleapis.com/fcm/send/token")]
     [InlineData("https://user@fcm.googleapis.com/fcm/send/token")]
     [InlineData("https://attacker.fcm.googleapis.com/fcm/send/token")]
+    [InlineData("https://push.apple.com.evil.example/v1/pushes/token")]
+    [InlineData("https://evilpush.apple.com/v1/pushes/token")]
     [InlineData("https://notify.windows.com.evil.example/w/token")]
     [InlineData("https://evilnotify.windows.com/w/token")]
     public void PushEndpointValidatorRejectsUnsupportedOrAmbiguousOrigins(string endpoint)
