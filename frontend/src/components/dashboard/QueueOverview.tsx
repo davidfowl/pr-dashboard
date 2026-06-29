@@ -165,7 +165,7 @@ function QueueOverview({
               value={focusShownCount}
               loading={loading}
               hasLoaded={hasLoaded}
-              formatValue={(count) => formatCount(count, 'shown')}
+              formatValue={(count) => formatCount(count, 'shown', 'shown')}
               pendingLabel="Needs attention count is loading"
             />
           </div>
@@ -212,7 +212,7 @@ function QueueOverview({
                   value={focusExclusionShownCount}
                   loading={loading}
                   hasLoaded={hasLoaded}
-                  formatValue={(count) => formatCount(count, 'shown')}
+                  formatValue={(count) => formatCount(count, 'shown', 'shown')}
                   pendingLabel="Outside queue count is loading"
                 />
               </div>
@@ -264,7 +264,7 @@ function QueueOverview({
               value={communityShownCount}
               loading={loading}
               hasLoaded={hasLoaded}
-              formatValue={(count) => formatCount(count, 'shown')}
+              formatValue={(count) => formatCount(count, 'shown', 'shown')}
               pendingLabel="Community PR count is loading"
             />
           </div>
