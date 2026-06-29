@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, describe, expect, it } from 'vitest';
 import LoadingMetric from './LoadingMetric';
+import { formatCount } from '../utils/format';
 
 type ActEnvironment = typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -41,9 +42,33 @@ describe('LoadingMetric', () => {
 
     await unmountMetric(root);
   });
+
+  it('keeps shown invariant across zero and refreshing states', async () => {
+    const { host, root, rerender } = await renderMetric(
+      0,
+      false,
+      true,
+      (count) => formatCount(count, 'shown'),
+    );
+
+    expect(host.textContent).toBe('0 shown');
+
+    await rerender(2, true, true);
+    expect(host.textContent).toBe('0 shown');
+
+    await rerender(2, false, true);
+    expect(host.textContent).toBe('2 shown');
+
+    await unmountMetric(root);
+  });
 });
 
-async function renderMetric(value: number, loading: boolean, hasLoaded: boolean) {
+async function renderMetric(
+  value: number,
+  loading: boolean,
+  hasLoaded: boolean,
+  formatValue: (count: number) => string = (count) => `${count} PRs`,
+) {
   const host = document.createElement('div');
   document.body.append(host);
   const root = createRoot(host);
@@ -55,7 +80,7 @@ async function renderMetric(value: number, loading: boolean, hasLoaded: boolean)
           value={nextValue}
           loading={nextLoading}
           hasLoaded={nextHasLoaded}
-          formatValue={(count) => `${count} PRs`}
+          formatValue={formatValue}
         />,
       );
     });
