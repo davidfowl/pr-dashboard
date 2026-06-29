@@ -6,7 +6,8 @@ static class PushSubscriptionEndpointValidator
     // origins come from the vendor push services returned by PushManager.subscribe() and tracked
     // by https://github.com/pushpad/known-push-services: Google FCM (Chrome/Chromium), Mozilla
     // Autopush (Firefox), Apple Web Push (Safari/iOS), and Microsoft WNS endpoints for Edge on
-    // Windows.
+    // Windows. Apple documents Web Push endpoints as any subdomain of push.apple.com,
+    // not only the web.push.apple.com host seen in some browsers.
     private static readonly HashSet<string> s_allowedHosts = new(StringComparer.OrdinalIgnoreCase)
     {
         "fcm.googleapis.com",
@@ -25,6 +26,7 @@ static class PushSubscriptionEndpointValidator
 
         var host = endpoint.IdnHost;
         return s_allowedHosts.Contains(host)
+            || host.EndsWith(".push.apple.com", StringComparison.OrdinalIgnoreCase)
             || host.EndsWith(".notify.windows.com", StringComparison.OrdinalIgnoreCase);
     }
 }
