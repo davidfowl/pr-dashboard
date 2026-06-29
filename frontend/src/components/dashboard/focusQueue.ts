@@ -12,7 +12,18 @@ export type FocusItem = AttentionItem & {
   bucketTone: AttentionBucket['tone'];
 };
 
+type FocusExclusionReasonKind =
+  | 'ci-failing'
+  | 'merge-conflicts'
+  | 'unresolved-feedback'
+  | 'held-by-label'
+  | 'stale-activity'
+  | 'specialized-lane'
+  | 'stalled-only'
+  | 'outside-queue';
+
 export type FocusExclusionReason = {
+  kind: FocusExclusionReasonKind;
   label: string;
   detail: string;
   tone: AttentionSignal['tone'];
@@ -61,6 +72,7 @@ export function computeFocusItems(attentionBuckets: AttentionBucket[]): FocusIte
 export function computeFocusExclusionItems(
   pullRequests: PullRequestSummary[],
   attentionBuckets: AttentionBucket[],
+  focusItems: FocusItem[],
   login?: string,
 ): FocusExclusionItem[] {
   if (!login) {
@@ -68,7 +80,7 @@ export function computeFocusExclusionItems(
   }
 
   const loginKey = actorIdentityKey(login);
-  const focusKeys = new Set(computeFocusItems(attentionBuckets).map((item) => pullRequestKey(item.pullRequest)));
+  const focusKeys = new Set(focusItems.map((item) => pullRequestKey(item.pullRequest)));
   const bucketLabelsByPullRequest = createBucketLabelsByPullRequest(attentionBuckets);
 
   return pullRequests
@@ -102,7 +114,12 @@ function createBucketLabelsByPullRequest(buckets: AttentionBucket[]) {
   for (const bucket of buckets) {
     for (const item of bucket.items) {
       const key = pullRequestKey(item.pullRequest);
-      labelsByPullRequest.set(key, [...(labelsByPullRequest.get(key) ?? []), bucket.label]);
+      const labels = labelsByPullRequest.get(key);
+      if (labels) {
+        labels.push(bucket.label);
+      } else {
+        labelsByPullRequest.set(key, [bucket.label]);
+      }
     }
   }
 
@@ -115,6 +132,7 @@ function focusExclusionReason(
 ): FocusExclusionReason {
   if (isChecksFailing(pullRequest)) {
     return {
+      kind: 'ci-failing',
       label: 'CI failing',
       detail: 'Failing checks keep it out until CI is green again.',
       tone: 'danger',
@@ -123,6 +141,7 @@ function focusExclusionReason(
 
   if (hasMergeConflicts(pullRequest)) {
     return {
+      kind: 'merge-conflicts',
       label: 'Merge conflicts',
       detail: 'The author needs to rebase before reviewers or maintainers can finish it.',
       tone: 'danger',
@@ -131,6 +150,7 @@ function focusExclusionReason(
 
   if (pullRequest.review.unresolvedThreadCount > 0) {
     return {
+      kind: 'unresolved-feedback',
       label: 'Unresolved feedback',
       detail: 'Open review threads make it author-blocked instead of reviewer-blocked.',
       tone: 'danger',
@@ -139,6 +159,7 @@ function focusExclusionReason(
 
   if (hasNeedsAuthorActionLabel(pullRequest)) {
     return {
+      kind: 'held-by-label',
       label: 'Held by label',
       detail: 'A do-not-merge or needs-author-action label keeps it out of the focused queue.',
       tone: 'danger',
@@ -148,6 +169,7 @@ function focusExclusionReason(
   const specializedBucketLabel = bucketLabels.find((label) => specializedFocusBucketLabels.has(label));
   if (specializedBucketLabel) {
     return {
+      kind: 'specialized-lane',
       label: `${specializedBucketLabel} lane`,
       detail: `It is routed to the ${specializedBucketLabel} lane instead of Needs attention.`,
       tone: 'accent',
@@ -160,6 +182,7 @@ function focusExclusionReason(
     && !isPullRequestWithinFocusAgeLimit(pullRequest, focusCandidateBucketLabel)
   ) {
     return {
+      kind: 'stale-activity',
       label: 'Stale activity',
       detail: 'Its actionable lane has not had fresh activity in the last 14 days.',
       tone: 'warning',
@@ -168,6 +191,7 @@ function focusExclusionReason(
 
   if (bucketLabels.includes('Stalled')) {
     return {
+      kind: 'stalled-only',
       label: 'Stalled only',
       detail: 'It has gone quiet and has no fresher actionable lane for Needs attention.',
       tone: 'warning',
@@ -175,6 +199,7 @@ function focusExclusionReason(
   }
 
   return {
+    kind: 'outside-queue',
     label: 'Outside queue',
     detail: 'It does not currently match a focused, actionable Needs attention lane.',
     tone: 'muted',
@@ -210,21 +235,31 @@ function focusBucketRank(label: string) {
 }
 
 function compareFocusExclusionItems(first: FocusExclusionItem, second: FocusExclusionItem) {
-  return focusExclusionReasonRank(first.reason.label) - focusExclusionReasonRank(second.reason.label)
+  return focusExclusionReasonRank(first.reason.kind) - focusExclusionReasonRank(second.reason.kind)
     || updatedTime(second.pullRequest) - updatedTime(first.pullRequest)
     || first.pullRequest.repository.localeCompare(second.pullRequest.repository)
     || first.pullRequest.number - second.pullRequest.number;
 }
 
-function focusExclusionReasonRank(label: string) {
-  if (label === 'CI failing') return 0;
-  if (label === 'Merge conflicts') return 1;
-  if (label === 'Unresolved feedback') return 2;
-  if (label === 'Held by label') return 3;
-  if (label === 'Stale activity') return 4;
-  if (label.endsWith(' lane')) return 5;
-  if (label === 'Stalled only') return 6;
-  return 7;
+function focusExclusionReasonRank(kind: FocusExclusionReasonKind) {
+  switch (kind) {
+    case 'ci-failing':
+      return 0;
+    case 'merge-conflicts':
+      return 1;
+    case 'unresolved-feedback':
+      return 2;
+    case 'held-by-label':
+      return 3;
+    case 'stale-activity':
+      return 4;
+    case 'specialized-lane':
+      return 5;
+    case 'stalled-only':
+      return 6;
+    case 'outside-queue':
+      return 7;
+  }
 }
 
 function updatedTime(pullRequest: PullRequestSummary) {

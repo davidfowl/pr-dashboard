@@ -146,6 +146,7 @@ describe('computeFocusExclusionItems', () => {
     const exclusions = computeFocusExclusionItems(
       [failing, inFocus, otherAuthor, draft],
       buckets,
+      computeFocusItems(buckets),
       'octocat',
     );
 
@@ -156,7 +157,7 @@ describe('computeFocusExclusionItems', () => {
   it('explains held PRs that are hidden from attention buckets', () => {
     const held = { ...pr(50, 'success'), labels: ['needs-author-action'] };
 
-    const exclusions = computeFocusExclusionItems([held], [], 'octocat');
+    const exclusions = computeFocusExclusionItems([held], [], [], 'octocat');
 
     expect(exclusions).toHaveLength(1);
     expect(exclusions[0]?.reason.label).toBe('Held by label');
@@ -165,10 +166,12 @@ describe('computeFocusExclusionItems', () => {
   it('explains PRs whose actionable lane has aged out', () => {
     const oldDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString();
     const stale = { ...pr(60, 'success'), updatedAt: oldDate };
+    const buckets = [bucket('Needs review', [stale])];
 
     const exclusions = computeFocusExclusionItems(
       [stale],
-      [bucket('Needs review', [stale])],
+      buckets,
+      computeFocusItems(buckets),
       'octocat',
     );
 

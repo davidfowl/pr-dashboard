@@ -58,8 +58,8 @@ function QueueOverview({
     [attentionBuckets],
   );
   const focusExclusionItems = useMemo<FocusExclusionItem[]>(
-    () => computeFocusExclusionItems(pullRequests, attentionBuckets, login),
-    [attentionBuckets, login, pullRequests],
+    () => computeFocusExclusionItems(pullRequests, attentionBuckets, focusItems, login),
+    [attentionBuckets, focusItems, login, pullRequests],
   );
 
   const coreOpenCount = counts.reduce((total, count) => total + count.openPullRequestCount, 0);
