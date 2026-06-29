@@ -105,7 +105,7 @@ const NOTIFICATION_TYPES: NotificationType[] = [
   {
     id: 'readyToMerge',
     title: 'Ready to merge',
-    description: 'When a PR you authored or approved is approved and ready to merge.',
+    description: 'When a PR you authored or approved is ready to merge.',
     icon: <MergeIcon />,
   },
   {
