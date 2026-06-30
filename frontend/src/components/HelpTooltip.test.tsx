@@ -57,6 +57,33 @@ describe('HelpTooltip', () => {
 
     await unmountTooltip(root);
   });
+
+  it('stays open until both focus and pointer hover are inactive', async () => {
+    const { button, root, tooltip } = await renderTooltip();
+    setViewportSize(320, 240);
+    mockRect(button, rect(140, 100, 16, 16));
+    mockRect(tooltip, rect(0, 0, 120, 40));
+
+    await focusTooltip(button);
+    await pointerEnterTooltip(button);
+    await pointerLeaveTooltip(button);
+
+    expect(tooltip.className).toContain('visible');
+    expect(button.getAttribute('aria-describedby')).toBe(tooltip.id);
+
+    await pointerEnterTooltip(button);
+    await blurTooltip(button);
+
+    expect(tooltip.className).toContain('visible');
+    expect(button.getAttribute('aria-describedby')).toBe(tooltip.id);
+
+    await pointerLeaveTooltip(button);
+
+    expect(tooltip.className).not.toContain('visible');
+    expect(button.getAttribute('aria-describedby')).toBeNull();
+
+    await unmountTooltip(root);
+  });
 });
 
 async function renderTooltip() {
@@ -83,6 +110,26 @@ async function renderTooltip() {
 async function focusTooltip(button: HTMLButtonElement) {
   await act(async () => {
     button.focus();
+  });
+}
+
+async function blurTooltip(button: HTMLButtonElement) {
+  await act(async () => {
+    button.blur();
+  });
+}
+
+async function pointerEnterTooltip(button: HTMLButtonElement) {
+  await dispatchPointerEvent(button, 'pointerover');
+}
+
+async function pointerLeaveTooltip(button: HTMLButtonElement) {
+  await dispatchPointerEvent(button, 'pointerout');
+}
+
+async function dispatchPointerEvent(button: HTMLButtonElement, eventName: string) {
+  await act(async () => {
+    button.dispatchEvent(new Event(eventName, { bubbles: true }));
   });
 }
 

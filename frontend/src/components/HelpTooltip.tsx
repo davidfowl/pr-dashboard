@@ -22,6 +22,7 @@ type TooltipStyle = CSSProperties & {
 };
 
 const tooltipOffsetRem = 0.55;
+const appShellPaddingRem = 1.25;
 const tooltipViewportPaddingMultiplier = 1.5;
 const fallbackRootFontSize = 16;
 
@@ -44,7 +45,7 @@ function getViewportPadding(anchor: HTMLElement) {
     }
   }
 
-  return getRootFontSize() * tooltipViewportPaddingMultiplier;
+  return getRootFontSize() * appShellPaddingRem * tooltipViewportPaddingMultiplier;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -76,6 +77,8 @@ function HelpTooltip({ label }: HelpTooltipProps) {
   const tooltipId = useId();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const tooltipRef = useRef<HTMLSpanElement>(null);
+  const hasFocusRef = useRef(false);
+  const hasPointerRef = useRef(false);
   const [isTooltipActive, setIsTooltipActive] = useState(false);
   const [tooltipState, setTooltipState] = useState<TooltipState>({
     placement: 'bottom',
@@ -97,14 +100,35 @@ function HelpTooltip({ label }: HelpTooltipProps) {
     setTooltipState(getTooltipState(triggerRect, tooltipRect, viewportPadding));
   }, []);
 
-  const activateTooltip = useCallback(() => {
-    updateTooltipPlacement();
-    setIsTooltipActive(true);
+  const syncTooltipActiveState = useCallback(() => {
+    const nextIsTooltipActive = hasFocusRef.current || hasPointerRef.current;
+
+    if (nextIsTooltipActive) {
+      updateTooltipPlacement();
+    }
+
+    setIsTooltipActive(nextIsTooltipActive);
   }, [updateTooltipPlacement]);
 
-  const deactivateTooltip = useCallback(() => {
-    setIsTooltipActive(false);
-  }, []);
+  const handleBlur = useCallback(() => {
+    hasFocusRef.current = false;
+    syncTooltipActiveState();
+  }, [syncTooltipActiveState]);
+
+  const handleFocus = useCallback(() => {
+    hasFocusRef.current = true;
+    syncTooltipActiveState();
+  }, [syncTooltipActiveState]);
+
+  const handlePointerEnter = useCallback(() => {
+    hasPointerRef.current = true;
+    syncTooltipActiveState();
+  }, [syncTooltipActiveState]);
+
+  const handlePointerLeave = useCallback(() => {
+    hasPointerRef.current = false;
+    syncTooltipActiveState();
+  }, [syncTooltipActiveState]);
 
   useEffect(() => {
     if (!isTooltipActive) {
@@ -137,10 +161,10 @@ function HelpTooltip({ label }: HelpTooltipProps) {
       className="logic-help"
       aria-label={label}
       aria-describedby={isTooltipActive ? tooltipId : undefined}
-      onBlur={deactivateTooltip}
-      onFocus={activateTooltip}
-      onPointerEnter={activateTooltip}
-      onPointerLeave={deactivateTooltip}
+      onBlur={handleBlur}
+      onFocus={handleFocus}
+      onPointerEnter={handlePointerEnter}
+      onPointerLeave={handlePointerLeave}
     >
       ?
       <span
