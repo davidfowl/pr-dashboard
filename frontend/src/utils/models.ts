@@ -864,6 +864,29 @@ export function shouldHideFromSharedPullRequestLists(pullRequest: PullRequestSum
   return pullRequest.draft || hasMergeConflicts(pullRequest) || hasNeedsAuthorActionLabel(pullRequest);
 }
 
+// A PR is "blocked from merging" when it is waiting on the author rather than on a reviewer:
+// merge conflicts (needs a rebase), unresolved review threads that actually gate merging, or a
+// do-not-merge label. Unresolved threads only count when the repo requires conversation resolution —
+// mirroring unresolvedFeedbackBlocksMerge above — so a genuinely approved, mergeable PR with merely
+// informational threads is not hidden from the Ready to merge lane. Used by the review board's
+// optional filter to declutter the lanes down to the PRs someone can actually act on.
+export function isBlockedFromMerging(pullRequest: PullRequestSummary) {
+  return hasMergeConflicts(pullRequest)
+    || (hasUnresolvedFeedback(pullRequest) && pullRequest.review.requiresConversationResolution)
+    || hasNeedsAuthorActionLabel(pullRequest);
+}
+
+// Drops every merge-blocked PR from each bucket and removes buckets left empty (e.g. the dedicated
+// Merge conflicts / Unresolved feedback lanes collapse), so callers can hide blocked PRs everywhere.
+export function withoutMergeBlockedPullRequests(buckets: AttentionBucket[]): AttentionBucket[] {
+  return buckets
+    .map((bucket) => ({
+      ...bucket,
+      items: bucket.items.filter((item) => !isBlockedFromMerging(item.pullRequest)),
+    }))
+    .filter((bucket) => bucket.items.length > 0);
+}
+
 function hasRegressionSignal(pullRequest: PullRequestSummary) {
   return hasRegressionLabel(pullRequest.labels)
     || pullRequest.linkedIssues.some((issue) => hasRegressionLabel(issue.labels));
