@@ -464,6 +464,18 @@ describe('createAttentionSignals review progress', () => {
 });
 
 describe('createFocusIssueBuckets personal lanes', () => {
+  it('adds an afscrome finds bucket for issues filed by afscrome', () => {
+    const buckets = createFocusIssueBuckets([
+      issue({ number: 1, author: 'reporter' }),
+      issue({ number: 2, author: 'afscrome' }),
+      issue({ number: 3, author: 'Afscrome' }),
+    ]);
+
+    const afscromeFinds = buckets.find((bucket) => bucket.label === 'afscrome finds');
+
+    expect(afscromeFinds?.issues.map((item) => item.number)).toEqual([2, 3]);
+  });
+
   it('adds a My issues bucket for issues assigned to the signed-in user', () => {
     const buckets = createFocusIssueBuckets([
       issue({ number: 1, assignees: ['other'] }),
