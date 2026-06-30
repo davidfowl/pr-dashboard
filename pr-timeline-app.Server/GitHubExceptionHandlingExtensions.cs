@@ -10,6 +10,23 @@ public static class GitHubExceptionHandlingExtensions
             {
                 var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
 
+                if (exception is GitHubSamlSsoRequiredException ssoException)
+                {
+                    context.Response.StatusCode = StatusCodes.Status403Forbidden;
+                    await Results.Problem(
+                        title: "GitHub organization SSO required",
+                        detail: ssoException.Message,
+                        statusCode: StatusCodes.Status403Forbidden,
+                        extensions: new Dictionary<string, object?>
+                        {
+                            ["code"] = "github_saml_sso_required",
+                            ["organization"] = ssoException.Organization,
+                            ["authorizationUrl"] = ssoException.AuthorizationUrl,
+                        })
+                        .ExecuteAsync(context);
+                    return;
+                }
+
                 if (exception is GitHubApiException gitHubException)
                 {
                     context.Response.StatusCode = (int)gitHubException.StatusCode;

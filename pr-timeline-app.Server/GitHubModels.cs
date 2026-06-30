@@ -24,9 +24,21 @@ readonly partial record struct RepositoryName(string Owner, string Name)
     private static partial Regex RepositoryRegex();
 }
 
-sealed class GitHubApiException(HttpStatusCode statusCode, string message) : Exception(message)
+class GitHubApiException(HttpStatusCode statusCode, string message) : Exception(message)
 {
     public HttpStatusCode StatusCode { get; } = statusCode;
+}
+
+// Raised when GitHub withholds organization data because the caller's OAuth token has not been
+// authorized for the organization's SAML single sign-on. This is a deterministic, user-actionable
+// failure (the user must authorize the app for the org and sign in again) — never transient — so it
+// must propagate as a distinct 403 rather than being masked by transient/public-cache fallbacks.
+sealed class GitHubSamlSsoRequiredException(string? organization, string? authorizationUrl, string message)
+    : GitHubApiException(HttpStatusCode.Forbidden, message)
+{
+    public string? Organization { get; } = organization;
+
+    public string? AuthorizationUrl { get; } = authorizationUrl;
 }
 
 record TokenResult(string Value, string Source);
@@ -929,6 +941,9 @@ sealed class GitHubGraphQlErrorDto
 {
     [JsonPropertyName("message")]
     public string? Message { get; init; }
+
+    [JsonPropertyName("type")]
+    public string? Type { get; init; }
 }
 
 sealed class GitHubPullRequestsGraphQlDataDto

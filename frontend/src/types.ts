@@ -15,6 +15,16 @@ export type AuthStatus = {
   message: string;
 };
 
+/**
+ * Surfaced when GitHub requires SAML single sign-on authorization for an organization before its
+ * data can be loaded. Drives the full-width interstitial that points the user at GitHub to fix it.
+ */
+export type SsoRequiredInfo = {
+  organization?: string;
+  authorizationUrl?: string;
+  message: string;
+};
+
 export type PullState = 'open' | 'closed' | 'all';
 
 export type DashboardMode = 'review' | 'ship' | 'issues';
