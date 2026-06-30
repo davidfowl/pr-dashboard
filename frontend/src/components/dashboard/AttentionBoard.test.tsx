@@ -71,6 +71,12 @@ function laneLabels(host: HTMLElement) {
   return Array.from(host.querySelectorAll('.drilldown-tile-label')).map((node) => node.textContent);
 }
 
+function visiblePullRequestNumbers(host: HTMLElement) {
+  return Array.from(host.querySelectorAll('.attention-pr-number')).map(
+    (node) => node.textContent?.match(/#\d+/)?.[0] ?? null,
+  );
+}
+
 describe('AttentionBoard merge-blocked filter', () => {
   afterEach(() => {
     document.body.innerHTML = '';
@@ -103,6 +109,7 @@ describe('AttentionBoard merge-blocked filter', () => {
     });
 
     expect(laneLabels(host)).toEqual(['Re-review needed', 'Merge conflicts']);
+    expect(visiblePullRequestNumbers(host)).toEqual(['#1', '#2']);
 
     const toggle = host.querySelector<HTMLButtonElement>('.board-filter-toggle');
     expect(toggle?.textContent).toBe('Hide merge-blocked PRs');
@@ -113,6 +120,7 @@ describe('AttentionBoard merge-blocked filter', () => {
     });
 
     expect(laneLabels(host)).toEqual(['Re-review needed']);
+    expect(visiblePullRequestNumbers(host)).toEqual(['#2']);
     expect(toggle?.textContent).toBe('Show merge-blocked PRs');
     expect(toggle?.getAttribute('aria-pressed')).toBe('true');
 
