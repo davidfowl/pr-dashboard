@@ -3074,6 +3074,35 @@ select:focus-visible {
   font-size: 0.78rem;
 }
 
+.board-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+}
+
+.board-filter-toggle {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25rem 0.7rem;
+  color: var(--text);
+  background: var(--panel-strong);
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.board-filter-toggle:hover {
+  border-color: var(--accent-strong);
+  background: var(--accent-wash);
+}
+
+.board-filter-toggle[aria-pressed='true'] {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: var(--accent-contrast, #fff);
+}
+
 .developer-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));

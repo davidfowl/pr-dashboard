@@ -6,8 +6,10 @@ import {
   createDeveloperPullRequestCounts,
   createFocusIssueBuckets,
   createShipWeekScopeGroups,
+  isBlockedFromMerging,
   isPullRequestWithinFocusAgeLimit,
   pullRequestFocusActivityAt,
+  withoutMergeBlockedPullRequests,
 } from './models';
 
 type PrOverrides = Partial<Omit<PullRequestSummary, 'review' | 'checks'>> & {
@@ -448,5 +450,68 @@ describe('createFocusIssueBuckets personal lanes', () => {
     const myIssues = buckets.find((bucket) => bucket.label === 'My issues');
 
     expect(myIssues?.issues.map((item) => item.number)).toEqual([2, 3]);
+  });
+});
+
+describe('isBlockedFromMerging', () => {
+  it('flags merge conflicts, merge-blocking unresolved threads, and do-not-merge labels', () => {
+    expect(isBlockedFromMerging(pr({ number: 1, mergeableState: 'dirty' }))).toBe(true);
+    expect(isBlockedFromMerging(pr({
+      number: 2,
+      review: { unresolvedThreadCount: 1, requiresConversationResolution: true },
+    }))).toBe(true);
+    expect(isBlockedFromMerging(pr({ number: 3, labels: ['NO-MERGE'] }))).toBe(true);
+  });
+
+  it('does not flag unresolved threads that do not gate merging', () => {
+    expect(isBlockedFromMerging(pr({
+      number: 5,
+      review: { unresolvedThreadCount: 3, requiresConversationResolution: false },
+    }))).toBe(false);
+  });
+
+  it('does not flag a clean, mergeable PR', () => {
+    expect(isBlockedFromMerging(pr({ number: 4, mergeableState: 'clean' }))).toBe(false);
+  });
+});
+
+describe('withoutMergeBlockedPullRequests', () => {
+  it('drops merge-blocked PRs from each lane and removes lanes left empty', () => {
+    const conflicted = pr({ number: 10, mergeableState: 'dirty' });
+    const unresolved = pr({
+      number: 11,
+      review: { unresolvedThreadCount: 2, requiresConversationResolution: true },
+    });
+    const clean = pr({ number: 12, mergeableState: 'clean' });
+
+    const filtered = withoutMergeBlockedPullRequests([
+      {
+        label: 'Re-review needed',
+        summary: 'lane',
+        tone: 'warning',
+        metric: 'm',
+        items: [
+          { pullRequest: conflicted, reason: 're-review' },
+          { pullRequest: clean, reason: 're-review' },
+        ],
+      },
+      {
+        label: 'Merge conflicts',
+        summary: 'lane',
+        tone: 'danger',
+        metric: 'm',
+        items: [{ pullRequest: conflicted, reason: 'merge conflicts' }],
+      },
+      {
+        label: 'Unresolved feedback',
+        summary: 'lane',
+        tone: 'danger',
+        metric: 'm',
+        items: [{ pullRequest: unresolved, reason: 'resolve feedback' }],
+      },
+    ]);
+
+    expect(filtered.map((bucket) => bucket.label)).toEqual(['Re-review needed']);
+    expect(filtered[0].items.map((item) => item.pullRequest.number)).toEqual([12]);
   });
 });

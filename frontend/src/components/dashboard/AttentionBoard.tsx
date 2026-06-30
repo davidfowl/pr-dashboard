@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { AttentionBucket, PullRequestSummary, VisiblePullRequestHandler } from '../../types';
 import { formatCount } from '../../utils/format';
+import { withoutMergeBlockedPullRequests } from '../../utils/models';
 import { bucketRouteId, createBucketUrl } from '../../utils/routing';
 import HelpTooltip from '../HelpTooltip';
 import LoadingBadge from '../LoadingBadge';
@@ -28,6 +29,7 @@ type ReviewBucketTile = DrilldownTile & {
 const bucketItemLimit = 10;
 const reviewSignalHelp = 'These lanes are signals, not mutually exclusive statuses. A PR can be both Needs review and Stalled; Needs attention picks one highest-priority actionable lane with fresh lane activity while this board keeps every matching signal visible.';
 const stalledLaneHelp = 'Stalled means the PR has been quiet for at least 7 days. It is kept as a signal lane here, not a reason to remove the PR from Needs review, CI failing, Author response, or Ready to merge.';
+const hideMergeBlockedLabel = 'Hide PRs that are blocked from merging — merge conflicts, merge-blocking unresolved review threads, or a do-not-merge label — across every lane so the PRs someone can act on stand out.';
 
 type CopyStatus = {
   bucketId: string;
@@ -45,7 +47,9 @@ function AttentionBoard({
   onVisiblePullRequest,
 }: AttentionBoardProps) {
   const [copyStatus, setCopyStatus] = useState<CopyStatus | null>(null);
-  const bucketTiles = createReviewBucketTiles(buckets, loading, hasLoaded);
+  const [hideMergeBlocked, setHideMergeBlocked] = useState(false);
+  const visibleBuckets = hideMergeBlocked ? withoutMergeBlockedPullRequests(buckets) : buckets;
+  const bucketTiles = createReviewBucketTiles(visibleBuckets, loading, hasLoaded);
 
   async function copyBucketLink(tile: ReviewBucketTile) {
     onSelectBucket(tile.id);
@@ -90,6 +94,18 @@ function AttentionBoard({
         <p className="board-guidance">
           Lanes can overlap: automation, docs, stale, and review-state signals stay visible without hiding each other.
         </p>
+        <div className="board-filter-row">
+          <button
+            type="button"
+            className="board-filter-toggle"
+            aria-pressed={hideMergeBlocked}
+            onClick={() => setHideMergeBlocked((value) => !value)}
+            title={hideMergeBlockedLabel}
+          >
+            {hideMergeBlocked ? 'Show merge-blocked PRs' : 'Hide merge-blocked PRs'}
+          </button>
+          <HelpTooltip label={hideMergeBlockedLabel} />
+        </div>
       </div>
 
       <TileDrilldown
