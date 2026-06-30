@@ -433,6 +433,9 @@ sealed partial class GitHubClient(
         !cancellationToken.IsCancellationRequested
         && exception switch
         {
+            // SAML SSO authorization is a deterministic, user-actionable failure — never transient —
+            // so it must never be swallowed by transient retry or the public-cache fallback.
+            GitHubSamlSsoRequiredException => false,
             GitHubApiException ex => IsTransientGitHubStatusCode(ex.StatusCode)
                 || ex.StatusCode == HttpStatusCode.Forbidden && IsRateLimitMessage(ex.Message),
             _ when IsTransientGitHubTransportFailure(exception) => true,
@@ -3782,6 +3785,7 @@ sealed partial class GitHubClient(
             if (!response.IsSuccessStatusCode)
             {
                 var message = await ReadGitHubErrorMessageAsync(response, cancellationToken);
+                ThrowIfGitHubSamlSso(response, message, repositoryName.Owner);
                 throw new GitHubApiException(response.StatusCode, message);
             }
 
@@ -3804,6 +3808,20 @@ sealed partial class GitHubClient(
 
             if (payload?.Errors is { Count: > 0 } errors)
             {
+                // A SAML-protected org returns a FORBIDDEN error whose message mentions single
+                // sign-on. Surface that as a distinct, non-transient 403 instead of a transient
+                // BadGateway that the public-cache fallback would silently swallow (leaving the user
+                // "signed in" but staring at an empty dashboard).
+                if (errors.Any(error => GitHubSamlSso.IsSamlMessage(error.Message)))
+                {
+                    GitHubSamlSso.TryParseHeader(response, out var headerUrl, out _);
+                    var authorizationUrl = GitHubSamlSso.BuildAuthorizationUrl(headerUrl, repositoryName.Owner);
+                    throw new GitHubSamlSsoRequiredException(
+                        repositoryName.Owner,
+                        authorizationUrl,
+                        GitHubSamlSso.BuildMessage(repositoryName.Owner));
+                }
+
                 var message = errors
                     .Select(error => error.Message)
                     .FirstOrDefault(error => !string.IsNullOrWhiteSpace(error))
@@ -4311,7 +4329,11 @@ sealed partial class GitHubClient(
         try
         {
             using var response = await SendGitHubRequestAsync(url, authorization, cancellationToken);
-            var value = await ReadGitHubJsonAsync(response, jsonTypeInfo, cancellationToken);
+            var value = await ReadGitHubJsonAsync(
+                response,
+                jsonTypeInfo,
+                cancellationToken,
+                GitHubSamlSso.TryExtractOrgHint(url));
             return new GitHubPage<T>(value, GetNextPageUrl(response));
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsTransientGitHubTransportFailure(ex))
@@ -4382,16 +4404,52 @@ sealed partial class GitHubClient(
     private static async Task<T> ReadGitHubJsonAsync<T>(
         HttpResponseMessage response,
         JsonTypeInfo<T> jsonTypeInfo,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? organizationHint = null)
     {
         if (!response.IsSuccessStatusCode)
         {
             var message = await ReadGitHubErrorMessageAsync(response, cancellationToken);
+            ThrowIfGitHubSamlSso(response, message, organizationHint);
             throw new GitHubApiException(response.StatusCode, message);
         }
 
+        // An otherwise-successful response can still hide org rows behind a `partial-results` SSO
+        // signal — detect that here so a "200 but empty" is reported as the actionable 403 it is.
+        ThrowIfGitHubSamlSso(response, errorMessage: null, organizationHint);
+
         return await response.Content.ReadFromJsonAsync(jsonTypeInfo, cancellationToken)
             ?? throw new GitHubApiException(response.StatusCode, "GitHub API returned an empty response.");
+    }
+
+    // Detects GitHub's SAML SSO enforcement signal on a REST response and, when present, throws the
+    // distinct non-transient exception so it bypasses transient retry/public-cache fallbacks.
+    private static void ThrowIfGitHubSamlSso(HttpResponseMessage response, string? errorMessage, string? organizationHint)
+    {
+        var hasHeader = GitHubSamlSso.TryParseHeader(response, out var headerUrl, out var partialResults);
+
+        bool ssoRequired;
+        if (response.IsSuccessStatusCode)
+        {
+            // Only the `partial-results` form indicates org data was silently filtered from an OK body.
+            ssoRequired = hasHeader && partialResults;
+        }
+        else
+        {
+            ssoRequired = hasHeader
+                || (response.StatusCode == HttpStatusCode.Forbidden && GitHubSamlSso.IsSamlMessage(errorMessage));
+        }
+
+        if (!ssoRequired)
+        {
+            return;
+        }
+
+        var authorizationUrl = GitHubSamlSso.BuildAuthorizationUrl(headerUrl, organizationHint);
+        throw new GitHubSamlSsoRequiredException(
+            organizationHint,
+            authorizationUrl,
+            GitHubSamlSso.BuildMessage(organizationHint));
     }
 
     private static async Task<string> ReadGitHubErrorMessageAsync(HttpResponseMessage response, CancellationToken cancellationToken)

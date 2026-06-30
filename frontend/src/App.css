@@ -368,6 +368,88 @@ select:focus-visible {
   align-items: start;
 }
 
+.sso-required {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--warning);
+  border-radius: 16px;
+  background: var(--warning-wash);
+  color: var(--text);
+}
+
+.sso-required-icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  background: var(--warning);
+  color: #2a2304;
+  font-weight: 900;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.sso-required-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.sso-required-title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 800;
+}
+
+.sso-required-message {
+  margin: 0;
+  font-weight: 700;
+}
+
+.sso-required-detail {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.sso-required-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.35rem;
+}
+
+.sso-required-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 800;
+  font-size: 0.85rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.sso-required-button.primary {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--brand-primary), var(--accent-blue));
+  color: var(--on-accent);
+}
+
+.sso-required-button:hover {
+  filter: brightness(1.08);
+}
+
 .site-footer {
   display: flex;
   justify-content: flex-end;

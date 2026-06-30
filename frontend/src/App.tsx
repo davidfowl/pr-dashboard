@@ -5,6 +5,7 @@ import AppInfo from './components/AppInfo';
 import AuthCard from './components/AuthCard';
 import MobileNav from './components/MobileNav';
 import NotificationSettings from './components/NotificationSettings';
+import SsoRequiredNotice from './components/SsoRequiredNotice';
 import DashboardView from './components/dashboard/DashboardView';
 import DetailView from './components/detail/DetailView';
 import {
@@ -27,13 +28,14 @@ import type {
   ShipWeekIssueSummary,
   ShipWeekLoadingState,
   ShipWeekResponse,
+  SsoRequiredInfo,
   TimelineItem,
   TimelineResponse,
   TimelineStats,
   TimelineStoryEntry,
 } from './types';
 import { colorForText } from './utils/format';
-import { readJson } from './utils/http';
+import { readJson, SsoRequiredError } from './utils/http';
 import { beginAbortableLoad } from './utils/loadLifecycle';
 import { useMediaQuery } from './utils/useMediaQuery';
 import {
@@ -138,6 +140,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [issuesError, setIssuesError] = useState<string | null>(null);
   const [shipWeekError, setShipWeekError] = useState<string | null>(null);
+  const [ssoRequired, setSsoRequired] = useState<SsoRequiredInfo | null>(null);
   const [shipWeekSnapshotStatus, setShipWeekSnapshotStatus] = useState<string | null>(null);
   const [shipWeekSnapshotError, setShipWeekSnapshotError] = useState<string | null>(null);
   const [isShipWeekSnapshotExporting, setIsShipWeekSnapshotExporting] = useState(false);
@@ -409,6 +412,7 @@ function App() {
 
   async function logoutGitHub() {
     setError(null);
+    setSsoRequired(null);
     cancelVisibleChecksRequests();
 
     try {
@@ -456,6 +460,7 @@ function App() {
 
     setPullsLoading(true);
     setError(null);
+    setSsoRequired(null);
     beginVisibleChecksRequestScope();
     if (!options.preserveResults) {
       currentSelectionRef.current = null;
@@ -502,6 +507,15 @@ function App() {
       }
     } catch (err) {
       if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
+        return;
+      }
+
+      if (err instanceof SsoRequiredError) {
+        setSsoRequired({
+          organization: err.organization,
+          authorizationUrl: err.authorizationUrl,
+          message: err.message,
+        });
         return;
       }
 
@@ -553,6 +567,7 @@ function App() {
 
     setIssuesLoading(true);
     setIssuesError(null);
+    setSsoRequired(null);
 
     try {
       const repositories = parseRepositories(repositoryInput);
@@ -591,6 +606,15 @@ function App() {
         return;
       }
 
+      if (err instanceof SsoRequiredError) {
+        setSsoRequired({
+          organization: err.organization,
+          authorizationUrl: err.authorizationUrl,
+          message: err.message,
+        });
+        return;
+      }
+
       setIssuesError(err instanceof Error ? err.message : 'Unable to load issues.');
       if (!options.preserveResults) {
         setIssues([]);
@@ -618,6 +642,7 @@ function App() {
     setShipWeekLoading(true);
     setShipWeekSectionLoading(emptyShipWeekLoadingState);
     setShipWeekError(null);
+    setSsoRequired(null);
     setShipWeekSnapshotStatus(null);
     setShipWeekSnapshotError(null);
     setShowShipWeekSnapshotDownload(false);
@@ -687,6 +712,15 @@ function App() {
       }
     } catch (err) {
       if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
+        return;
+      }
+
+      if (err instanceof SsoRequiredError) {
+        setSsoRequired({
+          organization: err.organization,
+          authorizationUrl: err.authorizationUrl,
+          message: err.message,
+        });
         return;
       }
 
@@ -1171,6 +1205,9 @@ function App() {
       </header>
 
       <main className={`workspace ${viewMode}`}>
+        {ssoRequired && (
+          <SsoRequiredNotice info={ssoRequired} onReload={() => window.location.reload()} />
+        )}
         {viewMode === 'dashboard' && (
           <DashboardView
             dashboardMode={dashboardMode}

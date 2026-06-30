@@ -383,6 +383,120 @@ public sealed class GitHubClientTests
             TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task GraphQlSamlSsoErrorThrowsSsoRequiredException()
+    {
+        // A member of a SAML-protected org whose OAuth token has not been SSO-authorized gets a
+        // FORBIDDEN error mentioning single sign-on alongside a null repository. This must surface as
+        // the distinct, user-actionable SSO exception (not a generic BadGateway that the public-cache
+        // fallback would swallow into an empty dashboard).
+        var samlErrorResponse =
+            """
+            {
+              "data": { "repository": null },
+              "errors": [
+                {
+                  "type": "FORBIDDEN",
+                  "message": "Although you appear to have the correct authorization credentials, the `example` organization has enabled SAML SSO. You must grant your Personal Access Token (PAT) access to this organization via single sign-on."
+                }
+              ]
+            }
+            """;
+
+        var client = CreateClientCapturingRequests((request, path, cancellationToken) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(samlErrorResponse));
+        });
+
+        var exception = await Assert.ThrowsAsync<GitHubSamlSsoRequiredException>(
+            async () => await client.GetPullRequestsGraphQlAsync(
+                new RepositoryName("example", "repo"),
+                "open",
+                forceRefresh: true,
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.Forbidden, exception.StatusCode);
+        Assert.Equal("example", exception.Organization);
+        // No url= header on GraphQL, so the URL is derived from the org owner.
+        Assert.Equal("https://github.com/orgs/example/sso", exception.AuthorizationUrl);
+        // It must not be classified as a rate limit (which would make it transient/swallowed).
+        Assert.DoesNotContain("rate limit", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task GraphQlNonSamlForbiddenStaysGenericApiException()
+    {
+        // A FORBIDDEN error that is NOT SAML-related (for example a token scope problem) must keep its
+        // existing behavior and not be misreported as an SSO requirement.
+        var forbiddenResponse =
+            """
+            {
+              "data": null,
+              "errors": [
+                { "type": "FORBIDDEN", "message": "Resource not accessible by personal access token" }
+              ]
+            }
+            """;
+
+        var client = CreateClientCapturingRequests((request, path, cancellationToken) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(forbiddenResponse));
+        });
+
+        var exception = await Assert.ThrowsAsync<GitHubApiException>(
+            async () => await client.GetPullRequestsGraphQlAsync(
+                new RepositoryName("example", "repo"),
+                "open",
+                forceRefresh: true,
+                TestContext.Current.CancellationToken));
+
+        Assert.IsNotType<GitHubSamlSsoRequiredException>(exception);
+        Assert.Equal(HttpStatusCode.BadGateway, exception.StatusCode);
+    }
+
+    [Fact]
+    public async Task RestSsoHeaderThrowsSsoRequiredExceptionWithHeaderUrl()
+    {
+        // GitHub answers a REST call from an unauthorized org member with a 403 and an X-GitHub-SSO
+        // header carrying the authorization URL. We must surface that URL verbatim.
+        const string authorizationUrl = "https://github.com/orgs/contoso/sso?authorization_request=ABC123";
+        var client = CreateClientCapturingRequests((request, path, cancellationToken) =>
+        {
+            Assert.Equal("user", path);
+            return Task.FromResult(Json(
+                """{ "message": "Resource protected by organization SAML enforcement." }""",
+                HttpStatusCode.Forbidden,
+                ssoHeader: $"required; url={authorizationUrl}"));
+        });
+
+        var exception = await Assert.ThrowsAsync<GitHubSamlSsoRequiredException>(
+            async () => await client.GetCurrentUserLoginAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.Forbidden, exception.StatusCode);
+        Assert.Equal(authorizationUrl, exception.AuthorizationUrl);
+    }
+
+    [Fact]
+    public async Task RestSamlBodyWithoutHeaderThrowsSsoRequiredException()
+    {
+        // Some REST responses carry the SAML enforcement message in the body without the header. The
+        // org is then derived from the request URL so we can still offer an authorization link.
+        var client = CreateClientCapturingRequests((request, path, cancellationToken) =>
+        {
+            Assert.Equal("user", path);
+            return Task.FromResult(Json(
+                """{ "message": "Resource protected by organization SAML enforcement. You must grant your OAuth Application access to this organization." }""",
+                HttpStatusCode.Forbidden));
+        });
+
+        var exception = await Assert.ThrowsAsync<GitHubSamlSsoRequiredException>(
+            async () => await client.GetCurrentUserLoginAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.Forbidden, exception.StatusCode);
+    }
+
     [Theory]
     [InlineData("open", "CREATED_AT", "ASC")]
     [InlineData("closed", "UPDATED_AT", "DESC")]
@@ -5862,7 +5976,8 @@ public sealed class GitHubClientTests
         string content,
         HttpStatusCode statusCode = HttpStatusCode.OK,
         string? linkHeader = null,
-        string? locationHeader = null)
+        string? locationHeader = null,
+        string? ssoHeader = null)
     {
         var response = new HttpResponseMessage(statusCode)
         {
@@ -5877,6 +5992,11 @@ public sealed class GitHubClientTests
         if (locationHeader is not null)
         {
             response.Headers.Location = new Uri(locationHeader);
+        }
+
+        if (ssoHeader is not null)
+        {
+            response.Headers.Add(GitHubSamlSso.HeaderName, ssoHeader);
         }
 
         return response;
