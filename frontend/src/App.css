@@ -104,9 +104,12 @@ select:focus-visible {
 }
 
 .app-shell {
+  --app-shell-padding: 1.25rem;
+  --tooltip-viewport-padding: 1.875rem;
+
   width: 100%;
   min-height: 100vh;
-  padding: 1.25rem;
+  padding: var(--app-shell-padding);
 }
 
 .hero {
@@ -2223,34 +2226,47 @@ select:focus-visible {
   outline: none;
 }
 
-.logic-help::after {
+.logic-help-tooltip {
   position: absolute;
   z-index: 20;
-  top: calc(100% + 0.55rem);
   left: 50%;
   width: max-content;
-  max-width: min(24rem, calc(100vw - 2rem));
-  transform: translateX(-50%) translateY(-0.2rem);
+  max-width: min(
+    24rem,
+    calc(100vw - var(--tooltip-viewport-padding, 1.875rem) - var(--tooltip-viewport-padding, 1.875rem))
+  );
   border: 1px solid var(--border);
   border-radius: 0.7rem;
   padding: 0.55rem 0.65rem;
   color: var(--text);
   background: var(--panel-strong);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
-  content: attr(data-tooltip);
   font-size: 0.72rem;
   font-weight: 700;
   line-height: 1.45;
   opacity: 0;
   pointer-events: none;
+  overflow-wrap: break-word;
   text-align: left;
+  transform: translateX(calc(-50% + var(--tooltip-offset-x, 0px))) translateY(var(--tooltip-enter-y));
+  visibility: hidden;
   white-space: normal;
 }
 
-.logic-help:hover::after,
-.logic-help:focus-visible::after {
+.logic-help-tooltip.visible {
   opacity: 1;
-  transform: translateX(-50%) translateY(0);
+  transform: translateX(calc(-50% + var(--tooltip-offset-x, 0px))) translateY(0);
+  visibility: visible;
+}
+
+.logic-help-tooltip.placement-bottom {
+  top: calc(100% + 0.55rem);
+  --tooltip-enter-y: -0.2rem;
+}
+
+.logic-help-tooltip.placement-top {
+  bottom: calc(100% + 0.55rem);
+  --tooltip-enter-y: 0.2rem;
 }
 
 .bucket-card-actions {
