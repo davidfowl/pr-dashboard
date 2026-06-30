@@ -122,6 +122,32 @@ public sealed class NotificationRouteLoggingTests
         Assert.Equal(15, completed.Value("RetryAfterSeconds"));
     }
 
+    [Fact]
+    public async Task TestSendLogsDisabledOutcome()
+    {
+        var store = new InMemoryNotificationStore();
+        await store.UpsertSubscriptionAsync(s_user.Id, Subscription("https://push.example/subscribed"), TestContext.Current.CancellationToken);
+        var logger = new RecordingLogger();
+
+        var result = await NotificationRoutes.SendTestNotificationForUserAsync(
+            new DefaultHttpContext(),
+            s_user,
+            store,
+            new FakePushSender { IsEnabled = false },
+            new NotificationTestRateLimiter(TimeProvider.System),
+            logger,
+            TestContext.Current.CancellationToken);
+
+        var problem = Assert.IsAssignableFrom<IStatusCodeHttpResult>(result);
+        Assert.Equal(StatusCodes.Status409Conflict, problem.StatusCode);
+        var completed = Assert.Single(CompletionEntries(logger));
+        Assert.Equal("disabled", completed.Value("Outcome"));
+        Assert.Null(completed.Value("SubscriptionCount"));
+        Assert.Equal(0, completed.Value("Sent"));
+        Assert.Equal(0, completed.Value("Failed"));
+        Assert.Equal(0, completed.Value("Expired"));
+    }
+
     private static PushSubscriptionRecord Subscription(string endpoint) =>
         new()
         {

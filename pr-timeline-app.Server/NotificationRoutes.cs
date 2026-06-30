@@ -2,7 +2,7 @@ using Microsoft.Extensions.Options;
 
 public static class NotificationRoutes
 {
-    private const string LoggerCategoryName = "NotificationRoutes";
+    private const string LoggerCategoryName = nameof(NotificationRoutes);
 
     public static IEndpointRouteBuilder MapNotificationRoutes(this IEndpointRouteBuilder endpoints)
     {

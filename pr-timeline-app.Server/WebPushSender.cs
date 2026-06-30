@@ -40,7 +40,7 @@ sealed class WebPushSender(
         try
         {
             await pushClient.RequestPushMessageDeliveryAsync(pushSubscription, message, cancellationToken);
-            logger.LogInformation(
+            logger.LogDebug(
                 "Web push delivery completed. outcome={Outcome} status={Status}.",
                 PushDeliveryOutcome.Sent,
                 (int)HttpStatusCode.Created);
