@@ -4560,6 +4560,7 @@ sealed partial class GitHubClient(
     private static readonly HashSet<string> s_knownBotActors = new(StringComparer.OrdinalIgnoreCase)
     {
         "Copilot",
+        "copilot-swe-agent",
         "dependabot",
         "dependabot-preview",
         "github-actions",

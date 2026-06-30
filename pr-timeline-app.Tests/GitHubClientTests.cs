@@ -2357,6 +2357,17 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListAttributesCopilotSweAgentLoginToHumanAssignee()
+    {
+        var client = CreateCopilotAttributionClient(
+            "copilot-swe-agent",
+            "JamesNK",
+            "copilot-swe-agent");
+
+        Assert.Equal("JamesNK/copilot", await ResolveSingleAuthorAsync(client));
+    }
+
+    [Fact]
     public async Task PullListExcludesCopilotAssigneeCaseInsensitively()
     {
         var client = CreateCopilotAttributionClient("Copilot", "octocat", "copilot");

@@ -343,6 +343,16 @@ describe('createAttentionBuckets lane routing', () => {
     expect(inBucket(buckets, 'Needs review', 39)).toBe(false);
   });
 
+  it('routes copilot-swe-agent PRs to automation', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 40, author: 'copilot-swe-agent' }),
+    ]);
+
+    expect(inBucket(buckets, 'Bots / automation', 40)).toBe(true);
+    expect(inBucket(buckets, 'Community', 40)).toBe(false);
+    expect(inBucket(buckets, 'Needs review', 40)).toBe(false);
+  });
+
   it('keeps high-priority signal buckets for recently active community PRs', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
