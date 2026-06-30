@@ -194,6 +194,32 @@ describe('createAttentionBuckets lane routing', () => {
     expect(inBucket(buckets, 'Unresolved feedback', 4)).toBe(true);
   });
 
+  it('routes a changes-requested PR to Author response', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 40, review: { state: 'changes_requested', changesRequestedCount: 1 } }),
+    ]);
+
+    expect(inBucket(buckets, 'Author response', 40)).toBe(true);
+    expect(inBucket(buckets, 'Re-review needed', 40)).toBe(false);
+  });
+
+  it('routes a changes-requested PR with a later commit to Author response and Re-review needed', () => {
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 41,
+        lastCommitAt: '2026-01-02T00:00:00Z',
+        review: {
+          state: 'changes_requested',
+          changesRequestedCount: 1,
+          lastReviewedAt: '2026-01-01T00:00:00Z',
+        },
+      }),
+    ]);
+
+    expect(inBucket(buckets, 'Author response', 41)).toBe(true);
+    expect(inBucket(buckets, 'Re-review needed', 41)).toBe(true);
+  });
+
   it('hides a NO-MERGE-labelled PR from every lane', () => {
     const buckets = createAttentionBuckets([
       pr({ number: 5, labels: ['NO-MERGE'], review: { state: 'approved', approvalCount: 1 } }),

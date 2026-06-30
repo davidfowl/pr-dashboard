@@ -34,8 +34,8 @@ type QueueOverviewProps = {
 };
 
 const pullRequestListLimit = 10;
-const queueOverviewHelp = 'Needs attention is the focused core-team action queue: each PR appears once under its highest-priority actionable lane when that lane has fresh activity. Activity is lane-specific, such as the latest approval/review for merge lanes, the newest commit for re-review, or the PR update time for review-needed work. Recent community PRs have their own queue below, and PRs with failing CI are excluded until their checks are green again.';
-const needsAttentionHelp = 'Being in Needs attention means the PR has an actionable reason for someone to review, respond, or merge, and that reason was refreshed in the last 14 days. PRs with failing CI are excluded until their checks pass, and standalone signal lanes like stalled, docs, automation, aged-out community, drafts, merge conflicts, and unresolved feedback stay out of this top queue.';
+const queueOverviewHelp = 'Needs attention is the focused core-team action queue: each PR appears once under its highest-priority actionable review or merge lane when that lane has fresh activity. Activity is lane-specific, such as the latest approval/review for merge lanes, the newest commit for re-review, or the PR update time for review-needed work. Recent community PRs have their own queue below, and PRs with failing CI are excluded until their checks are green again.';
+const needsAttentionHelp = 'Being in Needs attention means the PR has an actionable reason for someone to review or merge, and that reason was refreshed in the last 14 days. PRs with failing CI are excluded until their checks pass, and standalone signal lanes like stalled, docs, automation, aged-out community, drafts, merge conflicts, unresolved feedback, and author response stay out of this top queue.';
 const communityQueueHelp = 'Community PRs show recently active external-contributor PRs separately from the core-team Needs attention queue. Community PRs with no activity in the last 14 days move to the Aged out community bucket on the signal board.';
 
 function QueueOverview({
@@ -170,7 +170,7 @@ function QueueOverview({
             />
           </div>
         </div>
-        <p>PRs with recent action-relevant activity that need someone to review, respond, or merge.</p>
+        <p>PRs with recent action-relevant activity that need someone to review or merge.</p>
         <p className="focus-info-note">
           Not finding the PR you were looking for?{' '}
           <button

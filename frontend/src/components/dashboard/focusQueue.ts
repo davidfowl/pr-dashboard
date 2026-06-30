@@ -24,6 +24,7 @@ type FocusExclusionReasonKind =
   | 'merge-conflicts'
   | 'unresolved-feedback'
   | 'held-by-label'
+  | 'author-response'
   | 'stale-activity'
   | 'community-list'
   | 'specialized-lane'
@@ -43,7 +44,7 @@ export type FocusExclusionItem = {
   bucketLabels: string[];
 };
 
-const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Aged out community', 'Unresolved feedback', 'Merge conflicts', 'CI failing']);
+const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Aged out community', 'Unresolved feedback', 'Merge conflicts', 'CI failing', 'Author response']);
 const disqualifyingFocusBucketLabels = new Set(['Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Aged out community', 'Unresolved feedback', 'Merge conflicts']);
 const specializedFocusBucketLabels = new Set(['Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Aged out community']);
 const focusBucketRanks = new Map([
@@ -130,11 +131,20 @@ export function computeFocusExclusionItems(
 }
 
 function blockedFocusKeys(buckets: AttentionBucket[]) {
-  return new Set(
+  const blockedKeys = new Set(
     buckets
       .filter((bucket) => disqualifyingFocusBucketLabels.has(bucket.label))
       .flatMap((bucket) => bucket.items.map((item) => pullRequestKey(item.pullRequest))),
   );
+  const bucketLabelsByPullRequest = createBucketLabelsByPullRequest(buckets);
+
+  for (const [key, bucketLabels] of bucketLabelsByPullRequest) {
+    if (isWaitingOnAuthor(bucketLabels)) {
+      blockedKeys.add(key);
+    }
+  }
+
+  return blockedKeys;
 }
 
 function createBucketLabelsByPullRequest(buckets: AttentionBucket[]) {
@@ -195,6 +205,15 @@ function focusExclusionReason(
     };
   }
 
+  if (isWaitingOnAuthor(bucketLabels)) {
+    return {
+      kind: 'author-response',
+      label: 'Author response',
+      detail: 'Changes were requested, so this is waiting on the author rather than the focused queue.',
+      tone: 'danger',
+    };
+  }
+
   if (isCommunityPullRequest(pullRequest) && !isAgedOutCommunityPullRequest(pullRequest)) {
     return {
       kind: 'community-list',
@@ -244,6 +263,11 @@ function focusExclusionReason(
   };
 }
 
+function isWaitingOnAuthor(bucketLabels: string[]) {
+  return bucketLabels.includes('Author response')
+    && !bucketLabels.includes('Re-review needed');
+}
+
 function bestFocusCandidateBucketLabel(bucketLabels: string[]) {
   return [...bucketLabels]
     .filter((label) => !excludedFocusBucketLabels.has(label))
@@ -289,16 +313,18 @@ function focusExclusionReasonRank(kind: FocusExclusionReasonKind) {
       return 2;
     case 'held-by-label':
       return 3;
-    case 'stale-activity':
+    case 'author-response':
       return 4;
-    case 'community-list':
+    case 'stale-activity':
       return 5;
-    case 'specialized-lane':
+    case 'community-list':
       return 6;
-    case 'stalled-only':
+    case 'specialized-lane':
       return 7;
-    case 'outside-queue':
+    case 'stalled-only':
       return 8;
+    case 'outside-queue':
+      return 9;
   }
 }
 

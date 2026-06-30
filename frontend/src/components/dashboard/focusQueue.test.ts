@@ -134,6 +134,40 @@ describe('computeFocusItems', () => {
     expect(computeFocusItems(buckets)).toHaveLength(0);
   });
 
+  it('does not surface PRs solely from the Author response lane', () => {
+    const blocked = pr(42, 'success', { state: 'changes_requested', changesRequestedCount: 1 });
+    const buckets: AttentionBucket[] = [bucket('Author response', [blocked])];
+
+    expect(computeFocusItems(buckets)).toHaveLength(0);
+  });
+
+  it('excludes author-response PRs even when they also qualify for high-priority signal lanes', () => {
+    const blocked = pr(43, 'success', { state: 'changes_requested', changesRequestedCount: 1 });
+    const buckets: AttentionBucket[] = [
+      bucket('Regression', [blocked]),
+      bucket('Author response', [blocked]),
+    ];
+
+    expect(computeFocusItems(buckets)).toHaveLength(0);
+  });
+
+  it('keeps changes-requested PRs in Needs attention after the author pushes a response', () => {
+    const responded = {
+      ...pr(44, 'success', {
+        state: 'changes_requested',
+        changesRequestedCount: 1,
+        lastReviewedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      }),
+      lastCommitAt: new Date().toISOString(),
+    };
+    const buckets: AttentionBucket[] = [
+      bucket('Author response', [responded]),
+      bucket('Re-review needed', [responded]),
+    ];
+
+    expect(computeFocusItems(buckets).map((item) => item.bucketLabel)).toEqual(['Re-review needed']);
+  });
+
   it('excludes recent community PRs even when they qualify for an actionable lane', () => {
     const community = { ...pr(41, 'success'), author: 'external-contributor' };
     const buckets: AttentionBucket[] = [
@@ -219,6 +253,21 @@ describe('computeFocusExclusionItems', () => {
 
     expect(exclusions).toHaveLength(1);
     expect(exclusions[0]?.reason.label).toBe('Held by label');
+  });
+
+  it('explains changes-requested PRs as author response work', () => {
+    const blocked = pr(51, 'success', { state: 'changes_requested', changesRequestedCount: 1 });
+    const buckets = [bucket('Author response', [blocked])];
+
+    const exclusions = computeFocusExclusionItems(
+      [blocked],
+      buckets,
+      computeFocusItems(buckets),
+      'davidfowl',
+    );
+
+    expect(exclusions).toHaveLength(1);
+    expect(exclusions[0]?.reason.label).toBe('Author response');
   });
 
   it('explains PRs whose actionable lane has aged out', () => {
