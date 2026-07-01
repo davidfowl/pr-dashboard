@@ -523,11 +523,10 @@ function App() {
         body: JSON.stringify({ login: login || null }),
       });
       await readJson(response);
-      clearSelectedPullRequest();
+      clearLoadedGitHubData();
       showDashboard(true, false);
       const authStatusUpdate = loadAuthStatus();
       refreshCurrentDashboardData({
-        preserveResults: true,
         refreshSelectedPullRequest: false,
         clearResultsOnError: true,
       });

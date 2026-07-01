@@ -3518,6 +3518,41 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListEndpointUsesFirstValidConfiguredRepositoryWhenRepoIsOmitted()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var gitHub = new FakeGitHubApi()
+            .Respond("repos/example/repo", "public-cache-token", _ => Json("""{ "visibility": "public" }"""))
+            .Respond(
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100",
+                "token-a",
+                _ => Json(PullRequestsJson([PullRequestJson(1, title: "Configured default")])))
+            .Respond("repos/example/repo/pulls/1/reviews?per_page=100", "token-a", _ => Json("[]"))
+            .Respond("repos/example/repo/pulls/1", "token-a", _ => Json(PullRequestDetailsJson(1)));
+        await using var app = await CreatePullRequestTestAppAsync(
+            gitHub,
+            cache,
+            "token-a",
+            new DashboardOptions
+            {
+                Repositories = ["bad repo", "example/repo"],
+                ShipWeekRepositories = []
+            });
+        using var httpClient = CreateHttpClient(app);
+
+        using var response = await httpClient.GetAsync(
+            "/api/github/pulls?state=open",
+            TestContext.Current.CancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<PullRequestListResponse>(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(body);
+        Assert.Equal("example/repo", body.Repository);
+        Assert.Equal("Configured default", Assert.Single(body.PullRequests).Title);
+    }
+
+    [Fact]
     public async Task StreamPullRequestsDoesNotDowngradeStaleItemsWhenRefreshFailsBeforeBatchIsEnriched()
     {
         var listRequests = 0;

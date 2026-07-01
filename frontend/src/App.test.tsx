@@ -136,6 +136,44 @@ describe('App navigation', () => {
     await unmountApp(root);
   });
 
+  it('clears previous account rows immediately while a dev-account switch refresh is pending', async () => {
+    window.history.replaceState(null, '', '/');
+    const switchedRefresh = createDeferred<void>();
+    const fetchMock = createFetchMock({
+      authenticated: true,
+      developmentAccounts: ['octocat', 'monalisa'],
+      selectedDevelopmentAccount: 'octocat',
+      delayPullRequestsAfterDevelopmentAccountSwitch: switchedRefresh.promise,
+      switchedPullRequestTitle: 'Monalisa account row',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Fix dashboard navigation');
+    });
+
+    await changeDevAccount('monalisa');
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('monalisa');
+      expect(document.body.textContent).not.toContain('Fix dashboard navigation');
+      expect(document.body.textContent).not.toContain('Monalisa account row');
+    });
+    expect(pullRequestListUrls(fetchMock).some((url) => url.searchParams.get('refresh') === 'true')).toBe(true);
+
+    await act(async () => {
+      switchedRefresh.resolve();
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Monalisa account row');
+      expect(document.body.textContent).not.toContain('Fix dashboard navigation');
+    });
+
+    await unmountApp(root);
+  });
+
   it('returns to the dashboard and clears PR hash on logout from detail view', async () => {
     window.history.replaceState(null, '', '/');
     const fetchMock = createFetchMock({ authenticated: true });
@@ -461,12 +499,18 @@ type FetchMockOptions = {
   selectedDevelopmentAccount?: string;
   failedRepository?: string;
   failPullRequestsAfterDevelopmentAccountSwitch?: boolean;
+  delayPullRequestsAfterDevelopmentAccountSwitch?: Promise<void>;
+  switchedPullRequestTitle?: string;
 };
 
 function createFetchMock(options: FetchMockOptions = {}) {
   let authenticated = options.authenticated ?? false;
   let selectedDevelopmentAccount = options.selectedDevelopmentAccount ?? '';
+  const initialDevelopmentAccount = options.selectedDevelopmentAccount ?? '';
   const pullRequest = createPullRequest(options.checksState ?? 'none');
+  const switchedPullRequest = createPullRequest(options.checksState ?? 'none', {
+    title: options.switchedPullRequestTitle ?? 'Switched account row',
+  });
 
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input.toString(), window.location.origin);
@@ -526,20 +570,31 @@ function createFetchMock(options: FetchMockOptions = {}) {
       }
 
       const repository = url.searchParams.get('repo');
+      const developmentAccountSwitched = selectedDevelopmentAccount !== initialDevelopmentAccount;
       if (
         repository
         && (
           repository.toLowerCase() === options.failedRepository?.toLowerCase()
           || (options.failPullRequestsAfterDevelopmentAccountSwitch
-            && selectedDevelopmentAccount !== (options.selectedDevelopmentAccount ?? ''))
+            && developmentAccountSwitched)
         )
       ) {
         return jsonResponse({ detail: `Cannot access ${repository}` }, 404);
       }
+      if (
+        developmentAccountSwitched
+        && options.delayPullRequestsAfterDevelopmentAccountSwitch
+        && repository === pullRequest.repository
+      ) {
+        await options.delayPullRequestsAfterDevelopmentAccountSwitch;
+      }
 
+      const currentPullRequest = developmentAccountSwitched && options.switchedPullRequestTitle
+        ? switchedPullRequest
+        : pullRequest;
       return jsonResponse(pullRequestList(
-        repository ?? pullRequest.repository,
-        repository === pullRequest.repository ? [pullRequest] : [],
+        repository ?? currentPullRequest.repository,
+        repository === currentPullRequest.repository ? [currentPullRequest] : [],
       ));
     }
 
