@@ -60,6 +60,7 @@ sealed partial class GitHubClient(
     private const string RegressionLabelMarker = "regression";
     private const string CtiTeamTitleMarker = "[AspireE2E]";
     private const string CtiTeamSearchTerm = "AspireE2E";
+    private const string AfscromeIssueAuthor = "afscrome";
     private static readonly SemaphoreSlim s_githubRequestThrottle = new(MaxConcurrentGitHubRequests, MaxConcurrentGitHubRequests);
     private static readonly SemaphoreSlim s_checksFetchThrottle = new(MaxConcurrentChecksFetches, MaxConcurrentChecksFetches);
     private static readonly TimeSpan PullRequestGraphQlRefreshFailureCooldown = TimeSpan.FromSeconds(30);
@@ -1830,8 +1831,14 @@ sealed partial class GitHubClient(
                 CtiTeamSearchTerm,
                 scope,
                 cancellationToken);
+            var afscromeIssuesTask = GetIssuesCreatedByAsync(
+                repositoryName,
+                state,
+                AfscromeIssueAuthor,
+                scope,
+                cancellationToken);
 
-            await Task.WhenAll(regressionIssuesTask, ctiTeamIssuesTask, currentUserLoginTask);
+            await Task.WhenAll(regressionIssuesTask, ctiTeamIssuesTask, afscromeIssuesTask, currentUserLoginTask);
 
             IReadOnlyList<GitHubIssueDto> assignedIssues = string.IsNullOrWhiteSpace(currentUserLoginTask.Result)
                 ? []
@@ -1847,6 +1854,7 @@ sealed partial class GitHubClient(
             // them to a unique set of non-PR issues before applying linked-PR activity.
             var focusIssues = regressionIssuesTask.Result
                 .Concat(ctiTeamIssuesTask.Result)
+                .Concat(afscromeIssuesTask.Result)
                 .Concat(assignedIssues)
                 .Where(issue => issue.PullRequest is null)
                 .GroupBy(issue => issue.Number)
@@ -2718,6 +2726,23 @@ sealed partial class GitHubClient(
             cancellationToken: cancellationToken,
             assignee: assignee);
 
+    private async Task<IReadOnlyList<GitHubIssueDto>> GetIssuesCreatedByAsync(
+        RepositoryName repositoryName,
+        string state,
+        string creator,
+        GitHubCacheScope scope,
+        CancellationToken cancellationToken) =>
+        await GetIssuesAsync(
+            repositoryName,
+            state,
+            label: null,
+            milestoneNumber: null,
+            sort: "updated",
+            direction: "desc",
+            scope: scope,
+            cancellationToken: cancellationToken,
+            creator: creator);
+
     private async Task<IReadOnlyList<GitHubIssueDto>> GetIssuesAsync(
         RepositoryName repositoryName,
         string state,
@@ -2727,9 +2752,10 @@ sealed partial class GitHubClient(
         string? direction,
         GitHubCacheScope scope,
         CancellationToken cancellationToken,
-        string? assignee = null) =>
+        string? assignee = null,
+        string? creator = null) =>
         await SendPagedGitHubRequestAsync(
-            CreateIssuesUrl(repositoryName, state, label, milestoneNumber, sort, direction, assignee),
+            CreateIssuesUrl(repositoryName, state, label, milestoneNumber, sort, direction, assignee, creator),
             GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
             scope.RequestAuthorization,
             cancellationToken);
@@ -2773,7 +2799,8 @@ sealed partial class GitHubClient(
                 milestoneNumber: null,
                 sort,
                 direction,
-                assignee: null),
+                assignee: null,
+                creator: null),
             GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
             scope.RequestAuthorization,
             cancellationToken))
@@ -2789,7 +2816,8 @@ sealed partial class GitHubClient(
         int? milestoneNumber,
         string? sort,
         string? direction,
-        string? assignee = null)
+        string? assignee = null,
+        string? creator = null)
     {
         var queryParts = new List<string>
         {
@@ -2809,6 +2837,11 @@ sealed partial class GitHubClient(
         if (!string.IsNullOrWhiteSpace(assignee))
         {
             queryParts.Add($"assignee={Uri.EscapeDataString(assignee)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(creator))
+        {
+            queryParts.Add($"creator={Uri.EscapeDataString(creator)}");
         }
 
         if (!string.IsNullOrWhiteSpace(sort))
@@ -4527,6 +4560,7 @@ sealed partial class GitHubClient(
     private static readonly HashSet<string> s_knownBotActors = new(StringComparer.OrdinalIgnoreCase)
     {
         "Copilot",
+        "copilot-swe-agent",
         "dependabot",
         "dependabot-preview",
         "github-actions",

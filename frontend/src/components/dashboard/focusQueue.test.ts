@@ -15,7 +15,7 @@ beforeEach(() => {
     communityRepositories: ['CommunityToolkit/Aspire'],
     currentRelease: '13.4',
     doNotMergeLabels: ['needs-author-action', 'no-merge'],
-    botAuthors: ['dotnet-maestro'],
+    botAuthors: ['dotnet-maestro', 'copilot-swe-agent'],
     nonBlockingCheckFailureRules: [
       {
         repository: 'private-org/service',

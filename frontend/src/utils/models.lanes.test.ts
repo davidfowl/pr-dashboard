@@ -28,7 +28,7 @@ beforeEach(() => {
     docsFromCodeRepository: 'microsoft/aspire.dev',
     docsFromCodeLabel: 'docs-from-code',
     doNotMergeLabels: ['needs-author-action', 'no-merge'],
-    botAuthors: ['dotnet-maestro'],
+    botAuthors: ['dotnet-maestro', 'copilot-swe-agent'],
     nonBlockingCheckFailureRules: [
       {
         repository: 'private-org/service',
@@ -585,6 +585,16 @@ describe('createAttentionBuckets lane routing', () => {
     expect(inBucket(buckets, 'Needs review', 39)).toBe(false);
   });
 
+  it('routes copilot-swe-agent PRs to automation', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 40, author: 'copilot-swe-agent' }),
+    ]);
+
+    expect(inBucket(buckets, 'Bots / automation', 40)).toBe(true);
+    expect(inBucket(buckets, 'Community', 40)).toBe(false);
+    expect(inBucket(buckets, 'Needs review', 40)).toBe(false);
+  });
+
   it('keeps high-priority signal buckets for recently active community PRs', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
@@ -706,6 +716,18 @@ describe('createAttentionSignals review progress', () => {
 });
 
 describe('createFocusIssueBuckets personal lanes', () => {
+  it('adds an afscrome finds bucket for issues filed by afscrome', () => {
+    const buckets = createFocusIssueBuckets([
+      issue({ number: 1, author: 'reporter' }),
+      issue({ number: 2, author: 'afscrome' }),
+      issue({ number: 3, author: 'Afscrome' }),
+    ]);
+
+    const afscromeFinds = buckets.find((bucket) => bucket.label === 'afscrome finds');
+
+    expect(afscromeFinds?.issues.map((item) => item.number)).toEqual([2, 3]);
+  });
+
   it('adds a My issues bucket for issues assigned to the signed-in user', () => {
     const buckets = createFocusIssueBuckets([
       issue({ number: 1, assignees: ['other'] }),

@@ -47,6 +47,8 @@ const approvedButAgingBucketLabel = 'Approved but aging';
 const releaseBlockingSignalLabel = 'Blocking release';
 const regressionBucketLabel = 'Regression';
 const ctiTeamIssueBucketLabel = 'CTI team';
+const afscromeIssueBucketLabel = 'afscrome finds';
+const afscromeIssueAuthor = 'afscrome';
 const myIssuesBucketLabel = 'My issues';
 const myDraftPullRequestsBucketLabel = 'My draft PRs';
 const agedOutCommunityBucketLabel = 'Aged out community';
@@ -77,6 +79,13 @@ const focusIssueBucketDefinitions: FocusIssueBucketDefinition[] = [
     countsAsDomain: true,
     needsValidation: true,
     suppressNeedsPr: true,
+  },
+  {
+    label: afscromeIssueBucketLabel,
+    summary: 'Open issues filed by afscrome; these are usually high-signal reports worth triaging.',
+    tone: 'success',
+    metric: 'good finds',
+    matches: isAfscromeIssue,
   },
 ];
 
@@ -899,6 +908,10 @@ function hasRegressionLabel(labels: readonly string[]) {
 
 function isCtiTeamIssue(issue: ShipWeekIssueSummary) {
   return issue.title.toLowerCase().includes(ctiTeamTitleMarker);
+}
+
+function isAfscromeIssue(issue: ShipWeekIssueSummary) {
+  return sameLogin(issue.author, afscromeIssueAuthor);
 }
 
 function matchingFocusIssueBucketDefinitions(issue: ShipWeekIssueSummary) {

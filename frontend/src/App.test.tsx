@@ -45,7 +45,7 @@ const testDashboardConfig: DashboardConfig = {
   docsFromCodeRepository: 'microsoft/aspire.dev',
   docsFromCodeLabel: 'docs-from-code',
   doNotMergeLabels: ['needs-author-action', 'no-merge'],
-  botAuthors: ['dotnet-maestro'],
+  botAuthors: ['dotnet-maestro', 'copilot-swe-agent'],
   nonBlockingCheckFailureRules: [
     {
       repository: 'devdiv-microsoft/aspire-1p',

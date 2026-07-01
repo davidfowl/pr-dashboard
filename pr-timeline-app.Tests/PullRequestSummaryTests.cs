@@ -65,6 +65,24 @@ public sealed class PullRequestSummaryTests
     }
 
     [Fact]
+    public void FromDtoOwnerUserIdIsTheSoleHumanAssigneeForCopilotSweAgentPr()
+    {
+        var dto = new GitHubPullRequestDto
+        {
+            Number = 1,
+            State = "open",
+            User = new GitHubActorDto { Id = 198982749, Login = "copilot-swe-agent" },
+            Assignees =
+            [
+                new GitHubActorDto { Id = 1472, Login = "radical" },
+                new GitHubActorDto { Id = 198982749, Login = "copilot-swe-agent" }
+            ]
+        };
+
+        Assert.Equal(1472, PullRequestSummary.FromDto(dto).OwnerUserId);
+    }
+
+    [Fact]
     public void FromDtoOwnerUserIdIsNullWhenCopilotPrHasNoSingleHuman()
     {
         var dto = new GitHubPullRequestDto

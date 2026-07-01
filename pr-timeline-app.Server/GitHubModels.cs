@@ -328,6 +328,7 @@ record PullRequestSummary(
 
         var normalized = login.Trim().ToLowerInvariant();
         return normalized == "copilot"
+            || normalized == "copilot-swe-agent"
             || (normalized.StartsWith("copilot") && normalized.EndsWith("[bot]"));
     }
 }
@@ -594,6 +595,7 @@ record TimelineStats(
     private static readonly HashSet<string> s_knownBotActors = new(StringComparer.OrdinalIgnoreCase)
     {
         "Copilot",
+        "copilot-swe-agent",
         "dependabot",
         "dependabot-preview",
         "github-actions",
