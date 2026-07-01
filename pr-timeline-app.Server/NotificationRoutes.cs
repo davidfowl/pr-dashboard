@@ -6,6 +6,9 @@ public static class NotificationRoutes
 
     public static IEndpointRouteBuilder MapNotificationRoutes(this IEndpointRouteBuilder endpoints)
     {
+        var logger = endpoints.ServiceProvider
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger(LoggerCategoryName);
         var api = endpoints.MapGroup("/api/notifications");
 
         // The VAPID public key is public by design. 404 signals "push is not available here"
@@ -13,6 +16,11 @@ public static class NotificationRoutes
         api.MapGet("vapid-public-key", (IOptions<WebPushOptions> options) =>
         {
             var value = options.Value;
+            logger.LogInformation(
+                "Notification public key requested. WebPushConfigured={WebPushConfigured}, PublicKeyPresent={WebPushPublicKeyPresent}, KeyIdPresent={WebPushKeyIdPresent}.",
+                value.IsConfigured,
+                !string.IsNullOrWhiteSpace(value.PublicKey),
+                !string.IsNullOrWhiteSpace(value.EffectiveKeyId));
             return value.IsConfigured
                 ? Results.Ok(new VapidPublicKeyResponse(value.PublicKey!, value.EffectiveKeyId))
                 : Results.NotFound();
@@ -27,6 +35,7 @@ public static class NotificationRoutes
             var user = await resolver.ResolveAsync(cancellationToken);
             if (user is null)
             {
+                logger.LogWarning("Rejected notification preferences request because no GitHub user could be resolved.");
                 return Results.Unauthorized();
             }
 
@@ -43,18 +52,21 @@ public static class NotificationRoutes
         {
             if (!IsBrowserMutationRequest(context))
             {
+                logger.LogWarning("Rejected notification preferences update because the request was not a trusted browser mutation.");
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
             var user = await resolver.ResolveAsync(cancellationToken);
             if (user is null)
             {
+                logger.LogWarning("Rejected notification preferences update because no GitHub user could be resolved.");
                 return Results.Unauthorized();
             }
 
             var body = await ReadJsonAsync<NotificationPreferencesDto>(context, cancellationToken);
             if (body is null)
             {
+                logger.LogWarning("Rejected notification preferences update because the JSON body could not be parsed.");
                 return Results.BadRequest();
             }
 
@@ -76,18 +88,23 @@ public static class NotificationRoutes
         {
             if (!IsBrowserMutationRequest(context))
             {
+                logger.LogWarning("Rejected notification subscribe request because the request was not a trusted browser mutation.");
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
             var user = await resolver.ResolveAsync(cancellationToken);
             if (user is null)
             {
+                logger.LogWarning("Rejected notification subscribe request because no GitHub user could be resolved.");
                 return Results.Unauthorized();
             }
 
             var body = await ReadJsonAsync<PushSubscriptionDto>(context, cancellationToken);
             if (!TryCreateSubscription(body, options.Value, out var subscription, out var error))
             {
+                logger.LogWarning(
+                    "Rejected notification subscribe request because the subscription was invalid. ValidationFields={ValidationFields}.",
+                    error.Keys.ToArray());
                 return Results.ValidationProblem(error);
             }
 
@@ -98,6 +115,10 @@ public static class NotificationRoutes
             // shared device stops receiving pushes that would land on this browser.
             await store.RemoveEndpointFromOtherUsersAsync(user.Id, subscription.Endpoint, cancellationToken);
 
+            logger.LogInformation(
+                "Notification subscription saved. UserId={UserId}, EndpointHost={EndpointHost}.",
+                user.Id,
+                new Uri(subscription.Endpoint).Host);
             return Results.Ok(new { subscribed = true });
         });
 
@@ -109,22 +130,29 @@ public static class NotificationRoutes
         {
             if (!IsBrowserMutationRequest(context))
             {
+                logger.LogWarning("Rejected notification unsubscribe request because the request was not a trusted browser mutation.");
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
             var user = await resolver.ResolveAsync(cancellationToken);
             if (user is null)
             {
+                logger.LogWarning("Rejected notification unsubscribe request because no GitHub user could be resolved.");
                 return Results.Unauthorized();
             }
 
             var body = await ReadJsonAsync<UnsubscribeRequest>(context, cancellationToken);
             if (string.IsNullOrWhiteSpace(body?.Endpoint))
             {
+                logger.LogWarning("Rejected notification unsubscribe request because the endpoint was missing.");
                 return Results.BadRequest();
             }
 
             var removed = await store.RemoveSubscriptionAsync(user.Id, body.Endpoint, cancellationToken);
+            logger.LogInformation(
+                "Notification subscription removal requested. UserId={UserId}, Removed={Removed}.",
+                user.Id,
+                removed);
             return Results.Ok(new { removed });
         });
 
@@ -134,21 +162,21 @@ public static class NotificationRoutes
             INotificationStore store,
             IPushSender sender,
             NotificationTestRateLimiter rateLimiter,
-            ILoggerFactory loggerFactory,
             CancellationToken cancellationToken) =>
         {
             if (!IsBrowserMutationRequest(context))
             {
+                logger.LogWarning("Rejected notification test request because the request was not a trusted browser mutation.");
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
             var user = await resolver.ResolveAsync(cancellationToken);
             if (user is null)
             {
+                logger.LogWarning("Rejected notification test request because no GitHub user could be resolved.");
                 return Results.Unauthorized();
             }
 
-            var logger = loggerFactory.CreateLogger(LoggerCategoryName);
             return await SendTestNotificationForUserAsync(
                 context,
                 user,

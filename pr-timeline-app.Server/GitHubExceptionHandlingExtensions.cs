@@ -17,9 +17,14 @@ public static class GitHubExceptionHandlingExtensions
                 {
                     var repository = context.Request.Query["repo"].ToString();
                     logger.LogWarning(
-                        "GitHub API request failed. Path={RequestPath}, Repository={Repository}, StatusCode={GitHubStatusCode}, ExceptionType={ExceptionType}.",
+                        gitHubException,
+                        "GitHub API request failed. Method={RequestMethod}, Path={RequestPath}, Repository={Repository}, State={GitHubState}, MilestoneProvided={GitHubMilestoneProvided}, Refresh={GitHubRefreshRequested}, StatusCode={GitHubStatusCode}, ExceptionType={ExceptionType}.",
+                        context.Request.Method,
                         context.Request.Path.Value,
                         string.IsNullOrWhiteSpace(repository) ? null : repository,
+                        EmptyToNull(context.Request.Query["state"].ToString()),
+                        !string.IsNullOrWhiteSpace(context.Request.Query["milestone"].ToString()),
+                        string.Equals(context.Request.Query["refresh"].ToString(), "true", StringComparison.OrdinalIgnoreCase),
                         (int)gitHubException.StatusCode,
                         gitHubException.GetType().Name);
                     context.Response.StatusCode = (int)gitHubException.StatusCode;
@@ -47,4 +52,7 @@ public static class GitHubExceptionHandlingExtensions
 
         return app;
     }
+
+    private static string? EmptyToNull(string value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value;
 }
