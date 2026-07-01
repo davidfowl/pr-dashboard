@@ -22,7 +22,7 @@ public static class DashboardConfigRoutes
                     invalidRepositoryValues);
             }
 
-            logger.LogInformation(
+            logger.LogDebug(
                 "Dashboard config served. RepositoryCount={DashboardRepositoryCount}, ShipWeekRepositoryCount={DashboardShipWeekRepositoryCount}, CoreTeamMemberCount={DashboardCoreTeamMemberCount}, CommunityRepositoryCount={DashboardCommunityRepositoryCount}, CurrentReleaseConfigured={DashboardCurrentReleaseConfigured}, ShipWeekReleaseBranchConfigured={DashboardShipWeekReleaseBranchConfigured}, DocsFromCodeConfigured={DashboardDocsFromCodeConfigured}, DoNotMergeLabelCount={DashboardDoNotMergeLabelCount}, BotAuthorCount={DashboardBotAuthorCount}, NonBlockingRuleCount={DashboardNonBlockingRuleCount}, InvalidRepositoryValueCount={InvalidRepositoryValueCount}.",
                 repositories.Length,
                 shipWeekRepositories.Length,

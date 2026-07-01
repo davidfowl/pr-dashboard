@@ -6,7 +6,7 @@ sealed class GitHubAuthService(
 {
     public async Task<AuthStatusResponse> GetStatusAsync(CancellationToken cancellationToken)
     {
-        logger.LogInformation(
+        logger.LogDebug(
             "Checking GitHub authentication status. OAuthConfigured={GitHubOAuthConfigured}.",
             GitHubOAuthConfiguration.IsConfigured);
 
@@ -28,7 +28,7 @@ sealed class GitHubAuthService(
             }
         }
 
-        logger.LogInformation(
+        logger.LogDebug(
             "GitHub authentication status resolved. Authenticated={GitHubAuthenticated}, TokenSource={GitHubTokenSource}, LoginResolved={GitHubLoginResolved}, OAuthConfigured={GitHubOAuthConfigured}.",
             token is not null,
             token?.Source ?? "none",

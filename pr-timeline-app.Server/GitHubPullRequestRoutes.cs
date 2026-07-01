@@ -41,7 +41,7 @@ public static class GitHubPullRequestRoutes
             var pulls = string.IsNullOrWhiteSpace(label)
                 ? await pullRequests.GetPullRequestsAsync(repositoryName, normalizedState, forceRefresh, cancellationToken)
                 : await pullRequests.GetPullRequestsByLabelAsync(repositoryName, normalizedState, label.Trim(), forceRefresh, cancellationToken);
-            logger.LogInformation(
+            logger.LogDebug(
                 "GitHub route completed. Route={GitHubRoute}, Repository={Repository}, PullRequestCount={PullRequestCount}.",
                 routeName,
                 repositoryName,
@@ -88,7 +88,7 @@ public static class GitHubPullRequestRoutes
             }
 
             var snapshot = response.Snapshot;
-            logger.LogInformation(
+            logger.LogDebug(
                 "GitHub route completed. Route={GitHubRoute}, Repository={Repository}, PullRequestCount={PullRequestCount}, UnfilteredPullRequestCount={UnfilteredPullRequestCount}, SnapshotSource={SnapshotSource}, SnapshotStale={SnapshotStale}, SnapshotRefreshInProgress={SnapshotRefreshInProgress}, SnapshotRefreshQueued={SnapshotRefreshQueued}, SnapshotHasError={SnapshotHasError}.",
                 routeName,
                 repositoryName,
@@ -167,7 +167,7 @@ public static class GitHubPullRequestRoutes
                 });
             }
 
-            logger.LogInformation(
+            logger.LogDebug(
                 "GitHub route requested. Route={GitHubRoute}, Repository={Repository}, Milestone={Milestone}, ReleaseBranchProvided={ReleaseBranchProvided}, Refresh={GitHubRefreshRequested}.",
                 routeName,
                 repositoryName,
@@ -191,7 +191,7 @@ public static class GitHubPullRequestRoutes
                 return Results.ValidationProblem(result.ValidationErrors);
             }
 
-            logger.LogInformation(
+            logger.LogDebug(
                 "GitHub route completed. Route={GitHubRoute}, Repository={Repository}, Milestone={Milestone}, ReleaseBranch={ReleaseBranch}, PullRequestCount={PullRequestCount}, IssueCount={IssueCount}.",
                 routeName,
                 repositoryName,
@@ -230,7 +230,7 @@ public static class GitHubPullRequestRoutes
                 });
             }
 
-            logger.LogInformation(
+            logger.LogDebug(
                 "GitHub route requested. Route={GitHubRoute}, Repository={Repository}, RequestedPullRequestCount={RequestedPullRequestCount}, Refresh={GitHubRefreshRequested}.",
                 routeName,
                 repositoryName,
@@ -241,7 +241,7 @@ public static class GitHubPullRequestRoutes
                 requestedPullRequests,
                 refresh == true,
                 cancellationToken);
-            logger.LogInformation(
+            logger.LogDebug(
                 "GitHub route completed. Route={GitHubRoute}, Repository={Repository}, PullRequestChecksCount={PullRequestChecksCount}.",
                 routeName,
                 repositoryName,
@@ -275,14 +275,14 @@ public static class GitHubPullRequestRoutes
                 return InvalidRepository();
             }
 
-            logger.LogInformation(
+            logger.LogDebug(
                 "GitHub route requested. Route={GitHubRoute}, Repository={Repository}, PullRequestNumber={PullRequestNumber}, Refresh={GitHubRefreshRequested}.",
                 routeName,
                 repositoryName,
                 number,
                 refresh == true);
             var timeline = await pullRequests.GetTimelineAsync(repositoryName, number, refresh == true, cancellationToken);
-            logger.LogInformation(
+            logger.LogDebug(
                 "GitHub route completed. Route={GitHubRoute}, Repository={Repository}, PullRequestNumber={PullRequestNumber}, TimelineItemCount={TimelineItemCount}, CheckState={CheckState}, MergeableState={MergeableState}.",
                 routeName,
                 repositoryName,
@@ -335,7 +335,7 @@ public static class GitHubPullRequestRoutes
             normalizedState,
             refresh == true,
             cancellationToken);
-        logger.LogInformation(
+        logger.LogDebug(
             "GitHub route completed. Route={GitHubRoute}, Repository={Repository}, IssueCount={IssueCount}.",
             routeName,
             repositoryName,
@@ -372,7 +372,7 @@ public static class GitHubPullRequestRoutes
         }
         finally
         {
-            logger.LogInformation(
+            logger.LogDebug(
                 "GitHub route stream completed. Route={GitHubRoute}, Repository={Repository}, PullRequestCount={PullRequestCount}, StalePullRequestCount={StalePullRequestCount}, Canceled={RequestCanceled}.",
                 routeName,
                 repository,
@@ -439,7 +439,7 @@ public static class GitHubPullRequestRoutes
         string? label,
         bool refresh)
     {
-        logger.LogInformation(
+        logger.LogDebug(
             "GitHub route requested. Route={GitHubRoute}, Repository={Repository}, State={GitHubState}, LabelProvided={GitHubLabelProvided}, Refresh={GitHubRefreshRequested}.",
             routeName,
             repositoryName,

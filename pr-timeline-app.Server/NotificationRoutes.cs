@@ -16,7 +16,7 @@ public static class NotificationRoutes
         api.MapGet("vapid-public-key", (IOptions<WebPushOptions> options) =>
         {
             var value = options.Value;
-            logger.LogInformation(
+            logger.LogDebug(
                 "Notification public key requested. WebPushConfigured={WebPushConfigured}, PublicKeyPresent={WebPushPublicKeyPresent}, KeyIdPresent={WebPushKeyIdPresent}.",
                 value.IsConfigured,
                 !string.IsNullOrWhiteSpace(value.PublicKey),
