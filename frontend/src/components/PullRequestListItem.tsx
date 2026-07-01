@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { CheckState, LinkedIssueSummary, PullRequestSummary, VisiblePullRequestHandler } from '../types';
 import { formatRelative } from '../utils/format';
+import { needsVisibleCheckDetails, visibleCheckState } from '../utils/models';
 import PullRequestSignalPills from './PullRequestSignalPills';
 import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
 
@@ -29,11 +30,12 @@ function PullRequestListItem({
   annotation,
 }: PullRequestListItemProps) {
   const itemRef = useRef<HTMLElement | null>(null);
-  const checksState = pullRequest.checks?.state;
+  const checksState = visibleCheckState(pullRequest);
   const badge = checksState && checksState !== 'none' ? checkBadgeGlyphs[checksState] : null;
+  const blockingFailingChecks = checksState === 'failure' ? pullRequest.checks?.failingChecks : [];
   const badgeTitle = badge
-    ? `${badge.label}${pullRequest.checks?.failingChecks?.length
-      ? ` · ${pullRequest.checks.failingChecks.map((failing) => failing.name).join(', ')}`
+    ? `${badge.label}${blockingFailingChecks?.length
+      ? ` · ${blockingFailingChecks.map((failing) => failing.name).join(', ')}`
       : ''}`
     : undefined;
 
@@ -42,7 +44,7 @@ function PullRequestListItem({
       !onVisiblePullRequest
       || pullRequest.state !== 'open'
       || !pullRequest.headSha
-      || checksState !== 'unknown'
+      || !needsVisibleCheckDetails(pullRequest)
     ) {
       return;
     }

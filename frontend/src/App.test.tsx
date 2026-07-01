@@ -8,6 +8,8 @@ import type {
   AppInfoResponse,
   AuthStatus,
   CheckState,
+  DashboardConfig,
+  DevelopmentGitHubAccountsResponse,
   PullRequestChecksRequest,
   PullRequestChecksResponse,
   PullRequestListResponse,
@@ -22,8 +24,41 @@ type ActEnvironment = typeof globalThis & {
 
 (globalThis as ActEnvironment).IS_REACT_ACT_ENVIRONMENT = true;
 
+const testDashboardConfig: DashboardConfig = {
+  repositories: [
+    'microsoft/aspire',
+    'microsoft/aspire.dev',
+    'microsoft/aspire-skills',
+    'microsoft/dcp',
+    'CommunityToolkit/Aspire',
+    'devdiv-microsoft/aspire-1p',
+  ],
+  repositoryInput:
+    'microsoft/aspire, microsoft/aspire.dev, microsoft/aspire-skills, microsoft/dcp, CommunityToolkit/Aspire, devdiv-microsoft/aspire-1p',
+  shipWeekRepositories: ['microsoft/aspire', 'microsoft/aspire.dev'],
+  shipWeekRepositoryInput: 'microsoft/aspire, microsoft/aspire.dev',
+  coreTeamMembers: ['davidfowl', 'karolz-ms', 'DamianEdwards'],
+  coreTeamMemberAliasSuffixes: ['_microsoft'],
+  communityRepositories: ['CommunityToolkit/Aspire'],
+  currentRelease: '13.4',
+  shipWeekReleaseBranch: '',
+  docsFromCodeRepository: 'microsoft/aspire.dev',
+  docsFromCodeLabel: 'docs-from-code',
+  doNotMergeLabels: ['needs-author-action', 'no-merge'],
+  botAuthors: ['dotnet-maestro', 'copilot-swe-agent'],
+  nonBlockingCheckFailureRules: [
+    {
+      repository: 'devdiv-microsoft/aspire-1p',
+      label: 'proof of presence',
+      checkNames: ['GitOps/GitHubPop'],
+      checkNameContains: ['proof of presence'],
+    },
+  ],
+};
+
 describe('App navigation', () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     document.body.innerHTML = '';
     window.history.replaceState(null, '', '/');
@@ -53,6 +88,166 @@ describe('App navigation', () => {
     await unmountApp(root);
   });
 
+  it('does not show repository entry controls', async () => {
+    window.history.replaceState(null, '', '/');
+    vi.stubGlobal('fetch', createFetchMock());
+    const { root } = await renderApp();
+
+    await waitFor(() => getButton('View timeline'));
+    expect(queryInputByLabel('Repositories')).toBeNull();
+
+    await clickButton('Issues mode');
+    await waitFor(() => getButton('Load issues'));
+    expect(queryInputByLabel('Issue repositories')).toBeNull();
+
+    await clickButton('Ship mode');
+
+    await waitFor(() => getButton('Load ship mode'));
+    expect(window.location.search).not.toContain('repos=');
+    expect(queryInputByLabel('Ship mode repositories')).toBeNull();
+
+    await unmountApp(root);
+  });
+
+  it('returns to the dashboard and clears PR hash when switching dev accounts from detail view', async () => {
+    window.history.replaceState(null, '', '/');
+    const fetchMock = createFetchMock({
+      authenticated: true,
+      developmentAccounts: ['octocat', 'monalisa'],
+      selectedDevelopmentAccount: 'octocat',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => getButton('View timeline'));
+    await clickButton('View timeline');
+    await waitFor(() => getButton('Back to dashboard'));
+    expect(window.location.hash).toBe('#pr/microsoft%2Faspire/101');
+
+    await changeDevAccount('monalisa');
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('monalisa');
+      expect(document.body.textContent).not.toContain('Back to dashboard');
+    });
+    expect(window.location.hash).toBe('');
+    expect(requestUrls(fetchMock, '/api/github/pulls/101/timeline')).toHaveLength(1);
+
+    await unmountApp(root);
+  });
+
+  it('clears previous account rows immediately while a dev-account switch refresh is pending', async () => {
+    window.history.replaceState(null, '', '/');
+    const switchedRefresh = createDeferred<void>();
+    const fetchMock = createFetchMock({
+      authenticated: true,
+      developmentAccounts: ['octocat', 'monalisa'],
+      selectedDevelopmentAccount: 'octocat',
+      delayPullRequestsAfterDevelopmentAccountSwitch: switchedRefresh.promise,
+      switchedPullRequestTitle: 'Monalisa account row',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Fix dashboard navigation');
+    });
+
+    await changeDevAccount('monalisa');
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('monalisa');
+      expect(document.body.textContent).not.toContain('Fix dashboard navigation');
+      expect(document.body.textContent).not.toContain('Monalisa account row');
+    });
+    expect(pullRequestListUrls(fetchMock).some((url) => url.searchParams.get('refresh') === 'true')).toBe(true);
+
+    await act(async () => {
+      switchedRefresh.resolve();
+    });
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Monalisa account row');
+      expect(document.body.textContent).not.toContain('Fix dashboard navigation');
+    });
+
+    await unmountApp(root);
+  });
+
+  it('returns to the dashboard and clears PR hash on logout from detail view', async () => {
+    window.history.replaceState(null, '', '/');
+    const fetchMock = createFetchMock({ authenticated: true });
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => getButton('View timeline'));
+    await clickButton('View timeline');
+    await waitFor(() => getButton('Back to dashboard'));
+    expect(window.location.hash).toBe('#pr/microsoft%2Faspire/101');
+
+    await clickButton('Sign out');
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Sign in');
+      expect(document.body.textContent).not.toContain('Back to dashboard');
+      expect(document.body.textContent).not.toContain('#101 Fix dashboard navigation');
+    });
+    expect(window.location.hash).toBe('');
+    expect(requestUrls(fetchMock, '/api/github/pulls/101/timeline')).toHaveLength(1);
+
+    await unmountApp(root);
+  });
+
+  it('clears previous account rows and hides configured repo errors when a dev-account switch refresh fails', async () => {
+    window.history.replaceState(null, '', '/');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchMock = createFetchMock({
+      authenticated: true,
+      developmentAccounts: ['octocat', 'monalisa'],
+      selectedDevelopmentAccount: 'octocat',
+      failPullRequestsAfterDevelopmentAccountSwitch: true,
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Fix dashboard navigation');
+    });
+
+    await changeDevAccount('monalisa');
+
+    await waitFor(() => {
+      expect(document.body.textContent).not.toContain('Fix dashboard navigation');
+      expect(document.body.textContent).not.toContain('Unable to load microsoft/aspire');
+      expect(document.body.textContent).toContain('No pull requests loaded yet.');
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('Unable to load microsoft/aspire'),
+      expect.any(Error),
+    );
+
+    await unmountApp(root);
+  });
+
+  it('hides the dev-account picker when OAuth is the active token source', async () => {
+    window.history.replaceState(null, '', '/');
+    const fetchMock = createFetchMock({
+      authenticated: true,
+      authSource: 'oauth',
+      developmentAccounts: ['octocat', 'monalisa'],
+      selectedDevelopmentAccount: 'octocat',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Fix dashboard navigation');
+    });
+    expect(document.querySelector('.dev-account-picker')).toBeNull();
+
+    await unmountApp(root);
+  });
+
   it('uses live PR-list refresh without forcing visible checks', async () => {
     window.history.replaceState(null, '', '/');
     const fetchMock = createFetchMock({
@@ -70,7 +265,7 @@ describe('App navigation', () => {
       expect(document.body.textContent).toContain('octocat');
       expect((getButton('Refresh now') as HTMLButtonElement).disabled).toBe(false);
     });
-    expect(document.body.textContent).toMatch(/Loaded in \d+ms \(5 GraphQL requests\)\./);
+    expect(document.body.textContent).toMatch(/Loaded in \d+ms \(6 GraphQL requests\)\./);
 
     const initialPullListRequestCount = pullRequestListUrls(fetchMock).length;
 
@@ -80,6 +275,32 @@ describe('App navigation', () => {
     });
     expect(pullRequestListUrls(fetchMock).some((url) => url.searchParams.get('refresh') === 'true')).toBe(true);
     expect(checksRequestUrls(fetchMock).some((url) => url.searchParams.has('refresh'))).toBe(false);
+
+    await unmountApp(root);
+  });
+
+  it('keeps loaded repositories visible and hides UI errors when one configured repository fails', async () => {
+    window.history.replaceState(null, '', '/');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const fetchMock = createFetchMock({
+      authenticated: true,
+      failedRepository: 'devdiv-microsoft/aspire-1p',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Fix dashboard navigation');
+      expect(document.body.textContent).not.toContain('Unable to load devdiv-microsoft/aspire-1p');
+      expect(document.body.textContent).not.toContain('devdiv-microsoft/aspire-1p');
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('Unable to load devdiv-microsoft/aspire-1p'),
+      expect.any(Error),
+    );
+    expect(pullRequestListUrls(fetchMock).map((url) => url.searchParams.get('repo'))).toEqual(
+      expect.arrayContaining(testDashboardConfig.repositories),
+    );
 
     await unmountApp(root);
   });
@@ -271,24 +492,64 @@ describe('App navigation', () => {
 
 type FetchMockOptions = {
   authenticated?: boolean;
+  authSource?: string;
   checksState?: CheckState;
   visibleChecksState?: CheckState;
+  developmentAccounts?: string[];
+  selectedDevelopmentAccount?: string;
+  failedRepository?: string;
+  failPullRequestsAfterDevelopmentAccountSwitch?: boolean;
+  delayPullRequestsAfterDevelopmentAccountSwitch?: Promise<void>;
+  switchedPullRequestTitle?: string;
 };
 
 function createFetchMock(options: FetchMockOptions = {}) {
   let authenticated = options.authenticated ?? false;
+  let selectedDevelopmentAccount = options.selectedDevelopmentAccount ?? '';
+  const initialDevelopmentAccount = options.selectedDevelopmentAccount ?? '';
   const pullRequest = createPullRequest(options.checksState ?? 'none');
+  const switchedPullRequest = createPullRequest(options.checksState ?? 'none', {
+    title: options.switchedPullRequestTitle ?? 'Switched account row',
+  });
 
-  return vi.fn(async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/dashboard/config') {
+      return dashboardConfigResponse();
+    }
+
     if (url.pathname === '/api/github/auth-status') {
       return jsonResponse<AuthStatus>({
         authenticated,
         configured: true,
         canLogin: true,
-        login: authenticated ? 'octocat' : undefined,
+        login: authenticated ? selectedDevelopmentAccount || 'octocat' : undefined,
         message: authenticated ? 'Signed in.' : 'Using anonymous public cache.',
+        source: options.authSource,
       });
+    }
+
+    if (url.pathname === '/api/github/dev/accounts') {
+      if (!options.developmentAccounts) {
+        return jsonResponse({ detail: 'Not found' }, 404);
+      }
+
+      return jsonResponse<DevelopmentGitHubAccountsResponse>({
+        accounts: options.developmentAccounts.map((login) => ({
+          login,
+          active: login === selectedDevelopmentAccount,
+        })),
+        selectedLogin: selectedDevelopmentAccount || null,
+      });
+    }
+
+    if (url.pathname === '/api/github/dev/account') {
+      const body = typeof init?.body === 'string'
+        ? JSON.parse(init.body) as { login?: string | null }
+        : { login: null };
+      selectedDevelopmentAccount = body.login ?? '';
+      authenticated = true;
+      return jsonResponse({ selectedLogin: selectedDevelopmentAccount || null });
     }
 
     if (url.pathname === '/api/github/logout') {
@@ -309,9 +570,31 @@ function createFetchMock(options: FetchMockOptions = {}) {
       }
 
       const repository = url.searchParams.get('repo');
+      const developmentAccountSwitched = selectedDevelopmentAccount !== initialDevelopmentAccount;
+      if (
+        repository
+        && (
+          repository.toLowerCase() === options.failedRepository?.toLowerCase()
+          || (options.failPullRequestsAfterDevelopmentAccountSwitch
+            && developmentAccountSwitched)
+        )
+      ) {
+        return jsonResponse({ detail: `Cannot access ${repository}` }, 404);
+      }
+      if (
+        developmentAccountSwitched
+        && options.delayPullRequestsAfterDevelopmentAccountSwitch
+        && repository === pullRequest.repository
+      ) {
+        await options.delayPullRequestsAfterDevelopmentAccountSwitch;
+      }
+
+      const currentPullRequest = developmentAccountSwitched && options.switchedPullRequestTitle
+        ? switchedPullRequest
+        : pullRequest;
       return jsonResponse(pullRequestList(
-        repository ?? pullRequest.repository,
-        repository === pullRequest.repository ? [pullRequest] : [],
+        repository ?? currentPullRequest.repository,
+        repository === currentPullRequest.repository ? [currentPullRequest] : [],
       ));
     }
 
@@ -391,6 +674,10 @@ function createHardRefreshFetchMock(liveRefresh: Promise<void>) {
 
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/dashboard/config') {
+      return dashboardConfigResponse();
+    }
+
     if (url.pathname === '/api/github/auth-status') {
       return jsonResponse<AuthStatus>({
         authenticated: true,
@@ -492,6 +779,10 @@ function createInitialStaleSnapshotFetchMock(liveRefresh: Promise<void>) {
 
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/dashboard/config') {
+      return dashboardConfigResponse();
+    }
+
     if (url.pathname === '/api/github/auth-status') {
       return jsonResponse<AuthStatus>({
         authenticated: true,
@@ -577,6 +868,10 @@ function createStalePreservingRefreshFetchMock(liveRefresh: Promise<void>) {
 
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/dashboard/config') {
+      return dashboardConfigResponse();
+    }
+
     if (url.pathname === '/api/github/auth-status') {
       return jsonResponse<AuthStatus>({
         authenticated: true,
@@ -671,6 +966,10 @@ function createDelayedVisibleChecksFetchMock() {
 
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/dashboard/config') {
+      return dashboardConfigResponse();
+    }
+
     if (url.pathname === '/api/github/auth-status') {
       return jsonResponse<AuthStatus>({
         authenticated: true,
@@ -800,6 +1099,12 @@ function jsonResponse<T>(body: T, status = 200) {
   });
 }
 
+function dashboardConfigResponse() {
+  return jsonResponse<DashboardConfig>({
+    ...testDashboardConfig,
+  });
+}
+
 function pullRequestList(
   repository: string,
   pullRequests: PullRequestSummary[],
@@ -843,6 +1148,18 @@ async function clickButton(name: string) {
   });
 }
 
+async function changeDevAccount(login: string) {
+  const select = document.querySelector('.dev-account-picker select');
+  if (!(select instanceof HTMLSelectElement)) {
+    throw new Error('Unable to find dev account selector.');
+  }
+
+  await act(async () => {
+    select.value = login;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
 function getButton(name: string) {
   const button = [...document.querySelectorAll('button')]
     .find((candidate) => candidate.textContent?.trim() === name);
@@ -851,6 +1168,13 @@ function getButton(name: string) {
   }
 
   return button;
+}
+
+function queryInputByLabel(name: string) {
+  const label = [...document.querySelectorAll('label')]
+    .find((candidate) => candidate.querySelector('span')?.textContent?.trim() === name);
+  const input = label?.querySelector('input');
+  return input instanceof HTMLInputElement ? input : null;
 }
 
 type AppFetchMock =

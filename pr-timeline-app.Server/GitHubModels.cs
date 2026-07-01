@@ -9,7 +9,8 @@ readonly partial record struct RepositoryName(string Owner, string Name)
     {
         repositoryName = default;
 
-        if (RepositoryRegex().Match(value.Trim()) is not { Success: true } match)
+        var normalizedValue = NormalizeRepositoryInput(value);
+        if (RepositoryRegex().Match(normalizedValue) is not { Success: true } match)
         {
             return false;
         }
@@ -20,6 +21,32 @@ readonly partial record struct RepositoryName(string Owner, string Name)
 
     public override string ToString() => $"{Owner}/{Name}";
 
+    private static string NormalizeRepositoryInput(string value)
+    {
+        var trimmedValue = value.Trim();
+        if (!Uri.TryCreate(trimmedValue, UriKind.Absolute, out var uri) ||
+            !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) &&
+            !uri.Host.Equals("www.github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmedValue;
+        }
+
+        var pathSegments = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (pathSegments.Length < 2)
+        {
+            return trimmedValue;
+        }
+
+        var repository = pathSegments[1];
+        if (repository.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+        {
+            repository = repository[..^4];
+        }
+
+        return $"{pathSegments[0]}/{repository}";
+    }
+
     [GeneratedRegex("^(?<owner>[A-Za-z0-9._-]+)/(?<repo>[A-Za-z0-9._-]+)$")]
     private static partial Regex RepositoryRegex();
 }
@@ -29,9 +56,19 @@ sealed class GitHubApiException(HttpStatusCode statusCode, string message) : Exc
     public HttpStatusCode StatusCode { get; } = statusCode;
 }
 
-record TokenResult(string Value, string Source);
+record TokenResult(string Value, string Source, string? CacheDiscriminator = null);
 
 record AuthStatusResponse(bool Authenticated, bool Configured, bool CanLogin, string? Source, string? Login, string Message);
+
+record DevelopmentGitHubAccount(string Login, bool Active);
+
+record DevelopmentGitHubAccountsResponse(
+    IReadOnlyList<DevelopmentGitHubAccount> Accounts,
+    string? SelectedLogin);
+
+record DevelopmentGitHubAccountSelectionRequest(string? Login);
+
+record DevelopmentGitHubAccountSelectionResponse(string? SelectedLogin);
 
 record PullRequestListResponse(
     string Repository,

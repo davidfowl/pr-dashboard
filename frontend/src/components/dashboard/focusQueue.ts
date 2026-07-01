@@ -200,7 +200,7 @@ function focusExclusionReason(
     return {
       kind: 'held-by-label',
       label: 'Held by label',
-      detail: 'A do-not-merge or needs-author-action label keeps it out of the focused queue.',
+      detail: 'A configured hold label keeps it out of the focused queue.',
       tone: 'danger',
     };
   }

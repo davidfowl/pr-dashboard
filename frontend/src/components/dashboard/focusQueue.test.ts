@@ -1,6 +1,35 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { emptyDashboardConfig, setActiveDashboardConfig } from '../../dashboardConfig';
 import type { AttentionBucket, CheckState, PullRequestSummary } from '../../types';
 import { computeCommunityItems, computeFocusExclusionItems, computeFocusItems } from './focusQueue';
+
+beforeEach(() => {
+  setActiveDashboardConfig({
+    ...emptyDashboardConfig,
+    repositories: ['example/repo'],
+    repositoryInput: 'example/repo',
+    shipWeekRepositories: ['example/repo'],
+    shipWeekRepositoryInput: 'example/repo',
+    coreTeamMembers: ['davidfowl'],
+    coreTeamMemberAliasSuffixes: ['_corp'],
+    communityRepositories: ['CommunityToolkit/Aspire'],
+    currentRelease: '13.4',
+    doNotMergeLabels: ['needs-author-action', 'no-merge'],
+    botAuthors: ['dotnet-maestro', 'copilot-swe-agent'],
+    nonBlockingCheckFailureRules: [
+      {
+        repository: 'private-org/service',
+        label: 'presence policy',
+        checkNames: ['Policy/Presence'],
+        checkNameContains: ['presence policy'],
+      },
+    ],
+  });
+});
+
+afterEach(() => {
+  setActiveDashboardConfig(emptyDashboardConfig);
+});
 
 function checks(state: CheckState): PullRequestSummary['checks'] {
   return {
@@ -176,6 +205,49 @@ describe('computeFocusItems', () => {
 
     expect(computeFocusItems(buckets)).toHaveLength(0);
   });
+
+  it('keeps configured non-blocking check failures in Needs attention', () => {
+    const proofPresence = {
+      ...pr(45, 'failure'),
+      repository: 'private-org/service',
+      checks: {
+        ...checks('failure'),
+        totalCount: 2,
+        successCount: 1,
+        failureCount: 1,
+        failingChecks: [
+          {
+            name: 'Policy/Presence',
+            conclusion: 'failure',
+            htmlUrl: 'https://github.com/private-org/service/runs/1',
+          },
+        ],
+      },
+    };
+    const blockingFailure = {
+      ...pr(46, 'failure'),
+      repository: 'private-org/service',
+      checks: {
+        ...checks('failure'),
+        totalCount: 2,
+        successCount: 1,
+        failureCount: 1,
+        failingChecks: [
+          {
+            name: 'Build',
+            conclusion: 'failure',
+            htmlUrl: 'https://github.com/private-org/service/runs/2',
+          },
+        ],
+      },
+    };
+
+    const focusNumbers = computeFocusItems([bucket('Needs review', [proofPresence, blockingFailure])])
+      .map((item) => item.pullRequest.number);
+
+    expect(focusNumbers).toContain(45);
+    expect(focusNumbers).not.toContain(46);
+  });
 });
 
 describe('computeCommunityItems', () => {
@@ -220,6 +292,12 @@ describe('computeCommunityItems', () => {
     const held = { ...pr(75, 'success'), author: 'external-contributor', labels: ['needs-author-action'] };
 
     expect(computeCommunityItems([coreTeam, draft, held])).toHaveLength(0);
+  });
+
+  it('excludes configured team aliases from the recent community list', () => {
+    const teamAlias = { ...pr(76, 'success'), author: 'teammate_corp' };
+
+    expect(computeCommunityItems([teamAlias])).toHaveLength(0);
   });
 });
 

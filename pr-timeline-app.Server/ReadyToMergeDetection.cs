@@ -24,10 +24,6 @@ static class ReadyToMergeDetection
     // mirroring the frontend's Ready-to-merge lane.
     private static readonly TimeSpan s_approvalAging = TimeSpan.FromDays(2);
 
-    // Labels that explicitly hold a PR back from merging, mirroring the frontend list.
-    private static readonly HashSet<string> s_doNotMergeLabels =
-        new(StringComparer.OrdinalIgnoreCase) { "needs-author-action", "no-merge" };
-
     public static string EventKey(string repository, int number) =>
         $"{EventPrefix}:{ReviewRequestDetection.NormalizeRepository(repository)}#{number}";
 
@@ -58,7 +54,23 @@ static class ReadyToMergeDetection
     // True when an open PR is approved and clean enough to merge: it carries the frontend's
     // "Ready to merge" lane rules (approved, fresh, CI not failing, no merge-blocking threads,
     // no conflicts, no do-not-merge label).
-    public static bool IsReadyToMerge(PullRequestSummary pullRequest, DateTimeOffset now)
+    public static bool IsReadyToMerge(
+        PullRequestSummary pullRequest,
+        DateTimeOffset now,
+        IReadOnlySet<string> doNotMergeLabels) =>
+        IsReadyToMerge(
+            repository: "",
+            pullRequest,
+            now,
+            doNotMergeLabels,
+            nonBlockingCheckFailureRules: []);
+
+    public static bool IsReadyToMerge(
+        string repository,
+        PullRequestSummary pullRequest,
+        DateTimeOffset now,
+        IReadOnlySet<string> doNotMergeLabels,
+        IReadOnlyList<DashboardCheckFailureRuleOptions> nonBlockingCheckFailureRules)
     {
         if (pullRequest.Draft || !pullRequest.State.Equals("open", StringComparison.OrdinalIgnoreCase))
         {
@@ -75,7 +87,7 @@ static class ReadyToMergeDetection
             return false;
         }
 
-        if (string.Equals(pullRequest.Checks.State, "failure", StringComparison.OrdinalIgnoreCase))
+        if (!AreChecksReady(repository, pullRequest, nonBlockingCheckFailureRules))
         {
             return false;
         }
@@ -90,7 +102,7 @@ static class ReadyToMergeDetection
             return false;
         }
 
-        return !pullRequest.Labels.Any(label => s_doNotMergeLabels.Contains(label));
+        return !pullRequest.Labels.Any(doNotMergeLabels.Contains);
     }
 
     // For one repository's PRs, yield a nag candidate for every ready-to-merge PR's author and
@@ -100,12 +112,28 @@ static class ReadyToMergeDetection
         string repository,
         IReadOnlyList<PullRequestSummary> pullRequests,
         IReadOnlySet<long> enabledUserIds,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        IReadOnlySet<string> doNotMergeLabels) =>
+        DetectForRepository(
+            repository,
+            pullRequests,
+            enabledUserIds,
+            now,
+            doNotMergeLabels,
+            nonBlockingCheckFailureRules: []);
+
+    public static IEnumerable<DetectedReadyToMerge> DetectForRepository(
+        string repository,
+        IReadOnlyList<PullRequestSummary> pullRequests,
+        IReadOnlySet<long> enabledUserIds,
+        DateTimeOffset now,
+        IReadOnlySet<string> doNotMergeLabels,
+        IReadOnlyList<DashboardCheckFailureRuleOptions> nonBlockingCheckFailureRules)
     {
         var normalizedRepository = ReviewRequestDetection.NormalizeRepository(repository);
         foreach (var pullRequest in pullRequests)
         {
-            if (!IsReadyToMerge(pullRequest, now))
+            if (!IsReadyToMerge(normalizedRepository, pullRequest, now, doNotMergeLabels, nonBlockingCheckFailureRules))
             {
                 continue;
             }
@@ -145,4 +173,71 @@ static class ReadyToMergeDetection
     private static bool IsApprovalAging(PullRequestSummary pullRequest, DateTimeOffset now) =>
         (pullRequest.Review.LastApprovedAt ?? pullRequest.Review.LastReviewedAt) is { } approvedAt
         && now - approvedAt >= s_approvalAging;
+
+    private static bool AreChecksReady(
+        string repository,
+        PullRequestSummary pullRequest,
+        IReadOnlyList<DashboardCheckFailureRuleOptions> nonBlockingCheckFailureRules)
+    {
+        if (string.Equals(pullRequest.Checks.State, "pending", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(pullRequest.Checks.State, "unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (!string.Equals(pullRequest.Checks.State, "failure", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return IsNonBlockingOnlyFailure(repository, pullRequest, nonBlockingCheckFailureRules)
+            && pullRequest.Checks.PendingCount == 0;
+    }
+
+    private static bool IsNonBlockingOnlyFailure(
+        string repository,
+        PullRequestSummary pullRequest,
+        IReadOnlyList<DashboardCheckFailureRuleOptions> nonBlockingCheckFailureRules)
+    {
+        if (pullRequest.Checks.FailingChecks.Count == 0)
+        {
+            return false;
+        }
+
+        return pullRequest.Checks.FailingChecks.All(check =>
+            MatchingNonBlockingCheckFailureRule(repository, check.Name, nonBlockingCheckFailureRules) is not null);
+    }
+
+    private static DashboardCheckFailureRuleOptions? MatchingNonBlockingCheckFailureRule(
+        string repository,
+        string checkName,
+        IReadOnlyList<DashboardCheckFailureRuleOptions> nonBlockingCheckFailureRules)
+    {
+        foreach (var rule in nonBlockingCheckFailureRules)
+        {
+            if (string.IsNullOrWhiteSpace(rule?.Repository) ||
+                !string.Equals(rule.Repository.Trim(), repository, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (MatchesNonBlockingCheckFailureName(rule, checkName))
+            {
+                return rule;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool MatchesNonBlockingCheckFailureName(DashboardCheckFailureRuleOptions rule, string checkName)
+    {
+        var normalized = checkName.Trim();
+        return (rule.CheckNames ?? []).Any(name =>
+                !string.IsNullOrWhiteSpace(name) &&
+                normalized.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase))
+            || (rule.CheckNameContains ?? []).Any(fragment =>
+                !string.IsNullOrWhiteSpace(fragment) &&
+                normalized.Contains(fragment.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
 }

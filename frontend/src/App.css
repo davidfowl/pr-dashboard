@@ -314,6 +314,23 @@ select:focus-visible {
   gap: 0.4rem;
 }
 
+.dev-account-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.dev-account-picker select {
+  min-width: 10rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.32rem 1.8rem 0.32rem 0.55rem;
+  color: var(--text);
+  background: var(--surface-sunken);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
 .auth-actions button {
   border: 1px solid var(--border);
   border-radius: 999px;

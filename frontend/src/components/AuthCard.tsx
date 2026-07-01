@@ -1,14 +1,29 @@
-import type { AuthStatus } from '../types';
+import type { AuthStatus, DevelopmentGitHubAccount } from '../types';
 import GitHubAvatar from './GitHubAvatar';
 
 type AuthCardProps = {
   authStatus: AuthStatus | null;
+  developmentAccounts: DevelopmentGitHubAccount[];
+  selectedDevelopmentAccount: string;
+  developmentAccountLoading: boolean;
   loginLoading: boolean;
   onLogin: () => void;
   onLogout: () => void;
+  onDevelopmentAccountChange: (login: string) => void;
 };
 
-function AuthCard({ authStatus, loginLoading, onLogin, onLogout }: AuthCardProps) {
+function AuthCard({
+  authStatus,
+  developmentAccounts,
+  selectedDevelopmentAccount,
+  developmentAccountLoading,
+  loginLoading,
+  onLogin,
+  onLogout,
+  onDevelopmentAccountChange,
+}: AuthCardProps) {
+  const showDevelopmentAccountPicker = developmentAccounts.length > 0 && authStatus?.source !== 'oauth';
+
   return (
     <div className={`auth-card ${authStatus?.authenticated ? 'ok' : 'warning'}`}>
       <div className="auth-summary">
@@ -18,6 +33,23 @@ function AuthCard({ authStatus, loginLoading, onLogin, onLogout }: AuthCardProps
         )}
         <strong>{authStatus?.login ?? authStatus?.source ?? 'GitHub'}</strong>
       </div>
+      {showDevelopmentAccountPicker && (
+        <label className="dev-account-picker">
+          <span>Dev account</span>
+          <select
+            value={selectedDevelopmentAccount}
+            disabled={developmentAccountLoading}
+            onChange={(event) => onDevelopmentAccountChange(event.target.value)}
+          >
+            <option value="">Default token source</option>
+            {developmentAccounts.map((account) => (
+              <option key={account.login} value={account.login}>
+                {account.active ? `${account.login} (active)` : account.login}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="auth-actions">
         {!authStatus?.authenticated && (
           <button
