@@ -31,6 +31,7 @@ public sealed class DashboardConfigRoutesTests
             BotAuthors = [" dependabot ", "DEPENDABOT"],
             NonBlockingCheckFailureRules =
             [
+                null!,
                 new DashboardCheckFailureRuleOptions
                 {
                     Repository = " example/repo ",

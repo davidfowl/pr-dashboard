@@ -85,7 +85,9 @@ public static class DashboardConfigRoutes
         AddInvalidRepositoryValues(
             invalid,
             "Dashboard:NonBlockingCheckFailureRules:Repository",
-            options.NonBlockingCheckFailureRules.Select(rule => rule.Repository));
+            options.NonBlockingCheckFailureRules
+                .Where(rule => rule is not null)
+                .Select(rule => rule.Repository));
         return invalid;
     }
 
