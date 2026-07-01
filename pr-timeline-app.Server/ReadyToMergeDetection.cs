@@ -215,7 +215,7 @@ static class ReadyToMergeDetection
     {
         foreach (var rule in nonBlockingCheckFailureRules)
         {
-            if (string.IsNullOrWhiteSpace(rule.Repository) ||
+            if (string.IsNullOrWhiteSpace(rule?.Repository) ||
                 !string.Equals(rule.Repository.Trim(), repository, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
@@ -233,8 +233,10 @@ static class ReadyToMergeDetection
     private static bool MatchesNonBlockingCheckFailureName(DashboardCheckFailureRuleOptions rule, string checkName)
     {
         var normalized = checkName.Trim();
-        return rule.CheckNames.Any(name => normalized.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase))
-            || rule.CheckNameContains.Any(fragment =>
+        return (rule.CheckNames ?? []).Any(name =>
+                !string.IsNullOrWhiteSpace(name) &&
+                normalized.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase))
+            || (rule.CheckNameContains ?? []).Any(fragment =>
                 !string.IsNullOrWhiteSpace(fragment) &&
                 normalized.Contains(fragment.Trim(), StringComparison.OrdinalIgnoreCase));
     }

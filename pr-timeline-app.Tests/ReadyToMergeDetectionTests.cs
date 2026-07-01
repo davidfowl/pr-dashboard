@@ -111,11 +111,18 @@ public sealed class ReadyToMergeDetectionTests
     {
         var nonBlockingRules = new[]
         {
+            null!,
+            new DashboardCheckFailureRuleOptions
+            {
+                Repository = "o/r",
+                CheckNames = [null!, " "],
+                CheckNameContains = null!
+            },
             new DashboardCheckFailureRuleOptions
             {
                 Repository = "O/R",
-                CheckNames = ["GitOps/GitHubPop"],
-                CheckNameContains = ["proof of presence"]
+                CheckNames = [null!, "GitOps/GitHubPop"],
+                CheckNameContains = [null!, " ", "proof of presence"]
             }
         };
 
