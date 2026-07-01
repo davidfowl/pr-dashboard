@@ -40,8 +40,7 @@ sealed class GitHubTokenProvider
     {
         selectedDevelopmentGitHubUser = null;
         suppressFallback = true;
-        ResetFallbackCache();
-        var generation = Interlocked.Increment(ref fallbackGeneration);
+        var generation = ResetFallbackCache(incrementFallbackGeneration: true);
         logger.LogInformation(
             "GitHub auth logout reset fallback token state. FallbackGeneration={FallbackGeneration}.",
             generation);
@@ -55,7 +54,7 @@ sealed class GitHubTokenProvider
         // the discriminator on the ticket so cache rotation is per browser session, not global.
         properties.Items[OAuthTicketCacheDiscriminatorKey] = Guid.NewGuid().ToString("N");
         suppressFallback = false;
-        ResetFallbackCache();
+        ResetFallbackCache(incrementFallbackGeneration: false);
         logger.LogInformation("GitHub OAuth login ticket recorded and token fallback cache reset.");
     }
 
@@ -72,8 +71,7 @@ sealed class GitHubTokenProvider
 
         selectedDevelopmentGitHubUser = string.IsNullOrWhiteSpace(user) ? null : user.Trim();
         suppressFallback = false;
-        ResetFallbackCache();
-        var generation = Interlocked.Increment(ref fallbackGeneration);
+        var generation = ResetFallbackCache(incrementFallbackGeneration: true);
         logger.LogInformation(
             "Development GitHub account selection changed. Selected={DevelopmentGitHubAccountSelected}, FallbackGeneration={FallbackGeneration}.",
             selectedDevelopmentGitHubUser is not null,
@@ -186,12 +184,23 @@ sealed class GitHubTokenProvider
         }
     }
 
-    private void ResetFallbackCache()
+    private long ResetFallbackCache(bool incrementFallbackGeneration)
     {
-        cachedGitHubCliToken = null;
-        cachedGitHubCliUser = null;
-        attemptedGitHubCliUser = null;
-        attemptedGitHubCli = false;
+        semaphore.Wait();
+        try
+        {
+            cachedGitHubCliToken = null;
+            cachedGitHubCliUser = null;
+            attemptedGitHubCliUser = null;
+            attemptedGitHubCli = false;
+            return incrementFallbackGeneration
+                ? Interlocked.Increment(ref fallbackGeneration)
+                : Volatile.Read(ref fallbackGeneration);
+        }
+        finally
+        {
+            semaphore.Release();
+        }
     }
 
     private string GetFallbackGeneration() =>

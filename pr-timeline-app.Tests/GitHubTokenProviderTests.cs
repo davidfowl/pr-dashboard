@@ -46,6 +46,53 @@ public sealed class GitHubTokenProviderTests
     }
 
     [Fact]
+    public async Task RecordLoginWaitsForInFlightGitHubCliTokenLookupBeforeResettingFallbackCache()
+    {
+        var lookupStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseLookup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tokenRequests = 0;
+        var provider = CreateProvider(
+            developmentGitHubCliAuth: new TestDevelopmentGitHubCliAuth(async (_, cancellationToken) =>
+            {
+                if (Interlocked.Increment(ref tokenRequests) == 1)
+                {
+                    lookupStarted.SetResult();
+                    await releaseLookup.Task.WaitAsync(cancellationToken);
+                    return "first-token";
+                }
+
+                return "second-token";
+            }),
+            configuration: CreateConfiguration());
+
+        var firstTokenTask = provider.GetTokenAsync(TestContext.Current.CancellationToken);
+        await lookupStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        var resetStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var resetTask = Task.Run(() =>
+        {
+            resetStarted.SetResult();
+            provider.RecordLogin(new AuthenticationProperties());
+        }, TestContext.Current.CancellationToken);
+
+        await resetStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var resetCompletedBeforeLookup = await Task.WhenAny(
+            resetTask,
+            Task.Delay(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken)) == resetTask;
+
+        Assert.False(resetCompletedBeforeLookup);
+
+        releaseLookup.SetResult();
+        var first = await firstTokenTask;
+        await resetTask.WaitAsync(TestContext.Current.CancellationToken);
+        var second = await provider.GetTokenAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("first-token", first?.Value);
+        Assert.Equal("second-token", second?.Value);
+        Assert.Equal(2, tokenRequests);
+    }
+
+    [Fact]
     public async Task DevelopmentGitHubCliTokenIsTrimmedBeforeCaching()
     {
         var calls = 0;
