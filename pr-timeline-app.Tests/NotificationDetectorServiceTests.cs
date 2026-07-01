@@ -203,8 +203,8 @@ public sealed class NotificationDetectorServiceTests
             new TestTimeProvider(),
             new DashboardOptions
             {
-                Repositories = ["o/r", "duplicate/repo", "bad repo"],
-                ShipWeekRepositories = ["duplicate/repo", "ship/repo"]
+                Repositories = [" o/r ", "duplicate/repo", "bad repo"],
+                ShipWeekRepositories = [" duplicate/repo ", "ship/repo", "O/R"]
             });
 
         var repositories = service.ResolveRepositories().Select(repository => repository.ToString()).ToArray();

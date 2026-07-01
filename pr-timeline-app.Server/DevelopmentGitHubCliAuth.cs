@@ -50,36 +50,48 @@ sealed class DevelopmentGitHubCliAuth : IDevelopmentGitHubCliAuth
             return [];
         }
 
-        using var document = JsonDocument.Parse(output);
-        if (!document.RootElement.TryGetProperty("hosts", out var hosts) ||
-            !hosts.TryGetProperty("github.com", out var githubAccounts) ||
-            githubAccounts.ValueKind != JsonValueKind.Array)
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(output);
+        }
+        catch (JsonException)
         {
             return [];
         }
 
-        var accounts = new Dictionary<string, DevelopmentGitHubAccount>(StringComparer.OrdinalIgnoreCase);
-        foreach (var account in githubAccounts.EnumerateArray())
+        using (document)
         {
-            var login = GetJsonString(account, "login");
-            var state = GetJsonString(account, "state");
-            var tokenSource = GetJsonString(account, "tokenSource");
-            if (string.IsNullOrWhiteSpace(login) ||
-                !string.Equals(state, "success", StringComparison.OrdinalIgnoreCase) ||
-                !string.Equals(tokenSource, "keyring", StringComparison.OrdinalIgnoreCase))
+            if (!document.RootElement.TryGetProperty("hosts", out var hosts) ||
+                !hosts.TryGetProperty("github.com", out var githubAccounts) ||
+                githubAccounts.ValueKind != JsonValueKind.Array)
             {
-                continue;
+                return [];
             }
 
-            var active = account.TryGetProperty("active", out var activeElement) &&
-                activeElement.ValueKind is JsonValueKind.True;
-            accounts.TryAdd(login, new DevelopmentGitHubAccount(login, active));
-        }
+            var accounts = new Dictionary<string, DevelopmentGitHubAccount>(StringComparer.OrdinalIgnoreCase);
+            foreach (var account in githubAccounts.EnumerateArray())
+            {
+                var login = GetJsonString(account, "login");
+                var state = GetJsonString(account, "state");
+                var tokenSource = GetJsonString(account, "tokenSource");
+                if (string.IsNullOrWhiteSpace(login) ||
+                    !string.Equals(state, "success", StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(tokenSource, "keyring", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
 
-        return accounts.Values
-            .OrderByDescending(account => account.Active)
-            .ThenBy(account => account.Login, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+                var active = account.TryGetProperty("active", out var activeElement) &&
+                    activeElement.ValueKind is JsonValueKind.True;
+                accounts.TryAdd(login, new DevelopmentGitHubAccount(login, active));
+            }
+
+            return accounts.Values
+                .OrderByDescending(account => account.Active)
+                .ThenBy(account => account.Login, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
     }
 
     private static string? GetJsonString(JsonElement element, string propertyName) =>

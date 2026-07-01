@@ -167,7 +167,7 @@ sealed class GitHubTokenProvider
             var ghToken = await developmentGitHubCliAuth.GetTokenAsync(normalizedUser, cancellationToken);
             if (!string.IsNullOrWhiteSpace(ghToken))
             {
-                cachedGitHubCliToken = new TokenResult(ghToken, "gh", GetFallbackGeneration());
+                cachedGitHubCliToken = new TokenResult(ghToken.Trim(), "gh", GetFallbackGeneration());
                 cachedGitHubCliUser = normalizedUser;
                 logger.LogDebug(
                     "Development gh token resolved. SelectedDevelopmentAccount={DevelopmentGitHubAccountSelected}.",

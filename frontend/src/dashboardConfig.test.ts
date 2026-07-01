@@ -54,24 +54,24 @@ describe('dashboard config store', () => {
       ],
     });
 
-    expect(config.repositories).toEqual(['example/repo', 'EXAMPLE/repo', 'example/other']);
-    expect(config.repositoryInput).toBe('example/repo, EXAMPLE/repo, example/other');
+    expect(config.repositories).toEqual(['example/repo', 'example/other']);
+    expect(config.repositoryInput).toBe('example/repo, example/other');
     expect(config.shipWeekRepositories).toEqual(['example/repo']);
     expect(config.shipWeekRepositoryInput).toBe('example/repo');
-    expect(config.coreTeamMembers).toEqual(['octocat', 'OCTOCAT', 'hubot']);
+    expect(config.coreTeamMembers).toEqual(['octocat', 'hubot']);
     expect(config.coreTeamMemberAliasSuffixes).toEqual(['_corp']);
-    expect(config.communityRepositories).toEqual(['community/repo', 'COMMUNITY/repo']);
+    expect(config.communityRepositories).toEqual(['community/repo']);
     expect(config.currentRelease).toBe('13.4');
     expect(config.shipWeekReleaseBranch).toBe('release/13.4');
     expect(config.docsFromCodeRepository).toBe('docs/repo');
     expect(config.docsFromCodeLabel).toBe('docs-from-code');
-    expect(config.doNotMergeLabels).toEqual(['no-merge', 'NO-MERGE', 'needs-author-action']);
-    expect(config.botAuthors).toEqual(['dependabot', 'DEPENDABOT']);
+    expect(config.doNotMergeLabels).toEqual(['no-merge', 'needs-author-action']);
+    expect(config.botAuthors).toEqual(['dependabot']);
     expect(config.nonBlockingCheckFailureRules).toEqual([
       {
         repository: 'example/repo',
         label: 'flaky check',
-        checkNames: ['Build', 'BUILD'],
+        checkNames: ['Build'],
         checkNameContains: ['proof'],
       },
     ]);

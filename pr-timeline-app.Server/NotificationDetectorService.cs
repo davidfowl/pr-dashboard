@@ -352,7 +352,9 @@ sealed class NotificationDetectorService(
         var result = new List<RepositoryName>();
         var repositories = dashboardOptions.Value.Repositories
             .Concat(dashboardOptions.Value.ShipWeekRepositories)
+            .Select(repository => repository?.Trim())
             .Where(repository => !string.IsNullOrWhiteSpace(repository))
+            .Select(repository => repository!)
             .Distinct(StringComparer.OrdinalIgnoreCase);
 
         foreach (var repository in repositories)

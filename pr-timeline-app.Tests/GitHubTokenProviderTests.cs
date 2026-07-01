@@ -46,6 +46,26 @@ public sealed class GitHubTokenProviderTests
     }
 
     [Fact]
+    public async Task DevelopmentGitHubCliTokenIsTrimmedBeforeCaching()
+    {
+        var calls = 0;
+        var provider = CreateProvider(
+            developmentGitHubCliAuth: new TestDevelopmentGitHubCliAuth((_, _) =>
+            {
+                calls++;
+                return Task.FromResult<string?>(" gh-token \n");
+            }),
+            configuration: CreateConfiguration());
+
+        var first = await provider.GetTokenAsync(TestContext.Current.CancellationToken);
+        var cached = await provider.GetTokenAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("gh-token", first?.Value);
+        Assert.Equal("gh-token", cached?.Value);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
     public async Task OAuthCacheKeyUsesTicketDiscriminator()
     {
         var firstProvider = CreateProvider(
@@ -325,6 +345,14 @@ public sealed class GitHubTokenProviderTests
 
         Assert.Equal(["davidfowl", "davifowl_microsoft"], accounts.Select(account => account.Login));
         Assert.False(accounts[0].Active);
+    }
+
+    [Fact]
+    public void ParseDevelopmentGitHubAccountsIgnoresMalformedOutput()
+    {
+        var accounts = DevelopmentGitHubCliAuth.ParseAccounts("not-json");
+
+        Assert.Empty(accounts);
     }
 
     private static GitHubTokenProvider CreateProvider(

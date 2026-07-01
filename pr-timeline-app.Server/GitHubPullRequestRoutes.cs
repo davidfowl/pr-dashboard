@@ -393,7 +393,7 @@ public static class GitHubPullRequestRoutes
         repositoryName = default;
         var repositoryInputProvided = !string.IsNullOrWhiteSpace(repo);
         var repositoryInput = string.IsNullOrWhiteSpace(repo)
-            ? configuredRepositories.FirstOrDefault()
+            ? configuredRepositories.FirstOrDefault(repository => !string.IsNullOrWhiteSpace(repository))
             : repo;
 
         if (!string.IsNullOrWhiteSpace(repositoryInput)

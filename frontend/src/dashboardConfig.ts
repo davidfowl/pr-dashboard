@@ -57,7 +57,22 @@ function normalizeDashboardConfig(config: DashboardConfig): DashboardConfig {
 }
 
 function normalizeList(values: string[] | undefined) {
-  return [...new Set((values ?? []).map((value) => value.trim()).filter(Boolean))];
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values ?? []) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    const key = trimmed.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      normalized.push(trimmed);
+    }
+  }
+
+  return normalized;
 }
 
 function normalizeCheckFailureRules(rules: DashboardConfig['nonBlockingCheckFailureRules'] | undefined) {
