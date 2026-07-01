@@ -16,12 +16,13 @@ public static class GitHubExceptionHandlingExtensions
                 if (exception is GitHubApiException gitHubException)
                 {
                     var repository = context.Request.Query["repo"].ToString();
+                    var normalizedRepository = NormalizeQueryValueForLog(repository);
                     logger.LogWarning(
                         gitHubException,
                         "GitHub API request failed. Method={RequestMethod}, Path={RequestPath}, Repository={Repository}, State={GitHubState}, MilestoneProvided={GitHubMilestoneProvided}, Refresh={GitHubRefreshRequested}, StatusCode={GitHubStatusCode}, ExceptionType={ExceptionType}.",
                         context.Request.Method,
                         context.Request.Path.Value,
-                        string.IsNullOrWhiteSpace(repository) ? null : repository,
+                        normalizedRepository,
                         EmptyToNull(context.Request.Query["state"].ToString()),
                         !string.IsNullOrWhiteSpace(context.Request.Query["milestone"].ToString()),
                         string.Equals(context.Request.Query["refresh"].ToString(), "true", StringComparison.OrdinalIgnoreCase),
@@ -55,4 +56,15 @@ public static class GitHubExceptionHandlingExtensions
 
     private static string? EmptyToNull(string value) =>
         string.IsNullOrWhiteSpace(value) ? null : value;
+
+    internal static string? NormalizeQueryValueForLog(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var normalized = value.ReplaceLineEndings(" ").Trim();
+        return normalized.Length <= 160 ? normalized : normalized[..160];
+    }
 }
