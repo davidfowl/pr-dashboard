@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -12,6 +13,7 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
@@ -268,6 +270,39 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task GraphQlPullListIgnoresReviewNodesWithoutSubmittedAt()
+    {
+        var client = CreateClientCapturingRequests((request, path, cancellationToken) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                GraphQlPullRequestNode(
+                    42,
+                    title: "Review without timestamp",
+                    reviewState: "APPROVED",
+                    reviewSubmittedAt: null,
+                    lastCommitAt: "2026-01-03T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: [false]))));
+        });
+
+        var pullRequest = Assert.Single(await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("waiting", pullRequest.Review.State);
+        Assert.Null(pullRequest.Review.LatestState);
+        Assert.Equal(0, pullRequest.Review.ReviewerCount);
+        Assert.Null(pullRequest.Review.LastReviewedAt);
+        Assert.Equal(0, pullRequest.Review.UnresolvedThreadCount);
+    }
+
+    [Fact]
     public async Task GraphQlSnapshotKeepsPartialDataWhenAFieldErrorAccompaniesIt()
     {
         // GitHub returns a partial `data` payload alongside field-level `errors` when a single PR's
@@ -441,6 +476,47 @@ public sealed class GitHubClientTests
         Assert.Contains(graphQlBodies, body => GetGraphQlVariable(body, "after") == "THREAD_PAGE_1");
     }
 
+    [Fact]
+    public async Task GraphQlPullListIncludesDraftPullRequests()
+    {
+        var client = CreateClientCapturingRequests((_, path, _) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                GraphQlPullRequestNode(
+                    1,
+                    title: "Work in progress",
+                    reviewState: "COMMENTED",
+                    reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                    lastCommitAt: "2026-01-03T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: [],
+                    isDraft: true),
+                GraphQlPullRequestNode(
+                    2,
+                    title: "Ready for review",
+                    reviewState: "APPROVED",
+                    reviewSubmittedAt: "2026-01-04T00:00:00Z",
+                    lastCommitAt: "2026-01-05T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: []))));
+        });
+
+        var pullRequests = await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal([1, 2], pullRequests.Select(pullRequest => pullRequest.Number));
+        Assert.True(pullRequests[0].Draft);
+        Assert.False(pullRequests[1].Draft);
+    }
+
     [Theory]
     [InlineData("APPROVED", "approved", false)]
     [InlineData("COMMENTED", "reviewed", true)]
@@ -478,6 +554,37 @@ public sealed class GitHubClientTests
         Assert.Equal(expectedState, pullRequest.Review.State);
         Assert.Equal(2, pullRequest.Review.UnresolvedThreadCount);
         Assert.Equal(requireConversationResolution, pullRequest.Review.RequiresConversationResolution);
+    }
+
+    [Fact]
+    public async Task GraphQlPullListCapturesApprovedReviewerIdsFromReviewAuthor()
+    {
+        var client = CreateClientCapturingRequests((_, path, _) =>
+        {
+            Assert.Equal("graphql", path);
+            return Task.FromResult(Json(GraphQlPullRequestsResponse(
+                hasNextPage: false,
+                endCursor: null,
+                GraphQlPullRequestNode(
+                    42,
+                    title: "Approved work",
+                    reviewState: "APPROVED",
+                    reviewSubmittedAt: "2026-01-02T00:00:00Z",
+                    lastCommitAt: "2026-01-03T00:00:00Z",
+                    reviewThreadsHasNextPage: false,
+                    reviewThreadsEndCursor: null,
+                    reviewThreadsResolved: [],
+                    reviewerDatabaseId: 555))));
+        });
+
+        var pullRequest = Assert.Single(await client.GetPullRequestsGraphQlAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            forceRefresh: true,
+            TestContext.Current.CancellationToken));
+
+        Assert.Equal("approved", pullRequest.Review.State);
+        Assert.Equal([555L], pullRequest.Review.ApprovedReviewerIds);
     }
 
     [Fact]
@@ -888,7 +995,7 @@ public sealed class GitHubClientTests
             repositoryName,
             "open",
             TestContext.Current.CancellationToken);
-        var expectedFetchedAt = graphQlState.ListFetchedAt[graphQlCacheKey];
+        Assert.True(graphQlState.TryGetListFetchedAt(graphQlCacheKey, out var expectedFetchedAt));
         cache.Remove(graphQlCacheKey);
         cache.Remove($"last-good:{graphQlCacheKey}");
         var anonymousClient = CreateAnonymousClientFromRequests(route, cache, graphQlState: graphQlState);
@@ -904,6 +1011,59 @@ public sealed class GitHubClientTests
         Assert.Equal(expectedFetchedAt, fallback.Snapshot?.FetchedAt);
         Assert.Equal(1, listRequests);
         Assert.Equal(1, graphQlRequests);
+    }
+
+    [Fact]
+    public async Task GraphQlStateRemovesTokenScopedEntriesWhenLastGoodSnapshotExpires()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var graphQlState = new GitHubPullRequestGraphQlState(cache);
+        var repositoryName = new RepositoryName("example", "repo");
+        var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(
+            CreateTokenScopeForTestToken("token-a"),
+            repositoryName,
+            "pulls-graphql",
+            "open");
+
+        graphQlState.SetListFetchedAt(cacheKey, DateTimeOffset.UtcNow, TimeSpan.FromHours(1));
+        graphQlState.SetRefreshError(cacheKey, "GitHub unavailable", TimeSpan.FromHours(1));
+        graphQlState.SetRefreshCooldownUntil(cacheKey, DateTimeOffset.UtcNow.AddHours(1));
+        await new GitHubResponseCache(cache, new GitHubPublicCacheStore(cache))
+            .SetAsync(
+                $"last-good:{cacheKey}",
+                Array.Empty<PullRequestSummary>(),
+                TimeSpan.FromMilliseconds(250),
+                TestContext.Current.CancellationToken,
+                () => graphQlState.Remove(cacheKey));
+        Assert.True(HasGraphQlState(graphQlState, cacheKey));
+
+        await WaitForGraphQlStateRemovalAsync(
+            graphQlState,
+            cacheKey,
+            () =>
+            {
+                cache.TryGetValue($"last-good:{cacheKey}", out _);
+            });
+    }
+
+    [Fact]
+    public async Task GraphQlStateExpiresUnusedTokenScopedEntries()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var graphQlState = new GitHubPullRequestGraphQlState(cache);
+        var repositoryName = new RepositoryName("example", "repo");
+        var cacheKey = GitHubCachePolicy.CreateRepositoryCacheKey(
+            CreateTokenScopeForTestToken("token-a"),
+            repositoryName,
+            "pulls-graphql",
+            "open");
+
+        graphQlState.SetListFetchedAt(cacheKey, DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(250));
+        graphQlState.SetRefreshError(cacheKey, "GitHub unavailable", TimeSpan.FromMilliseconds(250));
+        graphQlState.SetRefreshCooldownUntil(cacheKey, DateTimeOffset.UtcNow.AddMilliseconds(250));
+        Assert.True(HasGraphQlState(graphQlState, cacheKey));
+
+        await WaitForGraphQlStateRemovalAsync(graphQlState, cacheKey);
     }
 
     [Fact]
@@ -2204,6 +2364,17 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListAttributesCopilotSweAgentLoginToHumanAssignee()
+    {
+        var client = CreateCopilotAttributionClient(
+            "copilot-swe-agent",
+            "JamesNK",
+            "copilot-swe-agent");
+
+        Assert.Equal("JamesNK/copilot", await ResolveSingleAuthorAsync(client));
+    }
+
+    [Fact]
     public async Task PullListExcludesCopilotAssigneeCaseInsensitively()
     {
         var client = CreateCopilotAttributionClient("Copilot", "octocat", "copilot");
@@ -2328,6 +2499,7 @@ public sealed class GitHubClientTests
             requestedPaths.Add(path);
             return path switch
             {
+                "user" => Json("""{ "login": "octocat" }"""),
                 "repos/example/repo/labels?per_page=100" => Json(
                     """
                     [
@@ -2380,6 +2552,8 @@ public sealed class GitHubClientTests
                       }
                     ]
                     """),
+                _ when path == CreatedIssuesPath("open", "afscrome") => Json("[]"),
+                _ when path == AssignedIssuesPath("open", "octocat") => Json("[]"),
                 "graphql" => Json(EmptyLinkedFocusGraphQlResponse()),
                 _ when path == CtiTeamIssueSearchPath("open") => Json("""{ "total_count": 0, "incomplete_results": false, "items": [] }"""),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
@@ -2414,7 +2588,10 @@ public sealed class GitHubClientTests
             requestedPaths.Add(path);
             return path switch
             {
+                "user" => Json("""{ "login": "octocat" }"""),
                 "repos/example/repo/labels?per_page=100" => Json("[]"),
+                _ when path == CreatedIssuesPath("open", "afscrome") => Json("[]"),
+                _ when path == AssignedIssuesPath("open", "octocat") => Json("[]"),
                 "graphql" => Json(EmptyLinkedFocusGraphQlResponse()),
                 _ when path == CtiTeamIssueSearchPath("open") => Json(
                     """
@@ -2484,10 +2661,136 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task FocusIssuesIncludeIssuesAssignedToCurrentUser()
+    {
+        var requestedPaths = new List<string>();
+        var client = CreateClient(path =>
+        {
+            requestedPaths.Add(path);
+            return path switch
+            {
+                "user" => Json("""{ "login": "octocat" }"""),
+                "repos/example/repo/labels?per_page=100" => Json("[]"),
+                _ when path == CreatedIssuesPath("open", "afscrome") => Json("[]"),
+                _ when path == AssignedIssuesPath("open", "octocat") => Json(
+                    """
+                    [
+                      {
+                        "number": 30,
+                        "node_id": "I_focus_30",
+                        "title": "Assigned follow-up",
+                        "state": "open",
+                        "user": { "login": "reporter" },
+                        "html_url": "https://github.com/example/repo/issues/30",
+                        "repository_url": "https://api.github.com/repos/example/repo",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-11T00:00:00Z",
+                        "labels": [{ "name": "area-cli" }],
+                        "assignees": [{ "login": "octocat" }]
+                      },
+                      {
+                        "number": 31,
+                        "node_id": "PR_focus_31",
+                        "title": "Assigned PR mirror",
+                        "state": "open",
+                        "user": { "login": "contributor" },
+                        "html_url": "https://github.com/example/repo/pull/31",
+                        "repository_url": "https://api.github.com/repos/example/repo",
+                        "created_at": "2026-01-02T00:00:00Z",
+                        "updated_at": "2026-01-12T00:00:00Z",
+                        "labels": [],
+                        "assignees": [{ "login": "octocat" }],
+                        "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/31" }
+                      }
+                    ]
+                    """),
+                "graphql" => Json(EmptyLinkedFocusGraphQlResponse()),
+                _ when path == CtiTeamIssueSearchPath("open") => Json("""{ "total_count": 0, "incomplete_results": false, "items": [] }"""),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var issues = await client.GetFocusIssuesAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var issue = Assert.Single(issues);
+        Assert.Equal(30, issue.Number);
+        Assert.Equal("Assigned follow-up", issue.Title);
+        Assert.Equal(["octocat"], issue.Assignees);
+        Assert.Contains(AssignedIssuesPath("open", "octocat"), requestedPaths);
+    }
+
+    [Fact]
+    public async Task FocusIssuesIncludeIssuesCreatedByAfscrome()
+    {
+        var requestedPaths = new List<string>();
+        var client = CreateClient(path =>
+        {
+            requestedPaths.Add(path);
+            return path switch
+            {
+                "user" => Json("""{ "login": "octocat" }"""),
+                "repos/example/repo/labels?per_page=100" => Json("[]"),
+                _ when path == CreatedIssuesPath("open", "afscrome") => Json(
+                    """
+                    [
+                      {
+                        "number": 40,
+                        "node_id": "I_focus_40",
+                        "title": "High-signal report",
+                        "state": "open",
+                        "user": { "login": "afscrome" },
+                        "html_url": "https://github.com/example/repo/issues/40",
+                        "repository_url": "https://api.github.com/repos/example/repo",
+                        "created_at": "2026-01-01T00:00:00Z",
+                        "updated_at": "2026-01-13T00:00:00Z",
+                        "labels": [{ "name": "area-cli" }],
+                        "assignees": []
+                      },
+                      {
+                        "number": 41,
+                        "node_id": "PR_focus_41",
+                        "title": "Afscrome PR mirror",
+                        "state": "open",
+                        "user": { "login": "afscrome" },
+                        "html_url": "https://github.com/example/repo/pull/41",
+                        "repository_url": "https://api.github.com/repos/example/repo",
+                        "created_at": "2026-01-02T00:00:00Z",
+                        "updated_at": "2026-01-14T00:00:00Z",
+                        "labels": [],
+                        "assignees": [],
+                        "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/41" }
+                      }
+                    ]
+                    """),
+                _ when path == AssignedIssuesPath("open", "octocat") => Json("[]"),
+                "graphql" => Json(EmptyLinkedFocusGraphQlResponse()),
+                _ when path == CtiTeamIssueSearchPath("open") => Json("""{ "total_count": 0, "incomplete_results": false, "items": [] }"""),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            };
+        });
+
+        var issues = await client.GetFocusIssuesAsync(
+            new RepositoryName("example", "repo"),
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        var issue = Assert.Single(issues);
+        Assert.Equal(40, issue.Number);
+        Assert.Equal("afscrome", issue.Author);
+        Assert.Contains(CreatedIssuesPath("open", "afscrome"), requestedPaths);
+    }
+
+    [Fact]
     public async Task FocusIssuesUseLinkedOpenPullRequestActivityForUpdatedAt()
     {
         var client = CreateClient(path => path switch
         {
+            "user" => Json("""{ "login": "octocat" }"""),
             "repos/example/repo/labels?per_page=100" => Json(
                 """
                 [
@@ -2569,6 +2872,8 @@ public sealed class GitHubClientTests
                   }
                 }
                 """),
+            _ when path == CreatedIssuesPath("open", "afscrome") => Json("[]"),
+            _ when path == AssignedIssuesPath("open", "octocat") => Json("[]"),
             _ when path == CtiTeamIssueSearchPath("open") => Json("""{ "total_count": 0, "incomplete_results": false, "items": [] }"""),
             _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
         });
@@ -3155,6 +3460,103 @@ public sealed class GitHubClientTests
             && !item.IsComplete);
         Assert.Equal(405, GetFirstLinkedIssueNumber(completedLiveItem));
         Assert.True(items[^1].IsComplete);
+    }
+
+    [Fact]
+    public async Task PullListEndpointUsesConfiguredDefaultRepositoryWhenRepoIsOmitted()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var gitHub = new FakeGitHubApi()
+            .Respond("repos/example/repo", "public-cache-token", _ => Json("""{ "visibility": "public" }"""))
+            .Respond(
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100",
+                "token-a",
+                _ => Json(PullRequestsJson([PullRequestJson(1, title: "Configured default")])))
+            .Respond("repos/example/repo/pulls/1/reviews?per_page=100", "token-a", _ => Json("[]"))
+            .Respond("repos/example/repo/pulls/1", "token-a", _ => Json(PullRequestDetailsJson(1)));
+        await using var app = await CreatePullRequestTestAppAsync(gitHub, cache, "token-a");
+        using var httpClient = CreateHttpClient(app);
+
+        using var response = await httpClient.GetAsync(
+            "/api/github/pulls?state=open",
+            TestContext.Current.CancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<PullRequestListResponse>(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(body);
+        Assert.Equal("example/repo", body.Repository);
+        Assert.Equal("Configured default", Assert.Single(body.PullRequests).Title);
+    }
+
+    [Fact]
+    public async Task PullListEndpointSkipsBlankConfiguredRepositoriesWhenRepoIsOmitted()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var gitHub = new FakeGitHubApi()
+            .Respond("repos/example/repo", "public-cache-token", _ => Json("""{ "visibility": "public" }"""))
+            .Respond(
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100",
+                "token-a",
+                _ => Json(PullRequestsJson([PullRequestJson(1, title: "Configured default")])))
+            .Respond("repos/example/repo/pulls/1/reviews?per_page=100", "token-a", _ => Json("[]"))
+            .Respond("repos/example/repo/pulls/1", "token-a", _ => Json(PullRequestDetailsJson(1)));
+        await using var app = await CreatePullRequestTestAppAsync(
+            gitHub,
+            cache,
+            "token-a",
+            new DashboardOptions
+            {
+                Repositories = [" ", "example/repo"],
+                ShipWeekRepositories = []
+            });
+        using var httpClient = CreateHttpClient(app);
+
+        using var response = await httpClient.GetAsync(
+            "/api/github/pulls?state=open",
+            TestContext.Current.CancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<PullRequestListResponse>(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(body);
+        Assert.Equal("example/repo", body.Repository);
+        Assert.Equal("Configured default", Assert.Single(body.PullRequests).Title);
+    }
+
+    [Fact]
+    public async Task PullListEndpointUsesFirstValidConfiguredRepositoryWhenRepoIsOmitted()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var gitHub = new FakeGitHubApi()
+            .Respond("repos/example/repo", "public-cache-token", _ => Json("""{ "visibility": "public" }"""))
+            .Respond(
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100",
+                "token-a",
+                _ => Json(PullRequestsJson([PullRequestJson(1, title: "Configured default")])))
+            .Respond("repos/example/repo/pulls/1/reviews?per_page=100", "token-a", _ => Json("[]"))
+            .Respond("repos/example/repo/pulls/1", "token-a", _ => Json(PullRequestDetailsJson(1)));
+        await using var app = await CreatePullRequestTestAppAsync(
+            gitHub,
+            cache,
+            "token-a",
+            new DashboardOptions
+            {
+                Repositories = ["bad repo", "example/repo"],
+                ShipWeekRepositories = []
+            });
+        using var httpClient = CreateHttpClient(app);
+
+        using var response = await httpClient.GetAsync(
+            "/api/github/pulls?state=open",
+            TestContext.Current.CancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<PullRequestListResponse>(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(body);
+        Assert.Equal("example/repo", body.Repository);
+        Assert.Equal("Configured default", Assert.Single(body.PullRequests).Title);
     }
 
     [Fact]
@@ -4967,6 +5369,20 @@ public sealed class GitHubClientTests
                     "assignees": [],
                     "milestone": { "number": 7, "title": "13.4" },
                     "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/1" }
+                  },
+                  {
+                    "number": 4,
+                    "title": "Draft release branch PR",
+                    "state": "open",
+                    "user": { "login": "octocat" },
+                    "html_url": "https://github.com/example/repo/pull/4",
+                    "repository_url": "https://api.github.com/repos/example/repo",
+                    "created_at": "2026-01-04T00:00:00Z",
+                    "updated_at": "2026-01-08T00:00:00Z",
+                    "labels": [],
+                    "assignees": [],
+                    "milestone": { "number": 7, "title": "13.4" },
+                    "pull_request": { "url": "https://api.github.com/repos/example/repo/pulls/4" }
                   }
                 ]
                 """),
@@ -4974,7 +5390,8 @@ public sealed class GitHubClientTests
                 $$"""
                 [
                   {{PullRequestJson(2, title: "Fix linked issue", body: "Fixes #10", headSha: "sha2", baseRef: "release/13.4", updatedAt: "2026-01-07T00:00:00Z")}},
-                  {{PullRequestJson(3, title: "Hotfix outside milestone", headSha: "sha3", baseRef: "release/13.4")}}
+                  {{PullRequestJson(3, title: "Hotfix outside milestone", headSha: "sha3", baseRef: "release/13.4")}},
+                  {{PullRequestJson(4, title: "Draft release-branch PR", draft: true, headSha: "sha4", baseRef: "release/13.4")}}
                 ]
                 """),
             "repos/example/repo/pulls/1" => Json(PullRequestJson(
@@ -4996,7 +5413,6 @@ public sealed class GitHubClientTests
                 title: "Hotfix outside milestone",
                 headSha: "sha3",
                 baseRef: "release/13.4")),
-            "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
             "repos/example/repo/pulls/2/reviews?per_page=100" => Json("[]"),
             "repos/example/repo/pulls/3/reviews?per_page=100" => Json("[]"),
             "repos/example/repo/issues/10" => Json(
@@ -5028,13 +5444,9 @@ public sealed class GitHubClientTests
         Assert.Equal("example/repo", response.Repository);
         Assert.Equal("13.4", response.Milestone);
         Assert.Equal("release/13.4", response.ReleaseBranch);
-        Assert.Equal(3, response.PullRequests.Count);
-
-        var draftMilestonePullRequest = response.PullRequests.Single(item => item.PullRequest.Number == 1);
-        Assert.True(draftMilestonePullRequest.PullRequest.Draft);
-        Assert.True(draftMilestonePullRequest.ReleaseScope.InMilestone);
-        Assert.False(draftMilestonePullRequest.ReleaseScope.TargetsReleaseBranch);
-        Assert.False(draftMilestonePullRequest.ReleaseScope.ReleaseBranchException);
+        Assert.Equal(2, response.PullRequests.Count);
+        Assert.DoesNotContain(response.PullRequests, item => item.PullRequest.Draft);
+        Assert.DoesNotContain(response.PullRequests, item => item.PullRequest.Number is 1 or 4);
 
         var linkedReleasePullRequest = response.PullRequests.Single(item => item.PullRequest.Number == 2);
         Assert.True(linkedReleasePullRequest.ReleaseScope.InMilestone);
@@ -5203,7 +5615,9 @@ public sealed class GitHubClientTests
         };
         var tokenProvider = new GitHubTokenProvider(
             new HttpContextAccessor { HttpContext = CreateHttpContextWithGitHubToken() },
-            new TestHostEnvironment());
+            new TestHostEnvironment(),
+            CreateConfiguration(),
+            new TestDevelopmentGitHubCliAuth());
         var cache = new MemoryCache(new MemoryCacheOptions());
         var options = CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
@@ -5231,7 +5645,9 @@ public sealed class GitHubClientTests
         };
         var tokenProvider = new GitHubTokenProvider(
             new HttpContextAccessor { HttpContext = CreateHttpContextWithGitHubToken() },
-            new TestHostEnvironment());
+            new TestHostEnvironment(),
+            CreateConfiguration(),
+            new TestDevelopmentGitHubCliAuth());
         var cache = new MemoryCache(new MemoryCacheOptions());
         var options = CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
@@ -5245,7 +5661,8 @@ public sealed class GitHubClientTests
     private static async Task<WebApplication> CreatePullRequestTestAppAsync(
         FakeGitHubApi gitHub,
         IMemoryCache cache,
-        string token)
+        string token,
+        DashboardOptions? dashboardOptions = null)
     {
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
@@ -5260,11 +5677,17 @@ public sealed class GitHubClientTests
 
         var options = CreateWarmupOptions();
         builder.Services.AddSingleton(options);
+        builder.Services.AddSingleton(Options.Create(dashboardOptions ?? new DashboardOptions
+        {
+            Repositories = ["example/repo"],
+            ShipWeekRepositories = ["example/repo"]
+        }));
         builder.Services.AddSingleton(cache);
         builder.Services.AddSingleton(_ => new HttpClient(new RequestStubGitHubHandler(gitHub.SendAsync))
         {
             BaseAddress = new Uri("https://api.github.com/")
         });
+        builder.Services.AddSingleton<IDevelopmentGitHubCliAuth, TestDevelopmentGitHubCliAuth>();
         builder.Services.AddSingleton<GitHubTokenProvider>();
         builder.Services.AddSingleton<GitHubPublicCacheIdentity>();
         builder.Services.AddSingleton<GitHubPublicCacheStore>();
@@ -5351,7 +5774,9 @@ public sealed class GitHubClientTests
         };
         var tokenProvider = new GitHubTokenProvider(
             new HttpContextAccessor { HttpContext = CreateHttpContextWithGitHubToken(token) },
-            new TestHostEnvironment());
+            new TestHostEnvironment(),
+            CreateConfiguration(),
+            new TestDevelopmentGitHubCliAuth());
         options ??= CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
         publicCacheStore ??= new GitHubPublicCacheStore(cache);
@@ -5374,7 +5799,9 @@ public sealed class GitHubClientTests
         };
         var tokenProvider = new GitHubTokenProvider(
             new HttpContextAccessor { HttpContext = CreateAnonymousHttpContext() },
-            new TestHostEnvironment());
+            new TestHostEnvironment(),
+            CreateConfiguration(),
+            new TestDevelopmentGitHubCliAuth());
         options ??= CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
         publicCacheStore ??= new GitHubPublicCacheStore(cache);
@@ -5395,10 +5822,16 @@ public sealed class GitHubClientTests
                 : repositories
         });
 
+    private static IConfiguration CreateConfiguration(
+        IEnumerable<KeyValuePair<string, string?>>? values = null) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
+            .Build();
+
     private static GitHubCacheScope CreateTokenScopeForTestToken(string token)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(token));
-        return GitHubCachePolicy.CreateTokenScope($"oauth:{Convert.ToHexString(hash)[..16]}:0");
+        return GitHubCachePolicy.CreateTokenScope($"oauth:{Convert.ToHexString(hash)[..16]}:none");
     }
 
     private static bool TryGetChecksHeadSha(string path, out string headSha)
@@ -5482,6 +5915,32 @@ public sealed class GitHubClientTests
 
         return latest ?? throw new InvalidOperationException("No snapshot was loaded.");
     }
+
+    private static async Task WaitForGraphQlStateRemovalAsync(
+        GitHubPullRequestGraphQlState graphQlState,
+        string cacheKey,
+        Action? triggerExpirationScan = null)
+    {
+        for (var attempt = 0; attempt < 100; attempt++)
+        {
+            triggerExpirationScan?.Invoke();
+            if (!HasGraphQlState(graphQlState, cacheKey))
+            {
+                return;
+            }
+
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+
+        Assert.False(graphQlState.TryGetListFetchedAt(cacheKey, out _));
+        Assert.False(graphQlState.TryGetRefreshError(cacheKey, out _));
+        Assert.False(graphQlState.TryGetRefreshCooldownUntil(cacheKey, out _));
+    }
+
+    private static bool HasGraphQlState(GitHubPullRequestGraphQlState graphQlState, string cacheKey) =>
+        graphQlState.TryGetListFetchedAt(cacheKey, out _)
+        || graphQlState.TryGetRefreshError(cacheKey, out _)
+        || graphQlState.TryGetRefreshCooldownUntil(cacheKey, out _);
 
     private static DefaultHttpContext CreateHttpContextWithGitHubToken(string token = "unit-test-token")
     {
@@ -5583,13 +6042,15 @@ public sealed class GitHubClientTests
         int number,
         string title,
         string reviewState,
-        string reviewSubmittedAt,
+        string? reviewSubmittedAt,
         string lastCommitAt,
         bool reviewThreadsHasNextPage,
         string? reviewThreadsEndCursor,
         bool[] reviewThreadsResolved,
         string? statusCheckRollupJson = null,
-        long? authorDatabaseId = null)
+        long? authorDatabaseId = null,
+        bool isDraft = false,
+        long? reviewerDatabaseId = null)
     {
         var reviewThreadNodes = string.Join(
             ",\n",
@@ -5597,6 +6058,7 @@ public sealed class GitHubClientTests
                 $$"""{ "isResolved": {{isResolved.ToString().ToLowerInvariant()}} }"""));
 
         var authorDatabaseIdJson = authorDatabaseId is { } id ? $", \"databaseId\": {id}" : "";
+        var reviewerDatabaseIdJson = reviewerDatabaseId is { } reviewerId ? $", \"databaseId\": {reviewerId}" : "";
 
         return
             $$"""
@@ -5604,7 +6066,7 @@ public sealed class GitHubClientTests
               "number": {{number}},
               "title": {{JsonSerializer.Serialize(title)}},
               "state": "OPEN",
-              "isDraft": false,
+              "isDraft": {{isDraft.ToString().ToLowerInvariant()}},
               "author": { "login": "octocat"{{authorDatabaseIdJson}} },
               "url": "https://github.com/example/repo/pull/{{number}}",
               "createdAt": "2026-01-01T00:00:00Z",
@@ -5648,7 +6110,7 @@ public sealed class GitHubClientTests
                 },
                 "nodes": [
                   {
-                    "author": { "login": "reviewer" },
+                    "author": { "login": "reviewer"{{reviewerDatabaseIdJson}} },
                     "state": {{JsonSerializer.Serialize(reviewState)}},
                     "submittedAt": {{JsonSerializer.Serialize(reviewSubmittedAt)}}
                   }
@@ -5748,6 +6210,12 @@ public sealed class GitHubClientTests
 
     private static string CtiTeamIssueSearchPath(string state) =>
         $"search/issues?q=repo%3Aexample%2Frepo%20is%3Aissue%20state%3A{state}%20in%3Atitle%20AspireE2E&sort=updated&order=desc&per_page=100";
+
+    private static string AssignedIssuesPath(string state, string assignee) =>
+        $"repos/example/repo/issues?state={state}&assignee={Uri.EscapeDataString(assignee)}&sort=updated&direction=desc&per_page=100";
+
+    private static string CreatedIssuesPath(string state, string creator) =>
+        $"repos/example/repo/issues?state={state}&creator={Uri.EscapeDataString(creator)}&sort=updated&direction=desc&per_page=100";
 
     private static string EmptyLinkedFocusGraphQlResponse() =>
         """{ "data": { "nodes": [] } }""";
@@ -5938,6 +6406,15 @@ public sealed class GitHubClientTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             route(request, cancellationToken);
+    }
+
+    private sealed class TestDevelopmentGitHubCliAuth : IDevelopmentGitHubCliAuth
+    {
+        public Task<GitHubCliTokenResult> GetTokenAsync(string? user, CancellationToken cancellationToken) =>
+            Task.FromResult(GitHubCliTokenResult.NotFound("gh"));
+
+        public Task<IReadOnlyList<DevelopmentGitHubAccount>> GetAccountsAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<DevelopmentGitHubAccount>>([]);
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

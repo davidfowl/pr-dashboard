@@ -34,15 +34,34 @@ public sealed class NotificationModelTests
     }
 
     [Fact]
-    public void DefaultPreferencesEnableReviewRequested()
+    public void DefaultPreferencesEnableReviewRequestedAndReadyToMerge()
     {
-        Assert.True(NotificationPreferences.CreateDefault().ReviewRequested);
+        var defaults = NotificationPreferences.CreateDefault();
+        Assert.True(defaults.ReviewRequested);
+        Assert.True(defaults.ReadyToMerge);
+    }
+
+    [Fact]
+    public void PreferencesDtoDefaultsReadyToMergeWhenAbsentFromJson()
+    {
+        // Older PWA clients PUT only { reviewRequested }; ReadyToMerge must stay default-on.
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var dto = JsonSerializer.Deserialize<NotificationPreferencesDto>("{\"reviewRequested\":true}", options);
+
+        Assert.NotNull(dto);
+        Assert.True(dto!.ReviewRequested);
+        Assert.True(dto.ReadyToMerge);
     }
 
     [Fact]
     public void PayloadsUseServiceWorkerContractFields()
     {
-        foreach (var json in new[] { NotificationPayloads.Test(), NotificationPayloads.ReviewRequested("microsoft/aspire", 42, "Fix bug", "/#pr/microsoft%2Faspire/42") })
+        foreach (var json in new[]
+        {
+            NotificationPayloads.Test(),
+            NotificationPayloads.ReviewRequested("microsoft/aspire", 42, "Fix bug", "/#pr/microsoft%2Faspire/42"),
+            NotificationPayloads.ReadyToMerge(ReadyToMergeRole.Author, "microsoft/aspire", 42, "Fix bug", "/#pr/microsoft%2Faspire/42"),
+        })
         {
             using var document = JsonDocument.Parse(json);
             var root = document.RootElement;
@@ -52,6 +71,20 @@ public sealed class NotificationModelTests
                 Assert.False(string.IsNullOrWhiteSpace(value.GetString()));
             }
         }
+    }
+
+    [Fact]
+    public void ReadyToMergePayloadVariesBodyByRoleAndDeepLinks()
+    {
+        var author = JsonDocument.Parse(
+            NotificationPayloads.ReadyToMerge(ReadyToMergeRole.Author, "microsoft/aspire", 42, "Fix bug", "/#pr/microsoft%2Faspire/42"));
+        var approver = JsonDocument.Parse(
+            NotificationPayloads.ReadyToMerge(ReadyToMergeRole.Approver, "microsoft/aspire", 42, "Fix bug", "/#pr/microsoft%2Faspire/42"));
+
+        Assert.Equal("/#pr/microsoft%2Faspire/42", author.RootElement.GetProperty("url").GetString());
+        Assert.Equal("ready-to-merge:microsoft/aspire#42", author.RootElement.GetProperty("tag").GetString());
+        Assert.StartsWith("Your PR is approved", author.RootElement.GetProperty("body").GetString());
+        Assert.StartsWith("A PR you approved", approver.RootElement.GetProperty("body").GetString());
     }
 
     [Fact]
@@ -67,6 +100,7 @@ public sealed class NotificationModelTests
     [InlineData("https://fcm.googleapis.com/fcm/send/token")]
     [InlineData("https://updates.push.services.mozilla.com/wpush/v2/token")]
     [InlineData("https://web.push.apple.com/v1/pushes/abc")]
+    [InlineData("https://abc.push.apple.com/v1/pushes/token")]
     [InlineData("https://wns2-by3p.notify.windows.com/w/?token=abc")]
     public void PushEndpointValidatorAllowsKnownBrowserPushServices(string endpoint)
     {
@@ -80,6 +114,8 @@ public sealed class NotificationModelTests
     [InlineData("http://fcm.googleapis.com/fcm/send/token")]
     [InlineData("https://user@fcm.googleapis.com/fcm/send/token")]
     [InlineData("https://attacker.fcm.googleapis.com/fcm/send/token")]
+    [InlineData("https://push.apple.com.evil.example/v1/pushes/token")]
+    [InlineData("https://evilpush.apple.com/v1/pushes/token")]
     [InlineData("https://notify.windows.com.evil.example/w/token")]
     [InlineData("https://evilnotify.windows.com/w/token")]
     public void PushEndpointValidatorRejectsUnsupportedOrAmbiguousOrigins(string endpoint)

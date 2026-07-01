@@ -1,12 +1,12 @@
-# Team Dashboard
+# Aspire Team App
 
-A team dashboard for the Aspire team, built with Aspire.
+Aspire Team App is a team dashboard for the Aspire team, built with Aspire.
 
 It helps the team prioritize GitHub pull request work, focus on urgent reviews, and scan PR timeline details quickly.
 
 ## Prerequisites
 
-- .NET 11 SDK
+- .NET 11 preview SDK
 - Aspire CLI from the stable channel
 - Docker or another Aspire-supported container runtime for the local Azurite storage emulator
 - Node.js `20.19+`, `22.12+`, or newer
@@ -21,15 +21,7 @@ aspire start
 
 Open the Vite frontend at <http://localhost:5173/>.
 
-By default, the dashboard watches:
-
-- `microsoft/aspire`
-- `microsoft/aspire.dev`
-- `microsoft/aspire-skills`
-- `microsoft/dcp`
-- `CommunityToolkit/Aspire`
-
-You can replace that list in the dashboard with any comma-separated `owner/repo` values.
+The dashboard repositories, ship-mode repositories, core team, and release/docs settings are configured by the server `Dashboard` config section. Configure repositories as `owner/repo` values. If a configured repository is not accessible to the current token or public cache, the client logs the per-repository failure, skips that repository's rows, and keeps loading the rest of the dashboard.
 
 ## GitHub auth
 
@@ -55,17 +47,23 @@ Logged-out users read pull request data only from the shared public cache for re
 
 ## Notifications (PWA + Web Push)
 
-The dashboard is an installable PWA that can deliver Web Push notifications when you are
-added as a requested reviewer on an open PR in a watched repository — even when the app is
-closed.
+The dashboard is an installable PWA that can deliver Web Push notifications for activity on
+open PRs in a watched repository — even when the app is closed. Two triggers are supported:
+
+- **`review_requested`** — you were added as a requested reviewer on an open PR.
+- **`ready_to_merge`** — a PR you authored or approved is approved and clean enough to merge
+  (mirrors the "Ready to merge" lane: not failing CI, no merge-blocking unresolved threads,
+  no conflicts, no `no-merge`/`needs-author-action` label, not an aging approval). Both the
+  author and each approver are nagged once when it first becomes ready, and again only if it
+  leaves and re-enters that state.
 
 - **Install**: in a desktop Chromium browser use the install icon in the address bar; on
   Android use the browser "Install app" prompt. On **iOS/Safari, Web Push only works after
   you add the app to the Home Screen** ("Share → Add to Home Screen"); the in-app panel
   detects this and shows install guidance until then.
 - **Enable**: sign in with GitHub, then use the **Notifications** panel in the footer to
-  grant permission and subscribe. Toggle the `review_requested` preference or send a test
-  push from there. v1 only fires for `review_requested`; additional triggers are planned.
+  grant permission and subscribe. Toggle the `review_requested` and `ready_to_merge`
+  preferences (both default on) or send a test push from there.
 - **Single replica**: while notifications are enabled the server runs as exactly one replica
   (`MinReplicas = MaxReplicas = 1`) so the in-process detector is a single writer for the
   per-user dedupe state. Horizontal scaling needs single-leader election (e.g. an Azure Blob

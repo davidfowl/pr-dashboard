@@ -9,6 +9,7 @@ export type PullRequestListEntry = {
   bucketLabel: string;
   signalProps?: Omit<PullRequestSignalPillsProps, 'pullRequest'>;
   linkedIssues?: LinkedIssueSummary[];
+  annotation?: string;
 };
 
 type PullRequestListProps = {
@@ -66,6 +67,7 @@ function PullRequestList({
           signalProps={rowActionSignalProps(entry)}
           linkedIssues={entry.linkedIssues}
           login={login}
+          annotation={entry.annotation}
         />
       ))}
     </div>
@@ -128,6 +130,7 @@ function bucketWaitTime(pullRequest: PullRequestSummary, bucketLabel: string) {
     case 'Community Toolkit':
     case 'Bots / automation':
     case 'Community':
+    case 'Aged out community':
     case 'Draft':
       return updatedTime(pullRequest);
     default:

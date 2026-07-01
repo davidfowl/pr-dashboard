@@ -32,12 +32,16 @@ const exclusionReasons: ExclusionReason[] = [
     detail: 'A PR with open review threads (human or Copilot) is treated as waiting on the author to resolve them and routes to the "Unresolved feedback" bucket.',
   },
   {
+    title: 'It has changes requested',
+    detail: 'A PR with requested changes is treated as waiting on the author and routes to the "Author response" bucket instead of Needs attention. Once the author pushes a response, it can re-enter as "Re-review needed."',
+  },
+  {
     title: 'It belongs to a specialized lane',
-    detail: 'Docs, Community Toolkit, bot/automation, and community PRs are routed to their own lanes rather than the main queue.',
+    detail: 'Docs, Community Toolkit, bot/automation, and aged-out community PRs are routed to their own lanes rather than the main queue. Recently active community PRs show in the Community PRs list.',
   },
   {
     title: 'It has gone quiet for 7+ days (stalled)',
-    detail: 'The standalone "Stalled" lane is kept out of this queue. A stalled PR still appears here when it also has an actionable reason in another lane — for example it needs review or re-review, an author response, or a merge.',
+    detail: 'The standalone "Stalled" lane is kept out of this queue. A stalled PR still appears here when it also has an actionable reason in another lane — for example it needs review or re-review, or is ready to merge.',
   },
 ];
 
@@ -94,7 +98,7 @@ function FocusExclusionDialog({ open, onClose }: FocusExclusionDialogProps) {
           ))}
         </ul>
         <p className="focus-info-dialog-footnote">
-          A hidden PR is never lost — it still shows in its specific bucket on the board below.
+          A hidden PR is not lost — most still show in a specific bucket below, and your own non-draft PRs can appear in the outside queue list.
         </p>
       </div>
     </dialog>

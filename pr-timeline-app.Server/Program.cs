@@ -6,6 +6,8 @@ builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
 builder.AddKeyedAzureBlobContainerClient(GitHubPublicCacheStore.ConnectionName);
 builder.AddKeyedAzureBlobContainerClient(BlobNotificationStore.ConnectionName);
+builder.Services.Configure<DashboardOptions>(
+    builder.Configuration.GetSection(DashboardOptions.SectionName));
 builder.Services.Configure<GitHubCacheWarmupOptions>(
     builder.Configuration.GetSection(GitHubCacheWarmupOptions.SectionName));
 builder.Services.Configure<WebPushOptions>(
@@ -26,6 +28,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapGitHubAuthRoutes();
+app.MapDashboardConfigRoutes();
 app.MapGitHubPullRequestRoutes();
 app.MapNotificationRoutes();
 app.MapAgentSchemaRoutes();

@@ -9,7 +9,8 @@ readonly partial record struct RepositoryName(string Owner, string Name)
     {
         repositoryName = default;
 
-        if (RepositoryRegex().Match(value.Trim()) is not { Success: true } match)
+        var normalizedValue = NormalizeRepositoryInput(value);
+        if (RepositoryRegex().Match(normalizedValue) is not { Success: true } match)
         {
             return false;
         }
@@ -20,6 +21,32 @@ readonly partial record struct RepositoryName(string Owner, string Name)
 
     public override string ToString() => $"{Owner}/{Name}";
 
+    private static string NormalizeRepositoryInput(string value)
+    {
+        var trimmedValue = value.Trim();
+        if (!Uri.TryCreate(trimmedValue, UriKind.Absolute, out var uri) ||
+            !uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) &&
+            !uri.Host.Equals("www.github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return trimmedValue;
+        }
+
+        var pathSegments = uri.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (pathSegments.Length < 2)
+        {
+            return trimmedValue;
+        }
+
+        var repository = pathSegments[1];
+        if (repository.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+        {
+            repository = repository[..^4];
+        }
+
+        return $"{pathSegments[0]}/{repository}";
+    }
+
     [GeneratedRegex("^(?<owner>[A-Za-z0-9._-]+)/(?<repo>[A-Za-z0-9._-]+)$")]
     private static partial Regex RepositoryRegex();
 }
@@ -29,9 +56,19 @@ sealed class GitHubApiException(HttpStatusCode statusCode, string message) : Exc
     public HttpStatusCode StatusCode { get; } = statusCode;
 }
 
-record TokenResult(string Value, string Source);
+record TokenResult(string Value, string Source, string? CacheDiscriminator = null);
 
 record AuthStatusResponse(bool Authenticated, bool Configured, bool CanLogin, string? Source, string? Login, string Message);
+
+record DevelopmentGitHubAccount(string Login, bool Active);
+
+record DevelopmentGitHubAccountsResponse(
+    IReadOnlyList<DevelopmentGitHubAccount> Accounts,
+    string? SelectedLogin);
+
+record DevelopmentGitHubAccountSelectionRequest(string? Login);
+
+record DevelopmentGitHubAccountSelectionResponse(string? SelectedLogin);
 
 record PullRequestListResponse(
     string Repository,
@@ -291,6 +328,7 @@ record PullRequestSummary(
 
         var normalized = login.Trim().ToLowerInvariant();
         return normalized == "copilot"
+            || normalized == "copilot-swe-agent"
             || (normalized.StartsWith("copilot") && normalized.EndsWith("[bot]"));
     }
 }
@@ -329,6 +367,11 @@ record ReviewStatus(
     int UnresolvedThreadCount = 0,
     bool RequiresConversationResolution = false)
 {
+    // Numeric GitHub ids of the reviewers whose latest review is an approval. Used by the
+    // notification detector to nag approvers when a PR is ready to merge; empty unless the
+    // review source supplied reviewer ids.
+    public IReadOnlyList<long> ApprovedReviewerIds { get; init; } = [];
+
     public static ReviewStatus Waiting { get; } = new(
         State: "waiting",
         LatestState: null,
@@ -376,19 +419,23 @@ record ChecksStatus(
 
 record FailingCheck(string Name, string? Conclusion, string? HtmlUrl);
 
-record ReviewEvent(string Actor, string State, DateTimeOffset SubmittedAt)
+record ReviewEvent(string Actor, string State, DateTimeOffset SubmittedAt, long? ActorId = null)
 {
     public static ReviewEvent FromDto(GitHubReviewDto review) =>
         new(
             Actor: review.User?.Login ?? "unknown",
             State: review.State ?? "UNKNOWN",
-            SubmittedAt: review.SubmittedAt);
+            SubmittedAt: review.SubmittedAt,
+            ActorId: review.User?.Id);
 
-    public static ReviewEvent FromGraphQl(GitHubGraphQlReviewNodeDto review) =>
-        new(
-            Actor: review.Author?.Login ?? "unknown",
-            State: review.State ?? "UNKNOWN",
-            SubmittedAt: review.SubmittedAt);
+    public static ReviewEvent? FromGraphQl(GitHubGraphQlReviewNodeDto review) =>
+        review.SubmittedAt is { } submittedAt
+            ? new(
+                Actor: review.Author?.Login ?? "unknown",
+                State: review.State ?? "UNKNOWN",
+                SubmittedAt: submittedAt,
+                ActorId: review.Author?.DatabaseId)
+            : null;
 }
 
 record PullRequestDetails(
@@ -548,6 +595,7 @@ record TimelineStats(
     private static readonly HashSet<string> s_knownBotActors = new(StringComparer.OrdinalIgnoreCase)
     {
         "Copilot",
+        "copilot-swe-agent",
         "dependabot",
         "dependabot-preview",
         "github-actions",
@@ -1129,7 +1177,7 @@ sealed class GitHubGraphQlReviewNodeDto
     public string? State { get; init; }
 
     [JsonPropertyName("submittedAt")]
-    public DateTimeOffset SubmittedAt { get; init; }
+    public DateTimeOffset? SubmittedAt { get; init; }
 }
 
 sealed class GitHubGraphQlLinkedIssueConnectionDto

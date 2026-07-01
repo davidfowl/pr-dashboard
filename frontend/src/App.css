@@ -104,9 +104,12 @@ select:focus-visible {
 }
 
 .app-shell {
+  --app-shell-padding: 1.25rem;
+  --tooltip-viewport-padding: calc(var(--app-shell-padding) * 1.5);
+
   width: 100%;
   min-height: 100vh;
-  padding: 1.25rem;
+  padding: var(--app-shell-padding);
 }
 
 .hero {
@@ -309,6 +312,23 @@ select:focus-visible {
   display: flex;
   flex-wrap: nowrap;
   gap: 0.4rem;
+}
+
+.dev-account-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.dev-account-picker select {
+  min-width: 10rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.32rem 1.8rem 0.32rem 0.55rem;
+  color: var(--text);
+  background: var(--surface-sunken);
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 .auth-actions button {
@@ -834,8 +854,12 @@ select:focus-visible {
   display: flex;
   align-items: center;
   gap: 0.65rem;
-  height: 52px;
-  padding: 0 0.85rem;
+  /* Extend the bar up into the iOS status-bar area so the blurred background
+     fills behind the clock/battery, while the top padding keeps the logo and
+     menu button below the safe area. */
+  height: calc(52px + env(safe-area-inset-top, 0px));
+  padding: env(safe-area-inset-top, 0px) calc(0.85rem + env(safe-area-inset-right, 0px)) 0
+    calc(0.85rem + env(safe-area-inset-left, 0px));
   border-bottom: 1px solid var(--border-strong);
   background: var(--panel-strong);
   box-shadow: var(--shadow);
@@ -914,7 +938,8 @@ select:focus-visible {
   gap: 1rem;
   width: min(86vw, 22rem);
   height: 100%;
-  padding: 1rem 1rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  padding: calc(1rem + env(safe-area-inset-top, 0px)) calc(1rem + env(safe-area-inset-right, 0px))
+    calc(1rem + env(safe-area-inset-bottom, 0px)) 1rem;
   border-left: 1px solid var(--border-strong);
   background: var(--panel-strong);
   box-shadow: var(--shadow-strong);
@@ -1756,6 +1781,16 @@ select:focus-visible {
   margin-top: 0.35rem;
 }
 
+.outside-focus-list {
+  margin-top: 0.9rem;
+  border-top: 1px solid var(--hairline);
+  padding-top: 0.85rem;
+}
+
+.outside-focus-list .attention-list {
+  margin-top: 0.55rem;
+}
+
 .focus-info-trigger {
   appearance: none;
   -webkit-appearance: none;
@@ -2236,34 +2271,47 @@ select:focus-visible {
   outline: none;
 }
 
-.logic-help::after {
+.logic-help-tooltip {
   position: absolute;
   z-index: 20;
-  top: calc(100% + 0.55rem);
   left: 50%;
   width: max-content;
-  max-width: min(24rem, calc(100vw - 2rem));
-  transform: translateX(-50%) translateY(-0.2rem);
+  max-width: min(
+    24rem,
+    calc(100vw - var(--tooltip-viewport-padding, 1.875rem) - var(--tooltip-viewport-padding, 1.875rem))
+  );
   border: 1px solid var(--border);
   border-radius: 0.7rem;
   padding: 0.55rem 0.65rem;
   color: var(--text);
   background: var(--panel-strong);
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
-  content: attr(data-tooltip);
   font-size: 0.72rem;
   font-weight: 700;
   line-height: 1.45;
   opacity: 0;
   pointer-events: none;
+  overflow-wrap: break-word;
   text-align: left;
+  transform: translateX(calc(-50% + var(--tooltip-offset-x, 0px))) translateY(var(--tooltip-enter-y));
+  visibility: hidden;
   white-space: normal;
 }
 
-.logic-help:hover::after,
-.logic-help:focus-visible::after {
+.logic-help-tooltip.visible {
   opacity: 1;
-  transform: translateX(-50%) translateY(0);
+  transform: translateX(calc(-50% + var(--tooltip-offset-x, 0px))) translateY(0);
+  visibility: visible;
+}
+
+.logic-help-tooltip.placement-bottom {
+  top: calc(100% + 0.55rem);
+  --tooltip-enter-y: -0.2rem;
+}
+
+.logic-help-tooltip.placement-top {
+  bottom: calc(100% + 0.55rem);
+  --tooltip-enter-y: 0.2rem;
 }
 
 .bucket-card-actions {
@@ -2606,7 +2654,17 @@ select:focus-visible {
   gap: 0.3rem;
 }
 
-.attention-pr-linked-issues {
+.attention-pr-note {
+  grid-column: 3 / 5;
+  grid-row: 3;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.attention-pr-linked-issues,
+.attention-issue-linked-pulls {
   grid-column: 3 / 5;
   grid-row: 3;
   display: flex;
@@ -2618,12 +2676,8 @@ select:focus-visible {
   grid-column: 3 / 5;
 }
 
-.attention-issue-linked-pulls {
-  grid-column: 3 / 5;
-  grid-row: 3;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
+.attention-pr-note + .attention-pr-linked-issues {
+  grid-row: 4;
 }
 
 .attention-pr-linked-issues a,
@@ -3880,7 +3934,7 @@ img.avatar-dot {
 
 @media (max-width: 720px) {
   .app-shell {
-    padding-top: calc(52px + 1.1rem);
+    padding-top: calc(52px + 1.1rem + env(safe-area-inset-top, 0px));
   }
 
   .hero-mode-row {
@@ -4070,6 +4124,7 @@ img.avatar-dot {
   .attention-pr-signals,
   .attention-pr-row.compact-pr-action-marker-layout .attention-pr-signals,
   .attention-issue-signals,
+  .attention-pr-note,
   .attention-pr-linked-issues,
   .attention-pr-row.compact-pr-action-marker-layout .attention-pr-linked-issues,
   .attention-issue-linked-pulls {

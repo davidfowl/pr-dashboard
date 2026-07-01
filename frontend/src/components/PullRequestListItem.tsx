@@ -7,7 +7,7 @@ import type {
   VisiblePullRequestHandler,
 } from '../types';
 import { formatRelative } from '../utils/format';
-import { sameLogin } from '../utils/models';
+import { needsVisibleCheckDetails, sameLogin, visibleCheckState } from '../utils/models';
 import PullRequestSignalPills from './PullRequestSignalPills';
 import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
 
@@ -19,6 +19,7 @@ type PullRequestListItemProps = {
   signalProps?: Omit<PullRequestSignalPillsProps, 'pullRequest'>;
   linkedIssues?: LinkedIssueSummary[];
   login?: string;
+  annotation?: string;
 };
 
 const checkBadgeGlyphs: Record<Exclude<CheckState, 'none'>, { glyph: string; label: string }> = {
@@ -36,9 +37,10 @@ function PullRequestListItem({
   signalProps,
   linkedIssues = [],
   login,
+  annotation,
 }: PullRequestListItemProps) {
   const itemRef = useRef<HTMLElement | null>(null);
-  const checksState = pullRequest.checks?.state;
+  const checksState = visibleCheckState(pullRequest);
   const badge = checksState && checksState !== 'none' ? checkBadgeGlyphs[checksState] : null;
   const isSignedInAuthor = login ? sameLogin(pullRequest.author, login) : false;
   const isReadyToMerge = bucketLabel === 'Ready to merge';
@@ -48,9 +50,10 @@ function PullRequestListItem({
     ...(isSignedInAuthor ? [{ label: 'Yours', tone: 'accent' as const }] : []),
     ...(signalProps?.leadingSignals ?? []),
   ];
+  const blockingFailingChecks = checksState === 'failure' ? pullRequest.checks?.failingChecks : [];
   const badgeTitle = badge
-    ? `${badge.label}${pullRequest.checks?.failingChecks?.length
-      ? ` · ${pullRequest.checks.failingChecks.map((failing) => failing.name).join(', ')}`
+    ? `${badge.label}${blockingFailingChecks?.length
+      ? ` · ${blockingFailingChecks.map((failing) => failing.name).join(', ')}`
       : ''}`
     : undefined;
 
@@ -59,7 +62,7 @@ function PullRequestListItem({
       !onVisiblePullRequest
       || pullRequest.state !== 'open'
       || !pullRequest.headSha
-      || checksState !== 'unknown'
+      || !needsVisibleCheckDetails(pullRequest)
     ) {
       return;
     }
@@ -168,6 +171,9 @@ function PullRequestListItem({
         {...signalProps}
         leadingSignals={leadingSignals}
       />
+      {annotation && (
+        <span className="attention-pr-note">{annotation}</span>
+      )}
       {linkedIssues.length > 0 && (
         <span className="attention-pr-linked-issues" aria-label="Linked issues">
           {linkedIssues.slice(0, 3).map((issue) => (

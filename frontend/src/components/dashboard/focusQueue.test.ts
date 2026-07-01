@@ -1,6 +1,35 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { emptyDashboardConfig, setActiveDashboardConfig } from '../../dashboardConfig';
 import type { AttentionBucket, CheckState, PullRequestSummary } from '../../types';
-import { computeFocusItems } from './focusQueue';
+import { computeCommunityItems, computeFocusExclusionItems, computeFocusItems } from './focusQueue';
+
+beforeEach(() => {
+  setActiveDashboardConfig({
+    ...emptyDashboardConfig,
+    repositories: ['example/repo'],
+    repositoryInput: 'example/repo',
+    shipWeekRepositories: ['example/repo'],
+    shipWeekRepositoryInput: 'example/repo',
+    coreTeamMembers: ['davidfowl'],
+    coreTeamMemberAliasSuffixes: ['_corp'],
+    communityRepositories: ['CommunityToolkit/Aspire'],
+    currentRelease: '13.4',
+    doNotMergeLabels: ['needs-author-action', 'no-merge'],
+    botAuthors: ['dotnet-maestro', 'copilot-swe-agent'],
+    nonBlockingCheckFailureRules: [
+      {
+        repository: 'private-org/service',
+        label: 'presence policy',
+        checkNames: ['Policy/Presence'],
+        checkNameContains: ['presence policy'],
+      },
+    ],
+  });
+});
+
+afterEach(() => {
+  setActiveDashboardConfig(emptyDashboardConfig);
+});
 
 function checks(state: CheckState): PullRequestSummary['checks'] {
   return {
@@ -28,7 +57,7 @@ function pr(
     title: `PR ${number}`,
     state: 'open',
     draft: false,
-    author: 'octocat',
+    author: 'davidfowl',
     htmlUrl: `https://github.com/example/repo/pull/${number}`,
     createdAt: now,
     updatedAt: now,
@@ -66,6 +95,10 @@ function bucket(label: string, prs: PullRequestSummary[]): AttentionBucket {
 }
 
 describe('computeFocusItems', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('excludes PRs with failing checks from the Needs attention focus queue', () => {
     const failing = pr(1, 'failure');
     const pending = pr(2, 'pending');
@@ -128,5 +161,206 @@ describe('computeFocusItems', () => {
     const buckets: AttentionBucket[] = [bucket('Unresolved feedback', [blocked])];
 
     expect(computeFocusItems(buckets)).toHaveLength(0);
+  });
+
+  it('does not surface PRs solely from the Author response lane', () => {
+    const blocked = pr(42, 'success', { state: 'changes_requested', changesRequestedCount: 1 });
+    const buckets: AttentionBucket[] = [bucket('Author response', [blocked])];
+
+    expect(computeFocusItems(buckets)).toHaveLength(0);
+  });
+
+  it('excludes author-response PRs even when they also qualify for high-priority signal lanes', () => {
+    const blocked = pr(43, 'success', { state: 'changes_requested', changesRequestedCount: 1 });
+    const buckets: AttentionBucket[] = [
+      bucket('Regression', [blocked]),
+      bucket('Author response', [blocked]),
+    ];
+
+    expect(computeFocusItems(buckets)).toHaveLength(0);
+  });
+
+  it('keeps changes-requested PRs in Needs attention after the author pushes a response', () => {
+    const responded = {
+      ...pr(44, 'success', {
+        state: 'changes_requested',
+        changesRequestedCount: 1,
+        lastReviewedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      }),
+      lastCommitAt: new Date().toISOString(),
+    };
+    const buckets: AttentionBucket[] = [
+      bucket('Author response', [responded]),
+      bucket('Re-review needed', [responded]),
+    ];
+
+    expect(computeFocusItems(buckets).map((item) => item.bucketLabel)).toEqual(['Re-review needed']);
+  });
+
+  it('excludes recent community PRs even when they qualify for an actionable lane', () => {
+    const community = { ...pr(41, 'success'), author: 'external-contributor' };
+    const buckets: AttentionBucket[] = [
+      bucket('Ready to merge', [community]),
+    ];
+
+    expect(computeFocusItems(buckets)).toHaveLength(0);
+  });
+
+  it('keeps configured non-blocking check failures in Needs attention', () => {
+    const proofPresence = {
+      ...pr(45, 'failure'),
+      repository: 'private-org/service',
+      checks: {
+        ...checks('failure'),
+        totalCount: 2,
+        successCount: 1,
+        failureCount: 1,
+        failingChecks: [
+          {
+            name: 'Policy/Presence',
+            conclusion: 'failure',
+            htmlUrl: 'https://github.com/private-org/service/runs/1',
+          },
+        ],
+      },
+    };
+    const blockingFailure = {
+      ...pr(46, 'failure'),
+      repository: 'private-org/service',
+      checks: {
+        ...checks('failure'),
+        totalCount: 2,
+        successCount: 1,
+        failureCount: 1,
+        failingChecks: [
+          {
+            name: 'Build',
+            conclusion: 'failure',
+            htmlUrl: 'https://github.com/private-org/service/runs/2',
+          },
+        ],
+      },
+    };
+
+    const focusNumbers = computeFocusItems([bucket('Needs review', [proofPresence, blockingFailure])])
+      .map((item) => item.pullRequest.number);
+
+    expect(focusNumbers).toContain(45);
+    expect(focusNumbers).not.toContain(46);
+  });
+});
+
+describe('computeCommunityItems', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows recent community PRs outside the review buckets', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const recent = {
+      ...pr(70, 'success'),
+      author: 'external-contributor',
+      updatedAt: '2026-06-22T23:06:18Z',
+    };
+    const newer = {
+      ...pr(71, 'success'),
+      author: 'another-contributor',
+      updatedAt: '2026-06-23T20:06:18Z',
+    };
+
+    expect(computeCommunityItems([recent, newer]).map((item) => item.pullRequest.number)).toEqual([71, 70]);
+  });
+
+  it('excludes aged-out community PRs from the recent community list', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const agedOut = {
+      ...pr(72, 'success'),
+      author: 'external-contributor',
+      updatedAt: '2026-06-08T23:06:18Z',
+    };
+
+    expect(computeCommunityItems([agedOut])).toHaveLength(0);
+  });
+
+  it('excludes core-team, draft, and held PRs from the recent community list', () => {
+    const coreTeam = pr(73, 'success');
+    const draft = { ...pr(74, 'success'), author: 'external-contributor', draft: true };
+    const held = { ...pr(75, 'success'), author: 'external-contributor', labels: ['needs-author-action'] };
+
+    expect(computeCommunityItems([coreTeam, draft, held])).toHaveLength(0);
+  });
+
+  it('excludes configured team aliases from the recent community list', () => {
+    const teamAlias = { ...pr(76, 'success'), author: 'teammate_corp' };
+
+    expect(computeCommunityItems([teamAlias])).toHaveLength(0);
+  });
+});
+
+describe('computeFocusExclusionItems', () => {
+  it('shows only the signed-in user open non-draft PRs that are outside Needs attention', () => {
+    const failing = pr(1, 'failure');
+    const inFocus = pr(2, 'success');
+    const otherAuthor = { ...pr(3, 'failure'), author: 'monalisa' };
+    const draft = { ...pr(4, 'failure'), draft: true };
+
+    const buckets: AttentionBucket[] = [
+      bucket('Needs review', [failing, inFocus, otherAuthor, draft]),
+      bucket('CI failing', [failing, otherAuthor, draft]),
+    ];
+
+    const exclusions = computeFocusExclusionItems(
+      [failing, inFocus, otherAuthor, draft],
+      buckets,
+      computeFocusItems(buckets),
+      'davidfowl',
+    );
+
+    expect(exclusions.map((item) => item.pullRequest.number)).toEqual([1]);
+    expect(exclusions[0]?.reason.label).toBe('CI failing');
+  });
+
+  it('explains held PRs that are hidden from attention buckets', () => {
+    const held = { ...pr(50, 'success'), labels: ['needs-author-action'] };
+
+    const exclusions = computeFocusExclusionItems([held], [], [], 'davidfowl');
+
+    expect(exclusions).toHaveLength(1);
+    expect(exclusions[0]?.reason.label).toBe('Held by label');
+  });
+
+  it('explains changes-requested PRs as author response work', () => {
+    const blocked = pr(51, 'success', { state: 'changes_requested', changesRequestedCount: 1 });
+    const buckets = [bucket('Author response', [blocked])];
+
+    const exclusions = computeFocusExclusionItems(
+      [blocked],
+      buckets,
+      computeFocusItems(buckets),
+      'davidfowl',
+    );
+
+    expect(exclusions).toHaveLength(1);
+    expect(exclusions[0]?.reason.label).toBe('Author response');
+  });
+
+  it('explains PRs whose actionable lane has aged out', () => {
+    const oldDate = new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString();
+    const stale = { ...pr(60, 'success'), updatedAt: oldDate };
+    const buckets = [bucket('Needs review', [stale])];
+
+    const exclusions = computeFocusExclusionItems(
+      [stale],
+      buckets,
+      computeFocusItems(buckets),
+      'davidfowl',
+    );
+
+    expect(exclusions).toHaveLength(1);
+    expect(exclusions[0]?.reason.label).toBe('Stale activity');
   });
 });

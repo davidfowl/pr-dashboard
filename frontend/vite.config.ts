@@ -22,8 +22,8 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
       manifest: {
-        name: 'Aspire PR Focus',
-        short_name: 'PR Focus',
+        name: 'Aspire Team App',
+        short_name: 'Aspire Team App',
         description: 'Prioritize GitHub pull request reviews for the Aspire team.',
         theme_color: '#512BD4',
         background_color: '#0f0d1d',

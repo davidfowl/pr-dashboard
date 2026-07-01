@@ -8,8 +8,8 @@ import type {
   VisiblePullRequestHandler,
 } from '../../types';
 import { colorForText, formatCount, formatRelative } from '../../utils/format';
-import { computeFocusItems } from './focusQueue';
-import type { FocusItem } from './focusQueue';
+import { computeCommunityItems, computeFocusExclusionItems, computeFocusItems } from './focusQueue';
+import type { CommunityQueueItem, FocusExclusionItem, FocusItem } from './focusQueue';
 import GitHubAvatar from '../GitHubAvatar';
 import HelpTooltip from '../HelpTooltip';
 import LoadingBadge from '../LoadingBadge';
@@ -21,6 +21,7 @@ import FocusExclusionDialog from './FocusExclusionDialog';
 
 type QueueOverviewProps = {
   counts: DeveloperPullRequestCount[];
+  pullRequests: PullRequestSummary[];
   attentionBuckets: AttentionBucket[];
   forMeItems: PickItem[];
   loading: boolean;
@@ -33,11 +34,13 @@ type QueueOverviewProps = {
 };
 
 const pullRequestListLimit = 10;
-const queueOverviewHelp = 'Needs attention is the focused action queue: each PR appears once under its highest-priority actionable lane when that lane has fresh activity. Activity is lane-specific, such as the latest approval/review for merge lanes, the newest commit for re-review, or the PR update time for review-needed work. PRs with failing CI are excluded until their checks are green again.';
-const needsAttentionHelp = 'Being in Needs attention means the PR has an actionable reason for someone to review, respond, or merge, and that reason was refreshed in the last 14 days. PRs with failing CI are excluded until their checks pass, and standalone signal lanes like stalled, docs, automation, community, drafts, merge conflicts, and unresolved feedback stay out of this top queue.';
+const queueOverviewHelp = 'Needs attention is the focused core-team action queue: each PR appears once under its highest-priority actionable review or merge lane when that lane has fresh activity. Activity is lane-specific, such as the latest approval/review for merge lanes, the newest commit for re-review, or the PR update time for review-needed work. Recent community PRs have their own queue below, and PRs with failing CI are excluded until their checks are green again.';
+const needsAttentionHelp = 'Being in Needs attention means the PR has an actionable reason for someone to review or merge, and that reason was refreshed in the last 14 days. PRs with failing CI are excluded until their checks pass, and standalone signal lanes like stalled, docs, automation, aged-out community, drafts, merge conflicts, unresolved feedback, and author response stay out of this top queue.';
+const communityQueueHelp = 'Community PRs show recently active external-contributor PRs separately from the core-team Needs attention queue. Community PRs with no activity in the last 14 days move to the Aged out community bucket on the signal board.';
 
 function QueueOverview({
   counts,
+  pullRequests,
   attentionBuckets,
   forMeItems,
   loading,
@@ -55,11 +58,21 @@ function QueueOverview({
     () => computeFocusItems(attentionBuckets),
     [attentionBuckets],
   );
+  const focusExclusionItems = useMemo<FocusExclusionItem[]>(
+    () => computeFocusExclusionItems(pullRequests, attentionBuckets, focusItems, login),
+    [attentionBuckets, focusItems, login, pullRequests],
+  );
+  const communityItems = useMemo<CommunityQueueItem[]>(
+    () => computeCommunityItems(pullRequests),
+    [pullRequests],
+  );
 
   const coreOpenCount = counts.reduce((total, count) => total + count.openPullRequestCount, 0);
   const activeCoreCounts = counts.filter((count) => count.openPullRequestCount > 0);
   const visibleCoreCounts = showAllCoreMembers ? counts : activeCoreCounts;
   const focusShownCount = Math.min(focusItems.length, pullRequestListLimit);
+  const communityShownCount = Math.min(communityItems.length, pullRequestListLimit);
+  const focusExclusionShownCount = Math.min(focusExclusionItems.length, pullRequestListLimit);
   const loadingLabel = hasLoaded ? 'Refreshing' : 'Loading';
   const reviewBuckets = useMemo<AttentionBucket[]>(
     () => forMeItems.length === 0
@@ -157,7 +170,7 @@ function QueueOverview({
             />
           </div>
         </div>
-        <p>PRs with recent action-relevant activity that need someone to review, respond, or merge.</p>
+        <p>PRs with recent action-relevant activity that need someone to review or merge.</p>
         <p className="focus-info-note">
           Not finding the PR you were looking for?{' '}
           <button
@@ -187,6 +200,95 @@ function QueueOverview({
             onSelectPullRequest={onSelectPullRequest}
             onVisiblePullRequest={onVisiblePullRequest}
             login={login}
+          />
+        )}
+
+        {login && (
+          <section className="outside-focus-list" aria-label="Your pull requests outside Needs attention">
+            <div className="attention-card-header">
+              <span>Your PRs outside Needs attention</span>
+              <div className="section-loading-meta">
+                {loading && <LoadingBadge label={loadingLabel} />}
+                <LoadingMetric
+                  value={focusExclusionShownCount}
+                  loading={loading}
+                  hasLoaded={hasLoaded}
+                  formatValue={(count) => formatCount(count, 'shown')}
+                  pendingLabel="Outside queue count is loading"
+                />
+              </div>
+            </div>
+            <p>
+              Open non-draft PRs authored by {login} that do not currently qualify for the focused queue.
+            </p>
+            {loading && !hasLoaded && focusExclusionItems.length === 0 ? (
+              <LoadingCardPlaceholders count={2} label="Loading out-of-queue pull request cards" />
+            ) : (
+              <>
+                <PullRequestList
+                  entries={focusExclusionItems.map((item) => ({
+                    pullRequest: item.pullRequest,
+                    bucketLabel: item.reason.label,
+                    annotation: item.reason.detail,
+                    signalProps: {
+                      leadingSignals: [{ label: item.reason.label, tone: item.reason.tone }],
+                      computedSignalLimit: 4,
+                      showActionSignal: false,
+                    },
+                  }))}
+                  limit={pullRequestListLimit}
+                  preserveOrder
+                  emptyState={loading ? 'Loading your out-of-queue PRs...' : 'No open non-draft PRs authored by you are outside Needs attention.'}
+                  onSelectPullRequest={onSelectPullRequest}
+                  onVisiblePullRequest={onVisiblePullRequest}
+                />
+                {focusExclusionItems.length > pullRequestListLimit && (
+                  <p className="focus-info-note">
+                    Showing the first {pullRequestListLimit} by exclusion priority and latest update.
+                  </p>
+                )}
+              </>
+            )}
+          </section>
+        )}
+      </section>
+
+      <section className="focus-panel" aria-label="Community pull request queue">
+        <div className="attention-card-header">
+          <div className="attention-card-title">
+            <span>Community PRs</span>
+            <HelpTooltip label={communityQueueHelp} />
+          </div>
+          <div className="section-loading-meta">
+            {loading && <LoadingBadge label={loadingLabel} />}
+            <LoadingMetric
+              value={communityShownCount}
+              loading={loading}
+              hasLoaded={hasLoaded}
+              formatValue={(count) => formatCount(count, 'shown')}
+              pendingLabel="Community PR count is loading"
+            />
+          </div>
+        </div>
+        <p>Recently active external-contributor PRs, tracked separately from the core-team action queue.</p>
+
+        {loading && !hasLoaded && communityItems.length === 0 ? (
+          <LoadingCardPlaceholders label="Loading community pull request cards" />
+        ) : (
+          <PullRequestList
+            entries={communityItems.map((item) => ({
+              pullRequest: item.pullRequest,
+              bucketLabel: item.bucketLabel,
+              signalProps: {
+                leadingSignals: [{ label: item.reason, tone: item.bucketTone }],
+                computedSignalLimit: 4,
+              },
+            }))}
+            limit={pullRequestListLimit}
+            preserveOrder
+            emptyState={loading ? 'Loading community PRs...' : 'No recently active community PRs in the current results.'}
+            onSelectPullRequest={onSelectPullRequest}
+            onVisiblePullRequest={onVisiblePullRequest}
           />
         )}
       </section>

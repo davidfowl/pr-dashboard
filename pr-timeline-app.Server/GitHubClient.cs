@@ -22,6 +22,7 @@ sealed partial class GitHubClient(
     private static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(45);
     internal static readonly TimeSpan PublicCacheDuration = TimeSpan.FromHours(1);
     private static readonly TimeSpan LastGoodCacheDuration = TimeSpan.FromHours(24);
+    private static readonly TimeSpan PullRequestGraphQlStateDuration = LastGoodCacheDuration;
     private static readonly TimeSpan MaxStaleDisplayAge = TimeSpan.FromMinutes(10);
     private const int PullRequestPageSize = 100;
     private const int GraphQlLabelPageSize = 100;
@@ -41,7 +42,7 @@ sealed partial class GitHubClient(
         "commits(last:1){totalCount nodes{commit{committedDate " +
         "statusCheckRollup{state}}}} " +
         "additions deletions changedFiles headRefOid headRefName baseRefName mergeable " +
-        "reviews(last:100){pageInfo{hasPreviousPage startCursor}nodes{author{login}state submittedAt}} " +
+        "reviews(last:100){pageInfo{hasPreviousPage startCursor}nodes{author{login ... on User{databaseId}}state submittedAt}} " +
         "reviewThreads(first:" + PullRequestPageSize + "){pageInfo{hasNextPage endCursor}nodes{isResolved}} " +
         "closingIssuesReferences(first:" + MaxLinkedIssuesPerPullRequest + "){nodes{number title url repository{nameWithOwner} labels(first:" + GraphQlLabelPageSize + "){nodes{name}} milestone{title}}}" +
         "}}}}";
@@ -60,6 +61,7 @@ sealed partial class GitHubClient(
     private const string RegressionLabelMarker = "regression";
     private const string CtiTeamTitleMarker = "[AspireE2E]";
     private const string CtiTeamSearchTerm = "AspireE2E";
+    private const string AfscromeIssueAuthor = "afscrome";
     private static readonly SemaphoreSlim s_githubRequestThrottle = new(MaxConcurrentGitHubRequests, MaxConcurrentGitHubRequests);
     private static readonly SemaphoreSlim s_checksFetchThrottle = new(MaxConcurrentChecksFetches, MaxConcurrentChecksFetches);
     private static readonly TimeSpan PullRequestGraphQlRefreshFailureCooldown = TimeSpan.FromSeconds(30);
@@ -161,8 +163,27 @@ sealed partial class GitHubClient(
     private async Task SetLastGoodAsync<T>(
         string cacheKey,
         T value,
+        CancellationToken cancellationToken,
+        Action? onLocalEvicted = null) =>
+        await cache.SetAsync(GetLastGoodCacheKey(cacheKey), value, LastGoodCacheDuration, cancellationToken, onLocalEvicted);
+
+    private async Task SetPullRequestGraphQlLastGoodAsync(
+        string cacheKey,
+        IReadOnlyList<PullRequestSummary> value,
         CancellationToken cancellationToken) =>
-        await cache.SetAsync(GetLastGoodCacheKey(cacheKey), value, LastGoodCacheDuration, cancellationToken);
+        await SetLastGoodAsync(
+            cacheKey,
+            value,
+            cancellationToken,
+            () => RemovePullRequestGraphQlStateIfLastGoodMissing(cacheKey));
+
+    private void RemovePullRequestGraphQlStateIfLastGoodMissing(string cacheKey)
+    {
+        if (!cache.TryGetLocalValue<IReadOnlyList<PullRequestSummary>>(GetLastGoodCacheKey(cacheKey), out _))
+        {
+            graphQlState.Remove(cacheKey);
+        }
+    }
 
     private async Task<GitHubCacheLookup<T>> GetLastGoodAsync<T>(
         string cacheKey,
@@ -243,7 +264,8 @@ sealed partial class GitHubClient(
         CancellationToken cancellationToken,
         Func<T, bool>? storeLastGood = null,
         Func<T, TimeSpan>? cacheDurationSelector = null,
-        string? transientFallbackCacheKey = null)
+        string? transientFallbackCacheKey = null,
+        Action? lastGoodLocalEvicted = null)
         where T : class
     {
         var cachedLookup = await cache.GetAsync<T>(cacheKey, cancellationToken);
@@ -284,7 +306,7 @@ sealed partial class GitHubClient(
             var value = await factory();
             if (storeLastGood?.Invoke(value) ?? true)
             {
-                await SetLastGoodAsync(cacheKey, value, cancellationToken);
+                await SetLastGoodAsync(cacheKey, value, cancellationToken, lastGoodLocalEvicted);
             }
             else
             {
@@ -672,11 +694,12 @@ sealed partial class GitHubClient(
                     state,
                     scope,
                     cancellationToken);
-                graphQlState.ListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
+                graphQlState.SetListFetchedAt(cacheKey, DateTimeOffset.UtcNow, PullRequestGraphQlStateDuration);
                 return result;
             },
             cancellationToken,
-            transientFallbackCacheKey: transientFallbackCacheKey);
+            transientFallbackCacheKey: transientFallbackCacheKey,
+            lastGoodLocalEvicted: () => graphQlState.Remove(cacheKey));
     }
 
     private async Task<PullRequestListResponse> GetPullRequestsGraphQlSnapshotAsync(
@@ -701,11 +724,10 @@ sealed partial class GitHubClient(
                 state,
                 scope,
                 cancellationToken);
-            graphQlState.ListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
-            await SetLastGoodAsync(cacheKey, livePullRequests, cancellationToken);
+            graphQlState.SetListFetchedAt(cacheKey, DateTimeOffset.UtcNow, PullRequestGraphQlStateDuration);
+            await SetPullRequestGraphQlLastGoodAsync(cacheKey, livePullRequests, cancellationToken);
             await SetCacheEntryAsync(cacheKey, livePullRequests, CacheDurationForScope(scope), cancellationToken);
-            graphQlState.RefreshErrors.TryRemove(cacheKey, out var ignoredError);
-            _ = ignoredError;
+            graphQlState.RemoveRefreshError(cacheKey);
             return CreatePullRequestListResponse(
                 repositoryName,
                 livePullRequests,
@@ -839,11 +861,11 @@ sealed partial class GitHubClient(
                 state,
                 scope,
                 cancellationToken);
-            graphQlState.ListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
-            await SetLastGoodAsync(cacheKey, pullRequests, cancellationToken);
+            graphQlState.SetListFetchedAt(cacheKey, DateTimeOffset.UtcNow, PullRequestGraphQlStateDuration);
+            await SetPullRequestGraphQlLastGoodAsync(cacheKey, pullRequests, cancellationToken);
             await SetCacheEntryAsync(cacheKey, pullRequests, CacheDurationForScope(scope), cancellationToken);
-            graphQlState.RefreshErrors.TryRemove(cacheKey, out _);
-            graphQlState.RefreshCooldownUntil.TryRemove(cacheKey, out _);
+            graphQlState.RemoveRefreshError(cacheKey);
+            graphQlState.RemoveRefreshCooldownUntil(cacheKey);
             return CreatePullRequestListResponse(
                 repositoryName,
                 pullRequests,
@@ -865,7 +887,7 @@ sealed partial class GitHubClient(
                 throw;
             }
 
-            graphQlState.RefreshErrors[cacheKey] = ex.Message;
+            graphQlState.SetRefreshError(cacheKey, ex.Message, PullRequestGraphQlStateDuration);
             return CreatePullRequestListResponse(
                 repositoryName,
                 fallback.PullRequests!,
@@ -977,11 +999,7 @@ sealed partial class GitHubClient(
             token,
             cancellationToken);
 
-        var activePullRequests = pullRequests
-            .Where(pullRequest => !pullRequest.IsDraft)
-            .ToArray();
-
-        var summaries = activePullRequests.Select(pullRequest =>
+        var summaries = pullRequests.Select(pullRequest =>
             CreatePullRequestSummaryFromGraphQlAsync(
                 repositoryName,
                 pullRequest,
@@ -1035,22 +1053,22 @@ sealed partial class GitHubClient(
                     state,
                     token,
                     CancellationToken.None);
-                graphQlState.ListFetchedAt[cacheKey] = DateTimeOffset.UtcNow;
-                await SetLastGoodAsync(cacheKey, pullRequests, CancellationToken.None);
+                graphQlState.SetListFetchedAt(cacheKey, DateTimeOffset.UtcNow, PullRequestGraphQlStateDuration);
+                await SetPullRequestGraphQlLastGoodAsync(cacheKey, pullRequests, CancellationToken.None);
                 await SetCacheEntryAsync(
                     cacheKey,
                     pullRequests,
                     CacheDurationForScope(scope),
                     CancellationToken.None);
-                graphQlState.RefreshErrors.TryRemove(cacheKey, out _);
-                graphQlState.RefreshCooldownUntil.TryRemove(cacheKey, out _);
+                graphQlState.RemoveRefreshError(cacheKey);
+                graphQlState.RemoveRefreshCooldownUntil(cacheKey);
             }
             catch (Exception ex)
             {
                 // Back off before another refresh can be queued for this key so a polling client
                 // cannot drive a tight retry loop against a persistently failing upstream.
-                graphQlState.RefreshCooldownUntil[cacheKey] = DateTimeOffset.UtcNow + PullRequestGraphQlRefreshFailureCooldown;
-                graphQlState.RefreshErrors[cacheKey] = ex.Message;
+                graphQlState.SetRefreshCooldownUntil(cacheKey, DateTimeOffset.UtcNow + PullRequestGraphQlRefreshFailureCooldown);
+                graphQlState.SetRefreshError(cacheKey, ex.Message, PullRequestGraphQlStateDuration);
             }
             finally
             {
@@ -1076,7 +1094,7 @@ sealed partial class GitHubClient(
             return false;
         }
 
-        if (graphQlState.RefreshCooldownUntil.TryGetValue(cacheKey, out var cooldownUntil)
+        if (graphQlState.TryGetRefreshCooldownUntil(cacheKey, out var cooldownUntil)
             && cooldownUntil > DateTimeOffset.UtcNow)
         {
             // A recent background refresh for this key failed; skip queueing until the cooldown
@@ -1087,9 +1105,12 @@ sealed partial class GitHubClient(
         var token = await GetGraphQlTokenAsync(scope.RequestAuthorization, cancellationToken);
         if (token is null)
         {
-            graphQlState.RefreshErrors[cacheKey] = scope.RequestAuthorization == GitHubRequestAuthorization.PublicCacheToken
-                ? "GitHub authentication is required. Configure the public cache identity token."
-                : "GitHub authentication is required. Sign in with GitHub.";
+            graphQlState.SetRefreshError(
+                cacheKey,
+                scope.RequestAuthorization == GitHubRequestAuthorization.PublicCacheToken
+                    ? "GitHub authentication is required. Configure the public cache identity token."
+                    : "GitHub authentication is required. Sign in with GitHub.",
+                PullRequestGraphQlStateDuration);
             return false;
         }
 
@@ -1100,7 +1121,7 @@ sealed partial class GitHubClient(
         graphQlState.RefreshTasks.ContainsKey(cacheKey);
 
     private string? GetPullRequestGraphQlRefreshError(string cacheKey) =>
-        graphQlState.RefreshErrors.TryGetValue(cacheKey, out var error) ? error : null;
+        graphQlState.TryGetRefreshError(cacheKey, out var error) ? error : null;
 
     private PullRequestListResponse CreatePullRequestListResponse(
         RepositoryName repositoryName,
@@ -1128,7 +1149,7 @@ sealed partial class GitHubClient(
         // fetched rather than "now" -- otherwise an empty cached result would look fresh on every read
         // and defeat the max-stale-age gate. UtcNow is only used when nothing has been tracked yet
         // (e.g. immediately after a process restart, before the first fetch completes).
-        var emptyListFetchedAt = graphQlState.ListFetchedAt.TryGetValue(cacheKey, out var tracked)
+        var emptyListFetchedAt = graphQlState.TryGetListFetchedAt(cacheKey, out var tracked)
             ? tracked
             : DateTimeOffset.UtcNow;
         var fetchedAt = pullRequests
@@ -1345,6 +1366,7 @@ sealed partial class GitHubClient(
         var reviewEvents = pullRequest.Reviews?.Nodes?
             .Where(review => review is not null)
             .Select(review => ReviewEvent.FromGraphQl(review!))
+            .OfType<ReviewEvent>()
             .ToArray()
         ?? [];
         var humanReviews = reviewEvents
@@ -1387,8 +1409,20 @@ sealed partial class GitHubClient(
             LastApprovedAt: humanReviews.LastOrDefault(review => review.State == "APPROVED")?.SubmittedAt,
             LastReviewedAt: humanReviews.LastOrDefault()?.SubmittedAt,
             UnresolvedThreadCount: unresolvedThreadCount,
-            RequiresConversationResolution: requiresConversationResolution);
+            RequiresConversationResolution: requiresConversationResolution)
+        {
+            ApprovedReviewerIds = ApprovedReviewerIdsOf(latestByReviewer)
+        };
     }
+
+    // Numeric ids of the reviewers whose latest review is an approval, for ready-to-merge
+    // notifications. Reviewers without a known id (older REST data) are skipped.
+    private static IReadOnlyList<long> ApprovedReviewerIdsOf(IEnumerable<ReviewEvent> latestByReviewer) =>
+        latestByReviewer
+            .Where(review => review.State == "APPROVED" && review.ActorId is > 0)
+            .Select(review => review.ActorId!.Value)
+            .Distinct()
+            .ToArray();
 
     public IAsyncEnumerable<PullRequestSummary> StreamPullRequestsAsync(
         RepositoryName repositoryName,
@@ -1783,6 +1817,7 @@ sealed partial class GitHubClient(
                 throw CreatePublicCacheUnavailableException();
             }
 
+            var currentUserLoginTask = GetCurrentUserLoginAsync(cancellationToken);
             var regressionIssuesTask = GetIssuesMatchingLabelMarkerAsync(
                 repositoryName,
                 state,
@@ -1797,14 +1832,31 @@ sealed partial class GitHubClient(
                 CtiTeamSearchTerm,
                 scope,
                 cancellationToken);
+            var afscromeIssuesTask = GetIssuesCreatedByAsync(
+                repositoryName,
+                state,
+                AfscromeIssueAuthor,
+                scope,
+                cancellationToken);
 
-            await Task.WhenAll(regressionIssuesTask, ctiTeamIssuesTask);
+            await Task.WhenAll(regressionIssuesTask, ctiTeamIssuesTask, afscromeIssuesTask, currentUserLoginTask);
+
+            IReadOnlyList<GitHubIssueDto> assignedIssues = string.IsNullOrWhiteSpace(currentUserLoginTask.Result)
+                ? []
+                : await GetIssuesAssignedToAsync(
+                    repositoryName,
+                    state,
+                    currentUserLoginTask.Result,
+                    scope,
+                    cancellationToken);
 
             // "Focus issues" are the actual issue cards shown in the issues dashboard. The
             // source searches can overlap and GitHub's issues APIs can return PRs, so normalize
             // them to a unique set of non-PR issues before applying linked-PR activity.
             var focusIssues = regressionIssuesTask.Result
                 .Concat(ctiTeamIssuesTask.Result)
+                .Concat(afscromeIssuesTask.Result)
+                .Concat(assignedIssues)
                 .Where(issue => issue.PullRequest is null)
                 .GroupBy(issue => issue.Number)
                 .Select(group => group.OrderByDescending(issue => issue.UpdatedAt).First())
@@ -1903,7 +1955,14 @@ sealed partial class GitHubClient(
 
             var milestoneIssues = await milestoneIssuesTask;
             var releaseBranchPullRequestDtos = await releaseBranchPullRequestsTask;
-            var pullRequestDtosByNumber = releaseBranchPullRequestDtos
+            var draftReleaseBranchPullRequestNumbers = releaseBranchPullRequestDtos
+                .Where(pullRequest => pullRequest.Draft)
+                .Select(pullRequest => pullRequest.Number)
+                .ToHashSet();
+            var activeReleaseBranchPullRequestDtos = releaseBranchPullRequestDtos
+                .Where(pullRequest => !pullRequest.Draft)
+                .ToArray();
+            var pullRequestDtosByNumber = activeReleaseBranchPullRequestDtos
                 .GroupBy(pullRequest => pullRequest.Number)
                 .ToDictionary(group => group.Key, group => group.First());
             var releaseBranchPullRequestNumbers = pullRequestDtosByNumber.Keys.ToHashSet();
@@ -1914,6 +1973,7 @@ sealed partial class GitHubClient(
 
             var missingMilestonePullRequestTasks = milestonePullRequestNumbers
                 .Where(number => !pullRequestDtosByNumber.ContainsKey(number))
+                .Where(number => !draftReleaseBranchPullRequestNumbers.Contains(number))
                 .ToDictionary(
                     number => number,
                     number => GetPullRequestDtoOrNullAsync(repositoryName, number, scope, cancellationToken));
@@ -1922,7 +1982,7 @@ sealed partial class GitHubClient(
 
             foreach (var (number, task) in missingMilestonePullRequestTasks)
             {
-                if (await task is { } pullRequest)
+                if (await task is { Draft: false } pullRequest)
                 {
                     pullRequestDtosByNumber[number] = pullRequest;
                 }
@@ -2707,6 +2767,40 @@ sealed partial class GitHubClient(
             scope: scope,
             cancellationToken: cancellationToken);
 
+    private async Task<IReadOnlyList<GitHubIssueDto>> GetIssuesAssignedToAsync(
+        RepositoryName repositoryName,
+        string state,
+        string assignee,
+        GitHubCacheScope scope,
+        CancellationToken cancellationToken) =>
+        await GetIssuesAsync(
+            repositoryName,
+            state,
+            label: null,
+            milestoneNumber: null,
+            sort: "updated",
+            direction: "desc",
+            scope: scope,
+            cancellationToken: cancellationToken,
+            assignee: assignee);
+
+    private async Task<IReadOnlyList<GitHubIssueDto>> GetIssuesCreatedByAsync(
+        RepositoryName repositoryName,
+        string state,
+        string creator,
+        GitHubCacheScope scope,
+        CancellationToken cancellationToken) =>
+        await GetIssuesAsync(
+            repositoryName,
+            state,
+            label: null,
+            milestoneNumber: null,
+            sort: "updated",
+            direction: "desc",
+            scope: scope,
+            cancellationToken: cancellationToken,
+            creator: creator);
+
     private async Task<IReadOnlyList<GitHubIssueDto>> GetIssuesAsync(
         RepositoryName repositoryName,
         string state,
@@ -2715,9 +2809,11 @@ sealed partial class GitHubClient(
         string? sort,
         string? direction,
         GitHubCacheScope scope,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        string? assignee = null,
+        string? creator = null) =>
         await SendPagedGitHubRequestAsync(
-            CreateIssuesUrl(repositoryName, state, label, milestoneNumber, sort, direction),
+            CreateIssuesUrl(repositoryName, state, label, milestoneNumber, sort, direction, assignee, creator),
             GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
             scope.RequestAuthorization,
             cancellationToken);
@@ -2760,7 +2856,9 @@ sealed partial class GitHubClient(
                 label,
                 milestoneNumber: null,
                 sort,
-                direction),
+                direction,
+                assignee: null,
+                creator: null),
             GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
             scope.RequestAuthorization,
             cancellationToken))
@@ -2775,7 +2873,9 @@ sealed partial class GitHubClient(
         string? label,
         int? milestoneNumber,
         string? sort,
-        string? direction)
+        string? direction,
+        string? assignee = null,
+        string? creator = null)
     {
         var queryParts = new List<string>
         {
@@ -2790,6 +2890,16 @@ sealed partial class GitHubClient(
         if (milestoneNumber is { } milestone)
         {
             queryParts.Add($"milestone={milestone}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(assignee))
+        {
+            queryParts.Add($"assignee={Uri.EscapeDataString(assignee)}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(creator))
+        {
+            queryParts.Add($"creator={Uri.EscapeDataString(creator)}");
         }
 
         if (!string.IsNullOrWhiteSpace(sort))
@@ -3558,7 +3668,10 @@ sealed partial class GitHubClient(
                 UnresolvedThreadCount: unresolvedThreadCount,
                 // Only repos that require conversation resolution treat an unresolved thread as a
                 // merge blocker; elsewhere the signal is informational and must not gate Ready to merge.
-                RequiresConversationResolution: RequiresConversationResolution(repositoryName));
+                RequiresConversationResolution: RequiresConversationResolution(repositoryName))
+            {
+                ApprovedReviewerIds = ApprovedReviewerIdsOf(latestByReviewer)
+            };
         },
             cancellationToken) ?? ReviewStatus.Waiting;
     }
@@ -4501,6 +4614,7 @@ sealed partial class GitHubClient(
     private static readonly HashSet<string> s_knownBotActors = new(StringComparer.OrdinalIgnoreCase)
     {
         "Copilot",
+        "copilot-swe-agent",
         "dependabot",
         "dependabot-preview",
         "github-actions",

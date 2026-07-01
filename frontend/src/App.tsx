@@ -7,16 +7,13 @@ import MobileNav from './components/MobileNav';
 import NotificationSettings from './components/NotificationSettings';
 import DashboardView from './components/dashboard/DashboardView';
 import DetailView from './components/detail/DetailView';
-import {
-  defaultRepoInput,
-  defaultRepos,
-  defaultShipWeekRepos,
-  docsFromCodeLabel,
-  docsFromCodeRepository,
-} from './constants';
+import { emptyDashboardConfig, fetchDashboardConfig, getDashboardConfig } from './dashboardConfig';
 import type {
   AuthStatus,
+  DashboardConfig,
   DashboardMode,
+  DevelopmentGitHubAccount,
+  DevelopmentGitHubAccountsResponse,
   IssueListResponse,
   MergeableState,
   PullRequestChecksRequest,
@@ -52,6 +49,7 @@ import {
   createTimelineStory,
   createTriageModel,
   isGeneratedDocsPullRequest,
+  needsVisibleCheckDetails,
 } from './utils/models';
 import {
   createShipWeekUrl,
@@ -63,6 +61,7 @@ import {
   parseShipWeekRouteParams,
   pushDashboardModeHistory,
   pushDetailHistory,
+  replaceLegacyRepositorySearchParam,
   replaceBucketHistory,
 } from './utils/routing';
 import type { ShipWeekRouteParams } from './utils/routing';
@@ -76,6 +75,8 @@ type VisibleChecksRequestItem = {
 type LoadOptions = {
   forceRefresh?: boolean;
   preserveResults?: boolean;
+  refreshSelectedPullRequest?: boolean;
+  clearResultsOnError?: boolean;
 };
 
 type ReviewRefreshParams = {
@@ -105,11 +106,13 @@ const emptyShipWeekLoadingState: ShipWeekLoadingState = {
 };
 
 function App() {
-  const initialShipWeekRouteParams = parseShipWeekRouteParams(window.location.search);
-  const [repo, setRepo] = useState(defaultRepoInput);
-  const [activeRepo, setActiveRepo] = useState(defaultRepos[0]);
+  const [dashboardConfig, setDashboardConfig] = useState<DashboardConfig>(emptyDashboardConfig);
+  const [activeRepo, setActiveRepo] = useState('');
   const [state, setState] = useState<PullState>('open');
   const [authStatus, setAuthStatus] = useState<AuthStatus | null>(null);
+  const [developmentAccounts, setDevelopmentAccounts] = useState<DevelopmentGitHubAccount[]>([]);
+  const [selectedDevelopmentAccount, setSelectedDevelopmentAccount] = useState('');
+  const [developmentAccountLoading, setDevelopmentAccountLoading] = useState(false);
   const isMobileNav = useMediaQuery('(max-width: 720px)');
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => parseDashboardMode(window.location.search));
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
@@ -119,10 +122,13 @@ function App() {
   const [reviewSnapshotError, setReviewSnapshotError] = useState<string | null>(null);
   const [reviewLoadPerfStats, setReviewLoadPerfStats] = useState<ReviewLoadPerfStats | null>(null);
   const [issuesLastUpdatedAt, setIssuesLastUpdatedAt] = useState<string | null>(null);
-  const [shipWeekRepo, setShipWeekRepo] = useState(initialShipWeekRouteParams.repositoryInput);
-  const [shipWeekMilestone, setShipWeekMilestone] = useState(initialShipWeekRouteParams.milestoneInput);
-  const [shipWeekReleaseBranch, setShipWeekReleaseBranch] = useState(initialShipWeekRouteParams.releaseBranchInput);
-  const [shipWeekShareParams, setShipWeekShareParams] = useState<ShipWeekRouteParams>(initialShipWeekRouteParams);
+  const [shipWeekMilestone, setShipWeekMilestone] = useState('');
+  const [shipWeekReleaseBranch, setShipWeekReleaseBranch] = useState('');
+  const [shipWeekShareParams, setShipWeekShareParams] = useState<ShipWeekRouteParams>({
+    repositoryInput: '',
+    milestoneInput: '',
+    releaseBranchInput: '',
+  });
   const [shipWeek, setShipWeek] = useState<ShipWeekResponse | null>(null);
   const [shipWeekLastUpdatedAt, setShipWeekLastUpdatedAt] = useState<string | null>(null);
   const [selectedPullRequest, setSelectedPullRequest] = useState<PullRequestSummary | null>(null);
@@ -163,26 +169,26 @@ function App() {
   const shipWeekLoadVersionRef = useRef(0);
   const shipWeekAbortControllerRef = useRef<AbortController | null>(null);
   const shipWeekSnapshotRef = useRef<HTMLElement | null>(null);
+  const dashboardConfigRef = useRef<DashboardConfig>(emptyDashboardConfig);
   const reviewRefreshParamsRef = useRef<ReviewRefreshParams>({
-    repositoryInput: defaultRepoInput,
+    repositoryInput: '',
     pullState: 'open',
   });
   const issueRefreshParamsRef = useRef<IssueRefreshParams>({
-    repositoryInput: defaultRepoInput,
+    repositoryInput: '',
     pullState: 'open',
   });
   const shipWeekRefreshParamsRef = useRef<ShipWeekRefreshParams>({
-    repositoryInput: initialShipWeekRouteParams.repositoryInput,
-    milestoneInput: initialShipWeekRouteParams.milestoneInput,
-    releaseBranchInput: initialShipWeekRouteParams.releaseBranchInput,
+    repositoryInput: '',
+    milestoneInput: '',
+    releaseBranchInput: '',
   });
-  const initializedRef = useRef(false);
 
   const selectedTitle = selectedPullRequest
     ? `#${selectedPullRequest.number} ${selectedPullRequest.title}`
     : 'Select a pull request';
   const currentMilestoneLabel = shipWeek?.milestone ?? shipWeekMilestone;
-  const shipWeekShareUrl = createShipWeekUrl(shipWeekShareParams);
+  const shipWeekShareUrl = createShipWeekUrl(shipWeekShareParams, dashboardConfig);
 
   const groupedTimeline = useMemo(() => {
     return createTimelineStory(timelineItems).reduce<Record<string, TimelineStoryEntry[]>>((groups, entry) => {
@@ -199,11 +205,24 @@ function App() {
   }, [timelineItems]);
 
   const repoAccent = useMemo(() => colorForText(activeRepo), [activeRepo]);
-  const developerPullRequestCounts = useMemo(() => createDeveloperPullRequestCounts(pullRequests), [pullRequests]);
-  const attentionBuckets = useMemo(() => createAttentionBuckets(pullRequests), [pullRequests]);
+  // Model helpers read the active dashboard config singleton; keep these memos keyed by config changes.
+  const developerPullRequestCounts = useMemo(
+    () => {
+      void dashboardConfig;
+      return createDeveloperPullRequestCounts(pullRequests);
+    },
+    [dashboardConfig, pullRequests],
+  );
+  const attentionBuckets = useMemo(
+    () => {
+      void dashboardConfig;
+      return createAttentionBuckets(pullRequests, authStatus?.login);
+    },
+    [authStatus?.login, dashboardConfig, pullRequests],
+  );
   const issueBuckets = useMemo(
-    () => createFocusIssueBuckets(issues),
-    [issues],
+    () => createFocusIssueBuckets(issues, authStatus?.login),
+    [authStatus?.login, issues],
   );
   const forMeItems = useMemo(
     () => createForMeItems(pullRequests, authStatus?.login),
@@ -219,21 +238,7 @@ function App() {
   );
 
   useEffect(() => {
-    if (initializedRef.current) {
-      return;
-    }
-
-    initializedRef.current = true;
-    void loadAuthStatus();
-    if (dashboardMode === 'ship') {
-      const params = shipWeekRefreshParamsRef.current;
-      void loadShipWeek(params.repositoryInput, params.milestoneInput, params.releaseBranchInput);
-    } else if (dashboardMode === 'issues') {
-      const params = issueRefreshParamsRef.current;
-      void loadIssues(params.repositoryInput, params.pullState);
-    } else {
-      void loadPullRequests(defaultRepoInput, state);
-    }
+    void initializeApp();
     // Initial load intentionally captures the default pull state once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -307,11 +312,11 @@ function App() {
     }
 
     function onPopState() {
+      replaceLegacyRepositorySearchParam();
       const nextMode = parseDashboardMode(window.location.search);
       setDashboardMode(nextMode);
       if (nextMode === 'ship') {
-        const shipWeekParams = parseShipWeekRouteParams(window.location.search);
-        setShipWeekRepo(shipWeekParams.repositoryInput);
+        const shipWeekParams = parseShipWeekRouteParams(window.location.search, dashboardConfigRef.current);
         setShipWeekMilestone(shipWeekParams.milestoneInput);
         setShipWeekReleaseBranch(shipWeekParams.releaseBranchInput);
         if (!areShipWeekParamsEqual(shipWeekParams, shipWeekRefreshParamsRef.current)) {
@@ -388,10 +393,50 @@ function App() {
     }
   }, [locationHash]);
 
+  async function initializeApp() {
+    const config = await loadDashboardConfiguration();
+    if (!config) {
+      return;
+    }
+
+    const repositoryInput = config.repositoryInput;
+    replaceLegacyRepositorySearchParam();
+    const shipWeekParams = parseShipWeekRouteParams(window.location.search, config);
+    setActiveRepo(config.repositories[0] ?? '');
+    setShipWeekMilestone(shipWeekParams.milestoneInput);
+    setShipWeekReleaseBranch(shipWeekParams.releaseBranchInput);
+    setShipWeekShareParams(shipWeekParams);
+    reviewRefreshParamsRef.current = { repositoryInput, pullState: state };
+    issueRefreshParamsRef.current = { repositoryInput, pullState: state };
+    shipWeekRefreshParamsRef.current = shipWeekParams;
+
+    await loadAuthStatus();
+    if (dashboardMode === 'ship') {
+      void loadShipWeek(shipWeekParams.repositoryInput, shipWeekParams.milestoneInput, shipWeekParams.releaseBranchInput);
+    } else if (dashboardMode === 'issues') {
+      void loadIssues(repositoryInput, state);
+    } else {
+      void loadPullRequests(repositoryInput, state);
+    }
+  }
+
+  async function loadDashboardConfiguration() {
+    try {
+      const config = await fetchDashboardConfig();
+      dashboardConfigRef.current = config;
+      setDashboardConfig(config);
+      return config;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load dashboard configuration.');
+      return null;
+    }
+  }
+
   async function loadAuthStatus() {
     try {
       const response = await fetch('/api/github/auth-status');
       setAuthStatus(await readJson<AuthStatus>(response));
+      await loadDevelopmentAccounts();
     } catch (err) {
       setAuthStatus({
         authenticated: false,
@@ -399,6 +444,26 @@ function App() {
         canLogin: false,
         message: err instanceof Error ? err.message : 'Unable to check GitHub authentication.',
       });
+      setDevelopmentAccounts([]);
+      setSelectedDevelopmentAccount('');
+    }
+  }
+
+  async function loadDevelopmentAccounts() {
+    try {
+      const response = await fetch('/api/github/dev/accounts');
+      if (response.status === 404) {
+        setDevelopmentAccounts([]);
+        setSelectedDevelopmentAccount('');
+        return;
+      }
+
+      const data = await readJson<DevelopmentGitHubAccountsResponse>(response);
+      setDevelopmentAccounts(data.accounts);
+      setSelectedDevelopmentAccount(data.selectedLogin ?? '');
+    } catch {
+      setDevelopmentAccounts([]);
+      setSelectedDevelopmentAccount('');
     }
   }
 
@@ -426,30 +491,101 @@ function App() {
       cancelAbortableLoad(issuesLoadVersionRef, issuesAbortControllerRef);
       cancelAbortableLoad(shipWeekLoadVersionRef, shipWeekAbortControllerRef);
       cancelVisibleChecksRequests();
-      setPullRequests([]);
-      setIssues([]);
-      setIssuesError(null);
-      setReviewLastUpdatedAt(null);
-      setReviewSnapshotStatus(null);
-      setReviewSnapshotError(null);
-      setReviewLoadPerfStats(null);
-      setIssuesLastUpdatedAt(null);
-      setShipWeek(null);
-      setShipWeekLastUpdatedAt(null);
-      setShipWeekError(null);
-      resetShipWeekSnapshotState();
-      currentSelectionRef.current = null;
-      setSelectedPullRequest(null);
-      setTimelineItems([]);
-      setTimelineStats(null);
-      setMergeableState(null);
       setPullsLoading(false);
       setIssuesLoading(false);
       setShipWeekLoading(false);
       setTimelineLoading(false);
-      setViewMode('dashboard');
+      const config = await loadDashboardConfiguration();
+      if (config) {
+        const shipWeekParams = parseShipWeekRouteParams(window.location.search, config);
+        setActiveRepo(config.repositories[0] ?? '');
+        setShipWeekMilestone(shipWeekParams.milestoneInput);
+        setShipWeekReleaseBranch(shipWeekParams.releaseBranchInput);
+        setShipWeekShareParams(shipWeekParams);
+        reviewRefreshParamsRef.current = { repositoryInput: config.repositoryInput, pullState: state };
+        issueRefreshParamsRef.current = { repositoryInput: config.repositoryInput, pullState: state };
+        shipWeekRefreshParamsRef.current = shipWeekParams;
+      }
+      clearLoadedGitHubData();
+      showDashboard(true, false);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to sign out.');
+    }
+  }
+
+  async function changeDevelopmentGitHubAccount(login: string) {
+    if (login === selectedDevelopmentAccount) {
+      return;
+    }
+
+    const previousDevelopmentAccount = selectedDevelopmentAccount;
+    setSelectedDevelopmentAccount(login);
+    setDevelopmentAccountLoading(true);
+    setError(null);
+    cancelVisibleChecksRequests();
+
+    try {
+      const response = await fetch('/api/github/dev/account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ login: login || null }),
+      });
+      await readJson(response);
+      clearLoadedGitHubData();
+      showDashboard(true, false);
+      const authStatusUpdate = loadAuthStatus();
+      refreshCurrentDashboardData({
+        refreshSelectedPullRequest: false,
+        clearResultsOnError: true,
+      });
+      await authStatusUpdate;
+    } catch (err) {
+      setSelectedDevelopmentAccount(previousDevelopmentAccount);
+      setError(err instanceof Error ? err.message : 'Unable to switch GitHub account.');
+    } finally {
+      setDevelopmentAccountLoading(false);
+    }
+  }
+
+  function clearLoadedGitHubData() {
+    setPullRequests([]);
+    setIssues([]);
+    setIssuesError(null);
+    setReviewLastUpdatedAt(null);
+    setReviewSnapshotStatus(null);
+    setReviewSnapshotError(null);
+    setReviewLoadPerfStats(null);
+    setIssuesLastUpdatedAt(null);
+    setShipWeek(null);
+    setShipWeekLastUpdatedAt(null);
+    setShipWeekError(null);
+    resetShipWeekSnapshotState();
+    clearSelectedPullRequest();
+    setViewMode('dashboard');
+  }
+
+  function clearSelectedPullRequest() {
+    currentSelectionRef.current = null;
+    setSelectedPullRequest(null);
+    setTimelineItems([]);
+    setTimelineStats(null);
+    setMergeableState(null);
+    setTimelineLoading(false);
+  }
+
+  function refreshCurrentDashboardData(options: LoadOptions = {}) {
+    if (dashboardMode === 'ship') {
+      const params = shipWeekRefreshParamsRef.current;
+      void loadShipWeek(params.repositoryInput, params.milestoneInput, params.releaseBranchInput, options);
+    } else if (dashboardMode === 'issues') {
+      const params = issueRefreshParamsRef.current;
+      void loadIssues(params.repositoryInput, params.pullState, options);
+    } else {
+      const params = reviewRefreshParamsRef.current;
+      void loadPullRequests(params.repositoryInput, params.pullState, { ...options, forceRefresh: true });
+      if (options.refreshSelectedPullRequest !== false && selectedPullRequest) {
+        void loadTimeline(selectedPullRequest.repository, selectedPullRequest, false);
+      }
     }
   }
 
@@ -469,16 +605,13 @@ function App() {
     setError(null);
     beginVisibleChecksRequestScope();
     if (!options.preserveResults) {
-      currentSelectionRef.current = null;
-      setSelectedPullRequest(null);
-      setTimelineItems([]);
-      setTimelineStats(null);
-      setMergeableState(null);
+      clearSelectedPullRequest();
       setViewMode('dashboard');
     }
 
     try {
-      const repositories = parseRepositories(repositoryInput);
+      const repositories = parseRepositories(repositoryInput, dashboardConfigRef.current.repositories);
+      const hideRepositoryErrors = isConfiguredRepositoryInput(repositoryInput, dashboardConfigRef.current.repositoryInput);
       reviewRefreshParamsRef.current = { repositoryInput, pullState };
       setActiveRepo(repositories.length === 1 ? repositories[0] : `${repositories.length} repos`);
       if (!options.preserveResults) {
@@ -490,7 +623,13 @@ function App() {
       }
 
       const fetchGroups = async () => {
-        const groups = await fetchPullRequestGroups(repositories, pullState, options, abortController.signal);
+        const groups = await fetchPullRequestGroups(
+          repositories,
+          pullState,
+          options,
+          abortController.signal,
+          hideRepositoryErrors,
+        );
         requestCount += groups.length;
         return groups;
       };
@@ -517,8 +656,9 @@ function App() {
       }
 
       setError(err instanceof Error ? err.message : 'Unable to load pull requests.');
-      if (!options.preserveResults) {
+      if (!options.preserveResults || options.clearResultsOnError) {
         setPullRequests([]);
+        setReviewLastUpdatedAt(null);
         setReviewSnapshotStatus(null);
         setReviewSnapshotError(null);
         setReviewLoadPerfStats(null);
@@ -566,7 +706,8 @@ function App() {
     setIssuesError(null);
 
     try {
-      const repositories = parseRepositories(repositoryInput);
+      const repositories = parseRepositories(repositoryInput, dashboardConfigRef.current.repositories);
+      const hideRepositoryErrors = isConfiguredRepositoryInput(repositoryInput, dashboardConfigRef.current.repositoryInput);
       issueRefreshParamsRef.current = { repositoryInput, pullState: issueState };
       setActiveRepo(repositories.length === 1 ? repositories[0] : `${repositories.length} repos`);
       if (!options.preserveResults) {
@@ -574,6 +715,7 @@ function App() {
         setIssuesLastUpdatedAt(null);
       }
 
+      const issueFailures: string[] = [];
       const issueGroups = await Promise.all(
         repositories.map(async (repository) => {
           const query = new URLSearchParams({ repo: repository, state: issueState });
@@ -581,8 +723,23 @@ function App() {
             query.set('refresh', 'true');
           }
 
-          const response = await fetch(`/api/github/issues/focus?${query}`, { signal: abortController.signal });
-          const data = await readJson<IssueListResponse>(response);
+          let data: IssueListResponse;
+          try {
+            const response = await fetch(`/api/github/issues/focus?${query}`, { signal: abortController.signal });
+            data = await readJson<IssueListResponse>(response);
+          } catch (err) {
+            if (isAbortError(err)) {
+              throw err;
+            }
+
+            const message = repositoryLoadError(repository, err);
+            console.warn(message, err);
+            if (!hideRepositoryErrors) {
+              issueFailures.push(message);
+            }
+            return [];
+          }
+
           if (!isCurrentLoad()) {
             return [];
           }
@@ -596,6 +753,7 @@ function App() {
         const nextIssues = upsertManyByUpdatedAt([], issueGroups.flat());
         setIssues(nextIssues);
         setIssuesLastUpdatedAt(getIssuesLastUpdatedAt(nextIssues));
+        setIssuesError(issueFailures.length > 0 ? issueFailures.join(' ') : null);
       }
     } catch (err) {
       if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
@@ -603,8 +761,9 @@ function App() {
       }
 
       setIssuesError(err instanceof Error ? err.message : 'Unable to load issues.');
-      if (!options.preserveResults) {
+      if (!options.preserveResults || options.clearResultsOnError) {
         setIssues([]);
+        setIssuesLastUpdatedAt(null);
       } else {
         setIssues(previousIssues);
         setIssuesLastUpdatedAt(previousLastUpdatedAt);
@@ -635,8 +794,15 @@ function App() {
     beginVisibleChecksRequestScope();
 
     try {
-      const shipWeekParams = normalizeShipWeekRouteParams({ repositoryInput, milestoneInput, releaseBranchInput });
-      const repositories = parseRepositories(shipWeekParams.repositoryInput, defaultShipWeekRepos);
+      const shipWeekParams = normalizeShipWeekRouteParams(
+        { repositoryInput, milestoneInput, releaseBranchInput },
+        dashboardConfigRef.current,
+      );
+      const repositories = parseRepositories(shipWeekParams.repositoryInput, dashboardConfigRef.current.shipWeekRepositories);
+      const hideRepositoryErrors = isConfiguredRepositoryInput(
+        shipWeekParams.repositoryInput,
+        dashboardConfigRef.current.shipWeekRepositoryInput,
+      );
       const milestone = shipWeekParams.milestoneInput;
       const releaseBranch = shipWeekParams.releaseBranchInput;
       shipWeekRefreshParamsRef.current = shipWeekParams;
@@ -657,12 +823,36 @@ function App() {
 
       let releaseResponses: ShipWeekResponse[] = [];
       let docsPullRequests: PullRequestSummary[] = [];
+      const shipWeekFailures: string[] = [];
       const releaseTasks = releaseScopeRepositories.map(async (repository) => {
-        const response = await loadRepositoryShipWeek(repository, milestone, releaseBranch, options, abortController.signal);
-        releaseResponses = [...releaseResponses, response];
+        try {
+          const response = await loadRepositoryShipWeek(repository, milestone, releaseBranch, options, abortController.signal);
+          releaseResponses = [...releaseResponses, response];
+        } catch (err) {
+          if (isAbortError(err)) {
+            throw err;
+          }
+
+          const message = repositoryLoadError(repository, err);
+          console.warn(message, err);
+          if (!hideRepositoryErrors) {
+            shipWeekFailures.push(message);
+          }
+        }
       });
       const docsTasks = docsRepositories.map(async (repository) =>
-        loadDocsFromCodePullRequests(repository, options, abortController.signal));
+        loadDocsFromCodePullRequests(repository, options, abortController.signal).catch((err: unknown) => {
+          if (isAbortError(err)) {
+            throw err;
+          }
+
+          const message = repositoryLoadError(repository, err);
+          console.warn(message, err);
+          if (!hideRepositoryErrors) {
+            shipWeekFailures.push(message);
+          }
+          return [];
+        }));
       const releaseDoneTask = Promise.all(releaseTasks).finally(() => {
         if (isCurrentLoad()) {
           setShipWeekSectionLoading((current) => ({
@@ -695,6 +885,7 @@ function App() {
         );
         setShipWeek(nextShipWeek);
         setShipWeekLastUpdatedAt(getShipWeekLastUpdatedAt(nextShipWeek));
+        setShipWeekSnapshotError(shipWeekFailures.length > 0 ? shipWeekFailures.join(' ') : null);
       }
     } catch (err) {
       if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
@@ -702,8 +893,9 @@ function App() {
       }
 
       setShipWeekError(err instanceof Error ? err.message : 'Unable to load ship-week data.');
-      if (!options.preserveResults) {
+      if (!options.preserveResults || options.clearResultsOnError) {
         setShipWeek(null);
+        setShipWeekLastUpdatedAt(null);
       }
     } finally {
       if (isCurrentLoad()) {
@@ -739,7 +931,7 @@ function App() {
     if (
       pullRequest.state !== 'open'
       || !pullRequest.headSha
-      || pullRequest.checks?.state !== 'unknown'
+      || !needsVisibleCheckDetails(pullRequest)
     ) {
       return false;
     }
@@ -937,24 +1129,24 @@ function App() {
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const repositoryInput = dashboardConfigRef.current.repositoryInput;
     if (dashboardMode === 'issues') {
-      void loadIssues(repo.trim(), state);
+      void loadIssues(repositoryInput, state);
     } else {
-      void loadPullRequests(repo.trim(), state);
+      void loadPullRequests(repositoryInput, state);
     }
   }
 
   function onShipWeekSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const shipWeekParams = normalizeShipWeekRouteParams({
-      repositoryInput: shipWeekRepo,
+      repositoryInput: dashboardConfigRef.current.shipWeekRepositoryInput,
       milestoneInput: shipWeekMilestone,
       releaseBranchInput: shipWeekReleaseBranch,
-    });
-    setShipWeekRepo(shipWeekParams.repositoryInput);
+    }, dashboardConfigRef.current);
     setShipWeekMilestone(shipWeekParams.milestoneInput);
     setShipWeekReleaseBranch(shipWeekParams.releaseBranchInput);
-    pushDashboardModeHistory('ship', shipWeekParams);
+    pushDashboardModeHistory('ship', dashboardConfigRef.current, shipWeekParams);
     setLocationHash(window.location.hash);
     setSelectedBucketId('');
     setViewMode('dashboard');
@@ -969,11 +1161,13 @@ function App() {
         preserveResults: true,
       });
     } else if (dashboardMode === 'issues') {
-      void loadIssues(repo.trim(), state, {
+      const params = issueRefreshParamsRef.current;
+      void loadIssues(params.repositoryInput, params.pullState, {
         preserveResults: true,
       });
     } else {
-      void loadPullRequests(repo.trim(), state, {
+      const params = reviewRefreshParamsRef.current;
+      void loadPullRequests(params.repositoryInput, params.pullState, {
         forceRefresh: true,
         preserveResults: true,
       });
@@ -981,7 +1175,7 @@ function App() {
   }
 
   function switchDashboardMode(mode: DashboardMode) {
-    pushDashboardModeHistory(mode, shipWeekShareParams);
+    pushDashboardModeHistory(mode, dashboardConfigRef.current, shipWeekShareParams);
     setLocationHash(window.location.hash);
     setSelectedBucketId('');
     setViewMode('dashboard');
@@ -993,7 +1187,8 @@ function App() {
       const params = issueRefreshParamsRef.current;
       void loadIssues(params.repositoryInput, params.pullState);
     } else if (mode === 'review' && pullRequests.length === 0 && !pullsLoading) {
-      void loadPullRequests(repo.trim(), state);
+      const params = reviewRefreshParamsRef.current;
+      void loadPullRequests(params.repositoryInput, params.pullState);
     }
   }
 
@@ -1028,7 +1223,7 @@ function App() {
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = createShipWeekSnapshotFilename(shipWeekShareParams);
+      link.download = createShipWeekSnapshotFilename(shipWeekShareParams, dashboardConfigRef.current);
       document.body.append(link);
       link.click();
       link.remove();
@@ -1090,13 +1285,14 @@ function App() {
     setShowShipWeekSnapshotDownload(false);
   }
 
-  function showDashboard(updateHistory = true) {
+  function showDashboard(updateHistory = true, preserveBucket = true) {
     setViewMode('dashboard');
     if (updateHistory && window.location.hash) {
-      if (selectedBucketId) {
+      if (preserveBucket && selectedBucketId) {
         replaceBucketHistory(selectedBucketId);
         setLocationHash(window.location.hash);
       } else {
+        setSelectedBucketId('');
         window.history.replaceState({ view: 'dashboard' }, '', window.location.pathname + window.location.search);
         setLocationHash('');
       }
@@ -1125,9 +1321,9 @@ function App() {
         <div>
           <div className="hero-brand">
             <img className="hero-brand-logo" src="/aspire-logo-light-horizontal.svg" alt="Aspire" />
-            <p className="eyebrow">Team focus</p>
+            <p className="eyebrow">Aspire Team App</p>
           </div>
-          <h1>Team focus</h1>
+          <h1>Aspire Team App</h1>
           <div className="hero-mode-row">
             <div className="mode-toggle" role="group" aria-label="Dashboard mode">
               <button
@@ -1173,9 +1369,13 @@ function App() {
             <NotificationSettings authStatus={authStatus} />
             <AuthCard
               authStatus={authStatus}
+              developmentAccounts={developmentAccounts}
+              selectedDevelopmentAccount={selectedDevelopmentAccount}
+              developmentAccountLoading={developmentAccountLoading}
               loginLoading={loginLoading}
               onLogin={() => void startGitHubLogin()}
               onLogout={() => void logoutGitHub()}
+              onDevelopmentAccountChange={(login) => void changeDevelopmentGitHubAccount(login)}
             />
           </div>
         )}
@@ -1185,7 +1385,6 @@ function App() {
         {viewMode === 'dashboard' && (
           <DashboardView
             dashboardMode={dashboardMode}
-            repo={repo}
             state={state}
             pullsLoading={pullsLoading}
             pullRequests={pullRequests}
@@ -1201,8 +1400,8 @@ function App() {
             shipWeekLoading={shipWeekLoading}
             shipWeekSectionLoading={shipWeekSectionLoading}
             shipWeekError={shipWeekError}
-            shipWeekRepo={shipWeekRepo}
             shipWeekMilestone={shipWeekMilestone}
+            currentRelease={dashboardConfig.currentRelease}
             shipWeekReleaseBranch={shipWeekReleaseBranch}
             shipWeekSnapshotStatus={shipWeekSnapshotStatus}
             shipWeekSnapshotError={shipWeekSnapshotError}
@@ -1221,11 +1420,9 @@ function App() {
                 : reviewLastUpdatedAt}
             autoRefreshIntervalMs={autoRefreshIntervalMs}
             login={authStatus?.login}
-            onRepoChange={setRepo}
             onStateChange={setState}
             onSubmit={onSubmit}
             onRefresh={onRefresh}
-            onShipWeekRepoChange={setShipWeekRepo}
             onShipWeekMilestoneChange={setShipWeekMilestone}
             onShipWeekReleaseBranchChange={setShipWeekReleaseBranch}
             onShipWeekSubmit={onShipWeekSubmit}
@@ -1290,7 +1487,7 @@ function loadDocsFromCodePullRequests(
   signal?: AbortSignal,
 ) {
   const query = new URLSearchParams({ repo: repository, state: 'open' });
-  query.set('label', docsFromCodeLabel);
+  query.set('label', getDashboardConfig().docsFromCodeLabel);
   if (options.forceRefresh) {
     query.set('refresh', 'true');
   }
@@ -1306,6 +1503,7 @@ function fetchPullRequestGroups(
   pullState: PullState,
   options: LoadOptions,
   signal: AbortSignal,
+  hideRepositoryErrors: boolean,
 ) {
   return Promise.all(repositories.map(async (repository) => {
     const query = new URLSearchParams({ repo: repository, state: pullState });
@@ -1313,8 +1511,38 @@ function fetchPullRequestGroups(
       query.set('refresh', 'true');
     }
 
-    return fetchPullRequestList(`/api/github/pulls/graphql?${query}`, { signal });
-  }));
+    try {
+      return await fetchPullRequestList(`/api/github/pulls/graphql?${query}`, { signal });
+    } catch (err) {
+      if (isAbortError(err)) {
+        throw err;
+      }
+
+      const message = repositoryLoadError(repository, err);
+      console.warn(message, err);
+      if (hideRepositoryErrors) {
+        return null;
+      }
+
+      return {
+        repository,
+        pullRequests: [],
+        snapshot: {
+          source: 'error',
+          fetchedAt: new Date().toISOString(),
+          stale: false,
+          refreshInProgress: false,
+          refreshQueued: false,
+          error: message,
+        },
+      } satisfies PullRequestListResult;
+    }
+  })).then((groups) => groups.filter((group): group is PullRequestListResult => group !== null));
+}
+
+function repositoryLoadError(repository: string, err: unknown) {
+  const detail = err instanceof Error ? err.message : 'Unknown error';
+  return `Unable to load ${repository}: ${detail}`;
 }
 
 function waitForPullRequestSnapshotPoll(signal: AbortSignal) {
@@ -1485,7 +1713,9 @@ function getLatestFetchedAt(timestamps: Array<string | null | undefined>) {
 }
 
 function isDocsFromCodeRepository(repository: string) {
-  return repository.toLowerCase() === docsFromCodeRepository;
+  const config = getDashboardConfig();
+  return config.docsFromCodeRepository.length > 0
+    && repository.toLowerCase() === config.docsFromCodeRepository.toLowerCase();
 }
 
 function areShipWeekParamsEqual(first: ShipWeekRouteParams, second: ShipWeekRouteParams) {
@@ -1494,8 +1724,16 @@ function areShipWeekParamsEqual(first: ShipWeekRouteParams, second: ShipWeekRout
     && first.releaseBranchInput === second.releaseBranchInput;
 }
 
-function createShipWeekSnapshotFilename(params: ShipWeekRouteParams) {
-  return `ship-mode-${slugifyFilenamePart(params.milestoneInput)}-${slugifyFilenamePart(params.repositoryInput)}.png`;
+function isConfiguredRepositoryInput(value: string, configuredValue: string) {
+  const normalized = value.trim();
+  return normalized.length === 0 || normalized === configuredValue.trim();
+}
+
+function createShipWeekSnapshotFilename(params: ShipWeekRouteParams, config: DashboardConfig) {
+  const repositoryLabel = isConfiguredRepositoryInput(params.repositoryInput, config.shipWeekRepositoryInput)
+    ? 'configured-repositories'
+    : params.repositoryInput;
+  return `ship-mode-${slugifyFilenamePart(params.milestoneInput)}-${slugifyFilenamePart(repositoryLabel)}.png`;
 }
 
 function slugifyFilenamePart(value: string) {

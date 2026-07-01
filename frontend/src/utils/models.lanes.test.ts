@@ -1,11 +1,48 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PullRequestSummary, ReviewStatus } from '../types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { personalPickActions } from '../constants';
+import { emptyDashboardConfig, setActiveDashboardConfig } from '../dashboardConfig';
+import type { PullRequestSummary, ReviewStatus, ShipWeekIssueSummary, ShipWeekResponse } from '../types';
 import {
   createAttentionBuckets,
   createAttentionSignals,
+  createDeveloperPullRequestCounts,
+  createForMeItems,
+  createFocusIssueBuckets,
+  createShipWeekScopeGroups,
   isPullRequestWithinFocusAgeLimit,
   pullRequestFocusActivityAt,
+  visibleCheckState,
 } from './models';
+
+beforeEach(() => {
+  setActiveDashboardConfig({
+    ...emptyDashboardConfig,
+    repositories: ['example/repo'],
+    repositoryInput: 'example/repo',
+    shipWeekRepositories: ['example/repo'],
+    shipWeekRepositoryInput: 'example/repo',
+    coreTeamMembers: ['davidfowl', 'karolz-ms', 'DamianEdwards', 'JamesNK'],
+    coreTeamMemberAliasSuffixes: ['_corp'],
+    communityRepositories: ['CommunityToolkit/Aspire'],
+    currentRelease: '13.4',
+    docsFromCodeRepository: 'microsoft/aspire.dev',
+    docsFromCodeLabel: 'docs-from-code',
+    doNotMergeLabels: ['needs-author-action', 'no-merge'],
+    botAuthors: ['dotnet-maestro', 'copilot-swe-agent'],
+    nonBlockingCheckFailureRules: [
+      {
+        repository: 'private-org/service',
+        label: 'presence policy',
+        checkNames: ['Policy/Presence'],
+        checkNameContains: ['presence policy'],
+      },
+    ],
+  });
+});
+
+afterEach(() => {
+  setActiveDashboardConfig(emptyDashboardConfig);
+});
 
 type PrOverrides = Partial<Omit<PullRequestSummary, 'review' | 'checks'>> & {
   number: number;
@@ -33,7 +70,7 @@ function pr(overrides: PrOverrides): PullRequestSummary {
     title: `PR ${number}`,
     state: 'open',
     draft: false,
-    author: 'octocat',
+    author: 'davidfowl',
     htmlUrl: `https://github.com/example/repo/pull/${number}`,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
@@ -68,6 +105,176 @@ function inBucket(buckets: ReturnType<typeof createAttentionBuckets>, label: str
     (bucket) => bucket.label === label && bucket.items.some((item) => item.pullRequest.number === number),
   );
 }
+
+function issue(overrides: Partial<ShipWeekIssueSummary> & { number: number }): ShipWeekIssueSummary {
+  const { number, ...rest } = overrides;
+
+  return {
+    repository: 'example/repo',
+    number,
+    title: `Issue ${number}`,
+    htmlUrl: `https://github.com/example/repo/issues/${number}`,
+    author: 'reporter',
+    labels: [],
+    assignees: [],
+    milestone: null,
+    updatedAt: '2026-01-01T00:00:00Z',
+    fetchedAt: '2026-01-01T00:00:00Z',
+    linkedOpenPullRequests: [],
+    ...rest,
+  };
+}
+
+describe('createDeveloperPullRequestCounts', () => {
+  it('excludes draft PRs from core team ownership counts', () => {
+    const counts = createDeveloperPullRequestCounts([
+      pr({ number: 1, author: 'davidfowl' }),
+      pr({ number: 2, author: 'davidfowl', draft: true }),
+    ]);
+
+    const david = counts.find((count) => count.actor === 'davidfowl');
+
+    expect(david?.openPullRequestCount).toBe(1);
+    expect(david?.repositories).toEqual(['example/repo']);
+  });
+
+  it('counts karolz-ms as a core team member', () => {
+    const counts = createDeveloperPullRequestCounts([
+      pr({ number: 3, author: 'karolz-ms' }),
+    ]);
+
+    const karol = counts.find((count) => count.actor === 'karolz-ms');
+
+    expect(karol?.openPullRequestCount).toBe(1);
+    expect(karol?.repositories).toEqual(['example/repo']);
+  });
+
+  it('counts configured aliases as core team members', () => {
+    const counts = createDeveloperPullRequestCounts([
+      pr({ number: 4, author: 'jamesnk_corp' }),
+      pr({ number: 5, author: 'teammate_corp' }),
+    ]);
+
+    const james = counts.find((count) => count.actor === 'JamesNK');
+    const teammate = counts.find((count) => count.actor === 'teammate_corp');
+
+    expect(james?.openPullRequestCount).toBe(1);
+    expect(teammate?.openPullRequestCount).toBe(1);
+    expect(teammate?.repositories).toEqual(['example/repo']);
+  });
+});
+
+describe('createForMeItems', () => {
+  it('does not ask authors to fix configured non-blocking check failures', () => {
+    const picks = createForMeItems([
+      pr({
+        number: 49,
+        repository: 'private-org/service',
+        author: 'davidfowl',
+        checks: {
+          state: 'failure',
+          totalCount: 2,
+          successCount: 1,
+          failureCount: 1,
+          failingChecks: [
+            {
+              name: 'Policy/Presence',
+              conclusion: 'failure',
+              htmlUrl: 'https://github.com/private-org/service/runs/1',
+            },
+          ],
+        },
+      }),
+      pr({
+        number: 50,
+        repository: 'private-org/service',
+        author: 'davidfowl',
+        checks: {
+          state: 'failure',
+          totalCount: 2,
+          successCount: 1,
+          failureCount: 1,
+          failingChecks: [
+            {
+              name: 'Build',
+              conclusion: 'failure',
+              htmlUrl: 'https://github.com/private-org/service/runs/2',
+            },
+          ],
+        },
+      }),
+    ], 'davidfowl');
+
+    expect(picks.map((pick) => [pick.pullRequest.number, pick.action])).toEqual([
+      [50, personalPickActions.fixCi],
+    ]);
+  });
+
+  it('does not show CI failing on review requests with configured non-blocking failures', () => {
+    const picks = createForMeItems([
+      pr({
+        number: 51,
+        repository: 'private-org/service',
+        author: 'teammate',
+        requestedReviewers: ['davidfowl'],
+        checks: {
+          state: 'failure',
+          totalCount: 2,
+          successCount: 1,
+          failureCount: 1,
+          failingChecks: [
+            {
+              name: 'Policy/Presence',
+              conclusion: 'failure',
+              htmlUrl: 'https://github.com/private-org/service/runs/1',
+            },
+          ],
+        },
+      }),
+    ], 'davidfowl');
+
+    expect(picks).toHaveLength(1);
+    expect(picks[0].action).toBe(personalPickActions.reviewThis);
+    expect(picks[0].reason).not.toContain('CI failing');
+  });
+});
+
+describe('createShipWeekScopeGroups', () => {
+  it('excludes draft PRs from ship week scope groups', () => {
+    const shipWeek: ShipWeekResponse = {
+      repository: 'example/repo',
+      milestone: '13.4',
+      releaseBranch: 'release/13.4',
+      issues: [],
+      pullRequests: [
+        {
+          pullRequest: pr({ number: 1 }),
+          releaseScope: {
+            inMilestone: true,
+            targetsReleaseBranch: false,
+            releaseBranchException: false,
+            milestoneIssueNumbers: [],
+            docsFromCode: false,
+          },
+        },
+        {
+          pullRequest: pr({ number: 2, draft: true, baseRef: 'release/13.4' }),
+          releaseScope: {
+            inMilestone: true,
+            targetsReleaseBranch: true,
+            releaseBranchException: false,
+            milestoneIssueNumbers: [],
+            docsFromCode: false,
+          },
+        },
+      ],
+    };
+
+    const groups = createShipWeekScopeGroups(shipWeek);
+
+    expect(groups.flatMap((group) => group.pullRequests.map((item) => item.pullRequest.number))).toEqual([1]);
+  });
+});
 
 describe('createAttentionBuckets lane routing', () => {
   afterEach(() => {
@@ -110,11 +317,180 @@ describe('createAttentionBuckets lane routing', () => {
     expect(inBucket(buckets, 'Unresolved feedback', 4)).toBe(true);
   });
 
+  it('routes configured team-alias authors through core-team lanes', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 45, author: 'teammate_corp' }),
+    ]);
+
+    expect(inBucket(buckets, 'Needs review', 45)).toBe(true);
+    expect(inBucket(buckets, 'Community', 45)).toBe(false);
+  });
+
+  it('routes configured non-blocking check failures through core-team lanes', () => {
+    const pullRequest = pr({
+      number: 46,
+      repository: 'private-org/service',
+      author: 'teammate_corp',
+      checks: {
+        state: 'failure',
+        totalCount: 2,
+        successCount: 1,
+        failureCount: 1,
+        failingChecks: [
+          {
+            name: 'Policy/Presence',
+            conclusion: 'failure',
+            htmlUrl: 'https://github.com/private-org/service/runs/1',
+          },
+        ],
+      },
+    });
+    const buckets = createAttentionBuckets([pullRequest]);
+    const signals = createAttentionSignals({ pullRequest, reason: '' });
+
+    expect(inBucket(buckets, 'Needs review', 46)).toBe(true);
+    expect(inBucket(buckets, 'CI failing', 46)).toBe(false);
+    expect(signals.map((signal) => signal.label)).toContain('presence policy');
+    expect(signals.map((signal) => signal.label)).not.toContain('CI failing · 1 check');
+  });
+
+  it('keeps configured non-blocking check failures pending when other checks are still running', () => {
+    const pullRequest = pr({
+      number: 48,
+      repository: 'private-org/service',
+      author: 'teammate_corp',
+      review: { state: 'approved', approvalCount: 1 },
+      checks: {
+        state: 'failure',
+        totalCount: 3,
+        successCount: 1,
+        failureCount: 1,
+        pendingCount: 1,
+        failingChecks: [
+          {
+            name: 'Policy/Presence',
+            conclusion: 'failure',
+            htmlUrl: 'https://github.com/private-org/service/runs/1',
+          },
+        ],
+      },
+    });
+    const signals = createAttentionSignals({ pullRequest, reason: '' });
+
+    expect(inBucket(createAttentionBuckets([pullRequest]), 'Ready to merge', 48)).toBe(false);
+    expect(visibleCheckState(pullRequest)).toBe('pending');
+    expect(signals.map((signal) => signal.label)).toContain('wait for CI');
+    expect(signals.map((signal) => signal.label)).toContain('presence policy');
+    expect(signals.map((signal) => signal.label)).not.toContain('merge');
+  });
+
+  it('keeps configured aggregate failures loading until check details identify a non-blocking check', () => {
+    const pullRequest = pr({
+      number: 47,
+      repository: 'private-org/service',
+      author: 'teammate_corp',
+      review: { state: 'approved', approvalCount: 1 },
+      checks: {
+        state: 'failure',
+        totalCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        failingChecks: [],
+      },
+    });
+    const buckets = createAttentionBuckets([pullRequest]);
+    const labels = createAttentionSignals({ pullRequest, reason: '' }).map((signal) => signal.label);
+
+    expect(visibleCheckState(pullRequest)).toBe('unknown');
+    expect(inBucket(buckets, 'Ready to merge', 47)).toBe(false);
+    expect(inBucket(buckets, 'CI failing', 47)).toBe(false);
+    expect(labels).toContain('wait for CI');
+    expect(labels).not.toContain('CI failing');
+    expect(labels).not.toContain('presence policy');
+    expect(labels).not.toContain('merge');
+  });
+
+  it('keeps other failures in the CI failing lane', () => {
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 48,
+        repository: 'private-org/service',
+        author: 'teammate_corp',
+        checks: {
+          state: 'failure',
+          totalCount: 2,
+          successCount: 1,
+          failureCount: 1,
+          failingChecks: [
+            {
+              name: 'Build',
+              conclusion: 'failure',
+              htmlUrl: 'https://github.com/private-org/service/runs/2',
+            },
+          ],
+        },
+      }),
+    ]);
+
+    expect(inBucket(buckets, 'CI failing', 48)).toBe(true);
+    expect(inBucket(buckets, 'Needs review', 48)).toBe(true);
+  });
+
+  it('routes a changes-requested PR to Author response', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 40, review: { state: 'changes_requested', changesRequestedCount: 1 } }),
+    ]);
+
+    expect(inBucket(buckets, 'Author response', 40)).toBe(true);
+    expect(inBucket(buckets, 'Re-review needed', 40)).toBe(false);
+  });
+
+  it('routes a changes-requested PR with a later commit to Author response and Re-review needed', () => {
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 41,
+        lastCommitAt: '2026-01-02T00:00:00Z',
+        review: {
+          state: 'changes_requested',
+          changesRequestedCount: 1,
+          lastReviewedAt: '2026-01-01T00:00:00Z',
+        },
+      }),
+    ]);
+
+    expect(inBucket(buckets, 'Author response', 41)).toBe(true);
+    expect(inBucket(buckets, 'Re-review needed', 41)).toBe(true);
+  });
+
   it('hides a NO-MERGE-labelled PR from every lane', () => {
     const buckets = createAttentionBuckets([
       pr({ number: 5, labels: ['NO-MERGE'], review: { state: 'approved', approvalCount: 1 } }),
     ]);
     expect(buckets.every((bucket) => bucket.items.every((item) => item.pullRequest.number !== 5))).toBe(true);
+  });
+
+  it('adds a My draft PRs bucket for draft PRs authored by the signed-in user', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 30, author: 'octocat', draft: true }),
+      pr({ number: 31, author: 'hubot', draft: true }),
+      pr({ number: 32, author: 'octocat' }),
+      pr({ number: 34, author: 'octocat', draft: true, labels: ['NO-MERGE'] }),
+    ], 'OctoCat');
+
+    const myDrafts = buckets.find((bucket) => bucket.label === 'My draft PRs');
+
+    expect(myDrafts?.items.map((item) => item.pullRequest.number)).toEqual([30, 34]);
+    expect(inBucket(buckets, 'Draft', 30)).toBe(true);
+    expect(inBucket(buckets, 'Draft', 31)).toBe(true);
+    expect(inBucket(buckets, 'Draft', 34)).toBe(false);
+  });
+
+  it('omits My draft PRs when there is no signed-in user', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 33, author: 'octocat', draft: true }),
+    ]);
+
+    expect(buckets.some((bucket) => bucket.label === 'My draft PRs')).toBe(false);
   });
 
   it('keeps quiet recent core-team PRs in Needs review instead of Stalled', () => {
@@ -153,6 +529,88 @@ describe('createAttentionBuckets lane routing', () => {
 
     expect(inBucket(buckets, 'Needs review', 6)).toBe(true);
     expect(inBucket(buckets, 'Stalled', 6)).toBe(true);
+  });
+
+  it('routes aged-out community PRs to a separate bucket', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 35,
+        author: 'external-contributor',
+        createdAt: '2026-06-01T20:28:55Z',
+        updatedAt: '2026-06-08T23:06:18Z',
+      }),
+    ]);
+
+    expect(inBucket(buckets, 'Aged out community', 35)).toBe(true);
+    expect(inBucket(buckets, 'Community', 35)).toBe(false);
+    expect(inBucket(buckets, 'Stalled', 35)).toBe(true);
+  });
+
+  it('keeps recently active community PRs out of review buckets', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 36,
+        author: 'external-contributor',
+        createdAt: '2026-06-01T20:28:55Z',
+        updatedAt: '2026-06-22T23:06:18Z',
+      }),
+    ]);
+
+    expect(buckets.every((bucket) => bucket.items.every((item) => item.pullRequest.number !== 36))).toBe(true);
+    expect(inBucket(buckets, 'Aged out community', 36)).toBe(false);
+  });
+
+  it('routes karolz-ms PRs as core-team review work', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 38, author: 'karolz-ms' }),
+    ]);
+
+    expect(inBucket(buckets, 'Needs review', 38)).toBe(true);
+    expect(inBucket(buckets, 'Community', 38)).toBe(false);
+  });
+
+  it('routes dotnet-maestro PRs to automation', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 39, author: 'dotnet-maestro' }),
+    ]);
+
+    expect(inBucket(buckets, 'Bots / automation', 39)).toBe(true);
+    expect(inBucket(buckets, 'Community', 39)).toBe(false);
+    expect(inBucket(buckets, 'Needs review', 39)).toBe(false);
+  });
+
+  it('routes copilot-swe-agent PRs to automation', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 40, author: 'copilot-swe-agent' }),
+    ]);
+
+    expect(inBucket(buckets, 'Bots / automation', 40)).toBe(true);
+    expect(inBucket(buckets, 'Community', 40)).toBe(false);
+    expect(inBucket(buckets, 'Needs review', 40)).toBe(false);
+  });
+
+  it('keeps high-priority signal buckets for recently active community PRs', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 37,
+        author: 'external-contributor',
+        labels: ['regression'],
+        createdAt: '2026-06-01T20:28:55Z',
+        updatedAt: '2026-06-22T23:06:18Z',
+      }),
+    ]);
+
+    expect(inBucket(buckets, 'Regression', 37)).toBe(true);
+    expect(inBucket(buckets, 'Aged out community', 37)).toBe(false);
   });
 
   it('keeps old ready-to-merge PRs in focus when they were approved recently', () => {
@@ -254,5 +712,31 @@ describe('createAttentionSignals review progress', () => {
       .map((signal) => signal.label);
 
     expect(limitedLabels).toContain('2 approvals');
+  });
+});
+
+describe('createFocusIssueBuckets personal lanes', () => {
+  it('adds an afscrome finds bucket for issues filed by afscrome', () => {
+    const buckets = createFocusIssueBuckets([
+      issue({ number: 1, author: 'reporter' }),
+      issue({ number: 2, author: 'afscrome' }),
+      issue({ number: 3, author: 'Afscrome' }),
+    ]);
+
+    const afscromeFinds = buckets.find((bucket) => bucket.label === 'afscrome finds');
+
+    expect(afscromeFinds?.issues.map((item) => item.number)).toEqual([2, 3]);
+  });
+
+  it('adds a My issues bucket for issues assigned to the signed-in user', () => {
+    const buckets = createFocusIssueBuckets([
+      issue({ number: 1, assignees: ['other'] }),
+      issue({ number: 2, assignees: ['davidfowl'] }),
+      issue({ number: 3, assignees: ['DavidFowl'] }),
+    ], 'davidfowl');
+
+    const myIssues = buckets.find((bucket) => bucket.label === 'My issues');
+
+    expect(myIssues?.issues.map((item) => item.number)).toEqual([2, 3]);
   });
 });

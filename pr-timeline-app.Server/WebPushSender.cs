@@ -40,6 +40,10 @@ sealed class WebPushSender(
         try
         {
             await pushClient.RequestPushMessageDeliveryAsync(pushSubscription, message, cancellationToken);
+            logger.LogDebug(
+                "Web push delivery completed. outcome={Outcome} status={Status}.",
+                PushDeliveryOutcome.Sent,
+                (int)HttpStatusCode.Created);
             return new PushDeliveryResult(PushDeliveryOutcome.Sent, (int)HttpStatusCode.Created);
         }
         catch (PushServiceClientException ex)
@@ -49,11 +53,18 @@ sealed class WebPushSender(
             // 404/410 mean the subscription no longer exists; the caller prunes it.
             if (ex.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Gone)
             {
+                logger.LogInformation(
+                    "Web push delivery completed. outcome={Outcome} status={Status}.",
+                    PushDeliveryOutcome.Expired,
+                    status);
                 return new PushDeliveryResult(PushDeliveryOutcome.Expired, status);
             }
 
             // Never log the endpoint or keys — only the push service status.
-            logger.LogWarning("Web push delivery failed with status {Status}.", status);
+            logger.LogWarning(
+                "Web push delivery completed. outcome={Outcome} status={Status}.",
+                PushDeliveryOutcome.Failed,
+                status);
             return new PushDeliveryResult(PushDeliveryOutcome.Failed, status);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -67,7 +78,10 @@ sealed class WebPushSender(
             // transient network faults throw HttpRequestException/timeouts. Treat any of these
             // as a single failed delivery so one bad subscription can't abort the whole cycle.
             // Log only the exception type — never the endpoint or keys.
-            logger.LogWarning("Web push delivery threw {ExceptionType}.", ex.GetType().Name);
+            logger.LogWarning(
+                "Web push delivery completed. outcome={Outcome} exceptionType={ExceptionType}.",
+                PushDeliveryOutcome.Failed,
+                ex.GetType().Name);
             return new PushDeliveryResult(PushDeliveryOutcome.Failed, null);
         }
     }

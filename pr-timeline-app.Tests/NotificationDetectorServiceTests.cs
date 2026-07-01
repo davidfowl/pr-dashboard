@@ -153,12 +153,12 @@ public sealed class NotificationDetectorServiceTests
     private static NotificationDetectorService CreateService(
         INotificationStore store,
         IPushSender sender,
-        TimeProvider time) =>
+        TimeProvider time,
+        DashboardOptions? dashboardOptions = null) =>
         new(
             scopeFactory: null!,
             store,
             sender,
-            Options.Create(new GitHubCacheWarmupOptions()),
             Options.Create(new WebPushOptions
             {
                 Enabled = true,
@@ -166,14 +166,51 @@ public sealed class NotificationDetectorServiceTests
                 PrivateKey = "private",
                 Subject = "mailto:test@example.com"
             }),
+            Options.Create(dashboardOptions ?? new DashboardOptions
+            {
+                DoNotMergeLabels = ["needs-author-action", "no-merge"]
+            }),
             time,
             NullLogger<NotificationDetectorService>.Instance);
 
     private static PushSubscriptionRecord Subscription(string endpoint = "https://push.example/abc") =>
         new() { Endpoint = endpoint, P256dh = "p", Auth = "a" };
 
-    private static DetectedReviewRequest Candidate(long userId, string repo, int number) =>
-        new(userId, repo, number, $"PR {number}", ReviewRequestDetection.DeepLink(repo, number));
+    private static DetectedNotification Candidate(long userId, string repo, int number) =>
+        new(
+            userId,
+            repo,
+            number,
+            ReviewRequestDetection.EventKey(repo, number),
+            ReviewRequestDetection.RequestedFingerprint,
+            NotificationPayloads.ReviewRequested(repo, number, $"PR {number}", ReviewRequestDetection.DeepLink(repo, number)));
+
+    private static DetectedNotification ReadyCandidate(long userId, string repo, int number) =>
+        new(
+            userId,
+            repo,
+            number,
+            ReadyToMergeDetection.EventKey(repo, number),
+            ReadyToMergeDetection.ReadyFingerprint,
+            NotificationPayloads.ReadyToMerge(ReadyToMergeRole.Author, repo, number, $"PR {number}", ReadyToMergeDetection.DeepLink(repo, number)));
+
+    [Fact]
+    public void ResolveRepositoriesUsesDashboardRepositoriesAndShipWeekRepositories()
+    {
+        var service = CreateService(
+            new InMemoryNotificationStore(),
+            new FakePushSender(),
+            new TestTimeProvider(),
+            new DashboardOptions
+            {
+                Repositories = [" o/r ", "duplicate/repo", "bad repo"],
+                ShipWeekRepositories = [" duplicate/repo ", "ship/repo", "O/R"]
+            });
+
+        var repositories = service.ResolveRepositories().Select(repository => repository.ToString()).ToArray();
+
+        Assert.Equal(["o/r", "duplicate/repo", "ship/repo"], repositories);
+    }
 
     [Fact]
     public async Task NewReviewRequestSendsOnceAndDedupesOnRepeat()
@@ -198,6 +235,63 @@ public sealed class NotificationDetectorServiceTests
 
         var state = await store.GetStateAsync(1, TestContext.Current.CancellationToken);
         Assert.True(state.State.Events.ContainsKey(ReviewRequestDetection.EventKey("o/r", 5)));
+    }
+
+    [Fact]
+    public async Task ReadyToMergeSendsOnceAndPrunesOnReEntry()
+    {
+        var store = new InMemoryNotificationStore();
+        var sender = new FakePushSender();
+        var service = CreateService(store, sender, new TestTimeProvider());
+
+        var subs = new[] { Subscription() };
+        await store.UpsertSubscriptionAsync(1, subs[0], TestContext.Current.CancellationToken);
+        var scanned = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "o/r" };
+
+        await service.ProcessUserAsync(1, subs, [ReadyCandidate(1, "o/r", 5)], scanned, new DetectorCycleStats(), TestContext.Current.CancellationToken);
+        Assert.Single(sender.Sent);
+
+        // Still ready next cycle → no duplicate.
+        await service.ProcessUserAsync(1, subs, [ReadyCandidate(1, "o/r", 5)], scanned, new DetectorCycleStats(), TestContext.Current.CancellationToken);
+        Assert.Single(sender.Sent);
+
+        var state = await store.GetStateAsync(1, TestContext.Current.CancellationToken);
+        Assert.True(state.State.Events.ContainsKey(ReadyToMergeDetection.EventKey("o/r", 5)));
+
+        // No longer ready (repo scanned, candidate absent) → pruned, then re-entry notifies again.
+        await service.ProcessUserAsync(1, subs, [], scanned, new DetectorCycleStats(), TestContext.Current.CancellationToken);
+        Assert.Empty((await store.GetStateAsync(1, TestContext.Current.CancellationToken)).State.Events);
+        await service.ProcessUserAsync(1, subs, [ReadyCandidate(1, "o/r", 5)], scanned, new DetectorCycleStats(), TestContext.Current.CancellationToken);
+        Assert.Equal(2, sender.Sent.Count);
+    }
+
+    [Fact]
+    public async Task BothTriggersCoexistAndPruneIndependently()
+    {
+        var store = new InMemoryNotificationStore();
+        var sender = new FakePushSender();
+        var service = CreateService(store, sender, new TestTimeProvider());
+
+        var subs = new[] { Subscription() };
+        await store.UpsertSubscriptionAsync(1, subs[0], TestContext.Current.CancellationToken);
+        var scanned = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "o/r" };
+
+        // A review_requested and a ready_to_merge event for the same user/PR are independent keys.
+        await service.ProcessUserAsync(
+            1,
+            subs,
+            [Candidate(1, "o/r", 5), ReadyCandidate(1, "o/r", 5)],
+            scanned,
+            new DetectorCycleStats(),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(2, sender.Sent.Count);
+
+        // Next cycle only the ready trigger still applies → the review entry is pruned, ready stays.
+        await service.ProcessUserAsync(1, subs, [ReadyCandidate(1, "o/r", 5)], scanned, new DetectorCycleStats(), TestContext.Current.CancellationToken);
+        var state = await store.GetStateAsync(1, TestContext.Current.CancellationToken);
+        Assert.False(state.State.Events.ContainsKey(ReviewRequestDetection.EventKey("o/r", 5)));
+        Assert.True(state.State.Events.ContainsKey(ReadyToMergeDetection.EventKey("o/r", 5)));
+        Assert.Equal(2, sender.Sent.Count);
     }
 
     [Fact]

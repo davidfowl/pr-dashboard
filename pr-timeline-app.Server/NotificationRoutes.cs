@@ -2,8 +2,13 @@ using Microsoft.Extensions.Options;
 
 public static class NotificationRoutes
 {
+    private const string LoggerCategoryName = nameof(NotificationRoutes);
+
     public static IEndpointRouteBuilder MapNotificationRoutes(this IEndpointRouteBuilder endpoints)
     {
+        var logger = endpoints.ServiceProvider
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger(LoggerCategoryName);
         var api = endpoints.MapGroup("/api/notifications");
 
         // The VAPID public key is public by design. 404 signals "push is not available here"
@@ -11,6 +16,11 @@ public static class NotificationRoutes
         api.MapGet("vapid-public-key", (IOptions<WebPushOptions> options) =>
         {
             var value = options.Value;
+            logger.LogDebug(
+                "Notification public key requested. WebPushConfigured={WebPushConfigured}, PublicKeyPresent={WebPushPublicKeyPresent}, KeyIdPresent={WebPushKeyIdPresent}.",
+                value.IsConfigured,
+                !string.IsNullOrWhiteSpace(value.PublicKey),
+                !string.IsNullOrWhiteSpace(value.EffectiveKeyId));
             return value.IsConfigured
                 ? Results.Ok(new VapidPublicKeyResponse(value.PublicKey!, value.EffectiveKeyId))
                 : Results.NotFound();
@@ -25,12 +35,13 @@ public static class NotificationRoutes
             var user = await resolver.ResolveAsync(cancellationToken);
             if (user is null)
             {
+                logger.LogWarning("Rejected notification preferences request because no GitHub user could be resolved.");
                 return Results.Unauthorized();
             }
 
             await UpsertProfileAsync(store, user, cancellationToken);
             var preferences = await store.GetPreferencesAsync(user.Id, cancellationToken);
-            return Results.Ok(new NotificationPreferencesDto(preferences.ReviewRequested));
+            return Results.Ok(new NotificationPreferencesDto(preferences.ReviewRequested, preferences.ReadyToMerge));
         });
 
         api.MapPut("preferences", async (
@@ -41,28 +52,31 @@ public static class NotificationRoutes
         {
             if (!IsBrowserMutationRequest(context))
             {
+                logger.LogWarning("Rejected notification preferences update because the request was not a trusted browser mutation.");
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
             var user = await resolver.ResolveAsync(cancellationToken);
             if (user is null)
             {
+                logger.LogWarning("Rejected notification preferences update because no GitHub user could be resolved.");
                 return Results.Unauthorized();
             }
 
             var body = await ReadJsonAsync<NotificationPreferencesDto>(context, cancellationToken);
             if (body is null)
             {
+                logger.LogWarning("Rejected notification preferences update because the JSON body could not be parsed.");
                 return Results.BadRequest();
             }
 
             await UpsertProfileAsync(store, user, cancellationToken);
             await store.SavePreferencesAsync(
                 user.Id,
-                new NotificationPreferences { ReviewRequested = body.ReviewRequested },
+                new NotificationPreferences { ReviewRequested = body.ReviewRequested, ReadyToMerge = body.ReadyToMerge },
                 cancellationToken);
 
-            return Results.Ok(new NotificationPreferencesDto(body.ReviewRequested));
+            return Results.Ok(new NotificationPreferencesDto(body.ReviewRequested, body.ReadyToMerge));
         });
 
         api.MapPost("subscribe", async (
@@ -74,18 +88,23 @@ public static class NotificationRoutes
         {
             if (!IsBrowserMutationRequest(context))
             {
+                logger.LogWarning("Rejected notification subscribe request because the request was not a trusted browser mutation.");
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
             var user = await resolver.ResolveAsync(cancellationToken);
             if (user is null)
             {
+                logger.LogWarning("Rejected notification subscribe request because no GitHub user could be resolved.");
                 return Results.Unauthorized();
             }
 
             var body = await ReadJsonAsync<PushSubscriptionDto>(context, cancellationToken);
             if (!TryCreateSubscription(body, options.Value, out var subscription, out var error))
             {
+                logger.LogWarning(
+                    "Rejected notification subscribe request because the subscription was invalid. ValidationFields={ValidationFields}.",
+                    error.Keys.ToArray());
                 return Results.ValidationProblem(error);
             }
 
@@ -96,6 +115,10 @@ public static class NotificationRoutes
             // shared device stops receiving pushes that would land on this browser.
             await store.RemoveEndpointFromOtherUsersAsync(user.Id, subscription.Endpoint, cancellationToken);
 
+            logger.LogInformation(
+                "Notification subscription saved. UserId={UserId}, EndpointHost={EndpointHost}.",
+                user.Id,
+                new Uri(subscription.Endpoint).Host);
             return Results.Ok(new { subscribed = true });
         });
 
@@ -107,22 +130,29 @@ public static class NotificationRoutes
         {
             if (!IsBrowserMutationRequest(context))
             {
+                logger.LogWarning("Rejected notification unsubscribe request because the request was not a trusted browser mutation.");
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
             var user = await resolver.ResolveAsync(cancellationToken);
             if (user is null)
             {
+                logger.LogWarning("Rejected notification unsubscribe request because no GitHub user could be resolved.");
                 return Results.Unauthorized();
             }
 
             var body = await ReadJsonAsync<UnsubscribeRequest>(context, cancellationToken);
             if (string.IsNullOrWhiteSpace(body?.Endpoint))
             {
+                logger.LogWarning("Rejected notification unsubscribe request because the endpoint was missing.");
                 return Results.BadRequest();
             }
 
             var removed = await store.RemoveSubscriptionAsync(user.Id, body.Endpoint, cancellationToken);
+            logger.LogInformation(
+                "Notification subscription removal requested. UserId={UserId}, Removed={Removed}.",
+                user.Id,
+                removed);
             return Results.Ok(new { removed });
         });
 
@@ -136,59 +166,145 @@ public static class NotificationRoutes
         {
             if (!IsBrowserMutationRequest(context))
             {
+                logger.LogWarning("Rejected notification test request because the request was not a trusted browser mutation.");
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
             var user = await resolver.ResolveAsync(cancellationToken);
             if (user is null)
             {
+                logger.LogWarning("Rejected notification test request because no GitHub user could be resolved.");
                 return Results.Unauthorized();
             }
 
-            if (!sender.IsEnabled)
-            {
-                return Results.Problem(
-                    title: "Push notifications are not configured",
-                    detail: "Set WebPush:PublicKey, WebPush:PrivateKey and WebPush:Subject to enable push.",
-                    statusCode: StatusCodes.Status409Conflict);
-            }
-
-            if (!rateLimiter.TryAcquire(user.Id, out var retryAfter))
-            {
-                context.Response.Headers.RetryAfter =
-                    ((int)Math.Ceiling(retryAfter.TotalSeconds)).ToString(System.Globalization.CultureInfo.InvariantCulture);
-                return Results.StatusCode(StatusCodes.Status429TooManyRequests);
-            }
-
-            // The payload is fixed server-side; the caller cannot influence title/body/url.
-            var payload = NotificationPayloads.Test();
-            var subscriptions = await store.GetSubscriptionsAsync(user.Id, cancellationToken);
-
-            var sent = 0;
-            var failed = 0;
-            var expired = 0;
-            foreach (var subscription in subscriptions)
-            {
-                var result = await sender.SendAsync(subscription, payload, cancellationToken);
-                switch (result.Outcome)
-                {
-                    case PushDeliveryOutcome.Sent:
-                        sent++;
-                        break;
-                    case PushDeliveryOutcome.Expired:
-                        expired++;
-                        await store.RemoveSubscriptionAsync(user.Id, subscription.Endpoint, cancellationToken);
-                        break;
-                    default:
-                        failed++;
-                        break;
-                }
-            }
-
-            return Results.Ok(new TestNotificationResponse(sent, failed, expired));
+            return await SendTestNotificationForUserAsync(
+                context,
+                user,
+                store,
+                sender,
+                rateLimiter,
+                logger,
+                cancellationToken);
         });
 
         return endpoints;
+    }
+
+    internal static async Task<IResult> SendTestNotificationForUserAsync(
+        HttpContext context,
+        NotificationUser user,
+        INotificationStore store,
+        IPushSender sender,
+        NotificationTestRateLimiter rateLimiter,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        logger.LogInformation(
+            "Notification test send invoked. userId={UserId} userLogin={UserLogin}.",
+            user.Id,
+            user.Login);
+
+        if (!sender.IsEnabled)
+        {
+            LogNotificationTestCompleted(logger, user, "disabled", null, 0, 0, 0);
+            return Results.Problem(
+                title: "Push notifications are not configured",
+                detail: "Set WebPush:PublicKey, WebPush:PrivateKey and WebPush:Subject to enable push.",
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
+        var subscriptions = await store.GetSubscriptionsAsync(user.Id, cancellationToken);
+
+        if (!rateLimiter.TryAcquire(user.Id, out var retryAfter))
+        {
+            var retryAfterSeconds = (int)Math.Ceiling(retryAfter.TotalSeconds);
+            context.Response.Headers.RetryAfter =
+                retryAfterSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            LogNotificationTestCompleted(logger, user, "rate_limited", subscriptions.Count, 0, 0, 0, retryAfterSeconds);
+            return Results.StatusCode(StatusCodes.Status429TooManyRequests);
+        }
+
+        // The payload is fixed server-side; the caller cannot influence title/body/url.
+        var payload = NotificationPayloads.Test();
+
+        var sent = 0;
+        var failed = 0;
+        var expired = 0;
+        foreach (var subscription in subscriptions)
+        {
+            var result = await sender.SendAsync(subscription, payload, cancellationToken);
+            switch (result.Outcome)
+            {
+                case PushDeliveryOutcome.Sent:
+                    sent++;
+                    break;
+                case PushDeliveryOutcome.Expired:
+                    expired++;
+                    await store.RemoveSubscriptionAsync(user.Id, subscription.Endpoint, cancellationToken);
+                    break;
+                default:
+                    failed++;
+                    break;
+            }
+        }
+
+        LogNotificationTestCompleted(
+            logger,
+            user,
+            GetNotificationTestOutcome(subscriptions.Count, sent, failed, expired),
+            subscriptions.Count,
+            sent,
+            failed,
+            expired);
+
+        return Results.Ok(new TestNotificationResponse(sent, failed, expired));
+    }
+
+    private static string GetNotificationTestOutcome(int subscriptionCount, int sent, int failed, int expired)
+    {
+        if (subscriptionCount == 0)
+        {
+            return "no_subscriptions";
+        }
+
+        if (sent > 0 && failed == 0 && expired == 0)
+        {
+            return "sent";
+        }
+
+        if (sent > 0)
+        {
+            return "partial_success";
+        }
+
+        if (failed > 0)
+        {
+            return "failed";
+        }
+
+        return expired > 0 ? "expired" : "no_subscriptions";
+    }
+
+    private static void LogNotificationTestCompleted(
+        ILogger logger,
+        NotificationUser user,
+        string outcome,
+        int? subscriptionCount,
+        int sent,
+        int failed,
+        int expired,
+        int? retryAfterSeconds = null)
+    {
+        logger.LogInformation(
+            "Notification test send completed. outcome={Outcome} userId={UserId} userLogin={UserLogin} subscriptionCount={SubscriptionCount} sent={Sent} failed={Failed} expired={Expired} retryAfterSeconds={RetryAfterSeconds}.",
+            outcome,
+            user.Id,
+            user.Login,
+            subscriptionCount,
+            sent,
+            failed,
+            expired,
+            retryAfterSeconds);
     }
 
     private static async Task UpsertProfileAsync(

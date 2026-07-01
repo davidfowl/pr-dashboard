@@ -21,7 +21,6 @@ import ShipWeekSection from './ShipWeekSection';
 
 type DashboardViewProps = {
   dashboardMode: DashboardMode;
-  repo: string;
   state: PullState;
   pullsLoading: boolean;
   pullRequests: PullRequestSummary[];
@@ -37,8 +36,8 @@ type DashboardViewProps = {
   shipWeekLoading: boolean;
   shipWeekSectionLoading: ShipWeekLoadingState;
   shipWeekError: string | null;
-  shipWeekRepo: string;
   shipWeekMilestone: string;
+  currentRelease: string;
   shipWeekReleaseBranch: string;
   shipWeekSnapshotStatus: string | null;
   shipWeekSnapshotError: string | null;
@@ -53,11 +52,9 @@ type DashboardViewProps = {
   lastUpdatedAt: string | null;
   autoRefreshIntervalMs: number;
   login?: string;
-  onRepoChange: (value: string) => void;
   onStateChange: (value: PullState) => void;
   onSubmit: FormEventHandler<HTMLFormElement>;
   onRefresh: () => void;
-  onShipWeekRepoChange: (value: string) => void;
   onShipWeekMilestoneChange: (value: string) => void;
   onShipWeekReleaseBranchChange: (value: string) => void;
   onShipWeekSubmit: FormEventHandler<HTMLFormElement>;
@@ -71,7 +68,6 @@ type DashboardViewProps = {
 
 function DashboardView({
   dashboardMode,
-  repo,
   state,
   pullsLoading,
   pullRequests,
@@ -87,8 +83,8 @@ function DashboardView({
   shipWeekLoading,
   shipWeekSectionLoading,
   shipWeekError,
-  shipWeekRepo,
   shipWeekMilestone,
+  currentRelease,
   shipWeekReleaseBranch,
   shipWeekSnapshotStatus,
   shipWeekSnapshotError,
@@ -103,11 +99,9 @@ function DashboardView({
   lastUpdatedAt,
   autoRefreshIntervalMs,
   login,
-  onRepoChange,
   onStateChange,
   onSubmit,
   onRefresh,
-  onShipWeekRepoChange,
   onShipWeekMilestoneChange,
   onShipWeekReleaseBranchChange,
   onShipWeekSubmit,
@@ -209,6 +203,7 @@ function DashboardView({
           ) : (pullsLoading || pullRequests.length > 0) && (
             <QueueOverview
               counts={developerPullRequestCounts}
+              pullRequests={pullRequests}
               attentionBuckets={attentionBuckets}
               forMeItems={forMeItems}
               loading={visiblePullsLoading}
@@ -225,7 +220,6 @@ function DashboardView({
 
       <DashboardFilters
         dashboardMode={dashboardMode}
-        repo={repo}
         state={state}
         pullsLoading={visiblePullsLoading}
         pullRequests={pullRequests}
@@ -233,14 +227,12 @@ function DashboardView({
         issuesLoading={visibleIssuesLoading}
         issues={issues}
         issuesError={issuesError}
-        shipWeekRepo={shipWeekRepo}
         shipWeekMilestone={shipWeekMilestone}
+        currentRelease={currentRelease}
         shipWeekReleaseBranch={shipWeekReleaseBranch}
         shipWeekLoading={shipWeekLoading}
-        onRepoChange={onRepoChange}
         onStateChange={onStateChange}
         onSubmit={onSubmit}
-        onShipWeekRepoChange={onShipWeekRepoChange}
         onShipWeekMilestoneChange={onShipWeekMilestoneChange}
         onShipWeekReleaseBranchChange={onShipWeekReleaseBranchChange}
         onShipWeekSubmit={onShipWeekSubmit}

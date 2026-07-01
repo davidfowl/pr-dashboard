@@ -13,8 +13,8 @@ sealed class NotificationDetectorService(
     IServiceScopeFactory scopeFactory,
     INotificationStore store,
     IPushSender sender,
-    IOptions<GitHubCacheWarmupOptions> warmupOptions,
     IOptions<WebPushOptions> webPushOptions,
+    IOptions<DashboardOptions> dashboardOptions,
     TimeProvider timeProvider,
     ILogger<NotificationDetectorService> logger) : BackgroundService
 {
@@ -79,9 +79,10 @@ sealed class NotificationDetectorService(
             return stats;
         }
 
-        // Build the set of users who can actually receive a review_requested push: opted in
-        // (have a profile), have the trigger enabled, and have at least one subscription.
-        var subscribedUserIds = new HashSet<long>();
+        // Build the per-trigger sets of users who can actually receive a push: opted in (have a
+        // profile), have at least one subscription, and have that specific trigger enabled.
+        var reviewRequestedUserIds = new HashSet<long>();
+        var readyToMergeUserIds = new HashSet<long>();
         var subscriptionsByUser = new Dictionary<long, IReadOnlyList<PushSubscriptionRecord>>();
         foreach (var profile in await store.ListUserProfilesAsync(cancellationToken))
         {
@@ -91,7 +92,7 @@ sealed class NotificationDetectorService(
             }
 
             var preferences = await store.GetPreferencesAsync(profile.Id, cancellationToken);
-            if (!preferences.ReviewRequested)
+            if (!preferences.ReviewRequested && !preferences.ReadyToMerge)
             {
                 continue;
             }
@@ -102,19 +103,31 @@ sealed class NotificationDetectorService(
                 continue;
             }
 
-            subscribedUserIds.Add(profile.Id);
             subscriptionsByUser[profile.Id] = subscriptions;
+            if (preferences.ReviewRequested)
+            {
+                reviewRequestedUserIds.Add(profile.Id);
+            }
+
+            if (preferences.ReadyToMerge)
+            {
+                readyToMergeUserIds.Add(profile.Id);
+            }
+
             stats.Subscribers++;
         }
 
-        if (subscribedUserIds.Count == 0)
+        if (subscriptionsByUser.Count == 0)
         {
             return stats;
         }
 
         // Scan each allowlist repo from the (warmed) public cache and collect candidates per
         // user. Track which repos were scanned successfully so we only prune state for those.
-        var candidatesByUser = new Dictionary<long, List<DetectedReviewRequest>>();
+        var now = timeProvider.GetUtcNow();
+        var doNotMergeLabels = ResolveDoNotMergeLabels();
+        var nonBlockingCheckFailureRules = dashboardOptions.Value.NonBlockingCheckFailureRules;
+        var candidatesByUser = new Dictionary<long, List<DetectedNotification>>();
         var scannedRepositories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var repository in repositories)
         {
@@ -140,15 +153,32 @@ sealed class NotificationDetectorService(
             scannedRepositories.Add(repository.ToString());
             stats.PullRequestsScanned += pullRequests.Count;
 
-            foreach (var candidate in ReviewRequestDetection.DetectForRepository(repository.ToString(), pullRequests, subscribedUserIds))
+            foreach (var candidate in ReviewRequestDetection.DetectForRepository(repository.ToString(), pullRequests, reviewRequestedUserIds))
             {
-                if (!candidatesByUser.TryGetValue(candidate.UserId, out var list))
-                {
-                    list = [];
-                    candidatesByUser[candidate.UserId] = list;
-                }
+                AddCandidate(candidatesByUser, new DetectedNotification(
+                    candidate.UserId,
+                    candidate.Repository,
+                    candidate.Number,
+                    ReviewRequestDetection.EventKey(candidate.Repository, candidate.Number),
+                    ReviewRequestDetection.RequestedFingerprint,
+                    NotificationPayloads.ReviewRequested(candidate.Repository, candidate.Number, candidate.Title, candidate.Url)));
+            }
 
-                list.Add(candidate);
+            foreach (var candidate in ReadyToMergeDetection.DetectForRepository(
+                repository.ToString(),
+                pullRequests,
+                readyToMergeUserIds,
+                now,
+                doNotMergeLabels,
+                nonBlockingCheckFailureRules))
+            {
+                AddCandidate(candidatesByUser, new DetectedNotification(
+                    candidate.UserId,
+                    candidate.Repository,
+                    candidate.Number,
+                    ReadyToMergeDetection.EventKey(candidate.Repository, candidate.Number),
+                    ReadyToMergeDetection.ReadyFingerprint,
+                    NotificationPayloads.ReadyToMerge(candidate.Role, candidate.Repository, candidate.Number, candidate.Title, candidate.Url)));
             }
         }
 
@@ -177,43 +207,37 @@ sealed class NotificationDetectorService(
     internal async Task ProcessUserAsync(
         long userId,
         IReadOnlyList<PushSubscriptionRecord> subscriptions,
-        IReadOnlyList<DetectedReviewRequest> candidates,
+        IReadOnlyList<DetectedNotification> candidates,
         IReadOnlySet<string> scannedRepositories,
         DetectorCycleStats stats,
         CancellationToken cancellationToken)
     {
         // Distinct by event key in case the same PR surfaces twice in a cycle.
         var distinctCandidates = candidates
-            .GroupBy(candidate => ReviewRequestDetection.EventKey(candidate.Repository, candidate.Number), StringComparer.Ordinal)
+            .GroupBy(candidate => candidate.EventKey, StringComparer.Ordinal)
             .Select(group => group.First())
             .ToList();
 
         var currentKeys = distinctCandidates
-            .Select(candidate => ReviewRequestDetection.EventKey(candidate.Repository, candidate.Number))
+            .Select(candidate => candidate.EventKey)
             .ToHashSet(StringComparer.Ordinal);
 
         // Read current state to decide which candidates are genuinely new (not yet notified).
         var existing = (await store.GetStateAsync(userId, cancellationToken)).State.Events;
         var existingKeys = existing.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var newCandidates = distinctCandidates
-            .Where(candidate => !existingKeys.Contains(ReviewRequestDetection.EventKey(candidate.Repository, candidate.Number)))
+            .Where(candidate => !existingKeys.Contains(candidate.EventKey))
             .ToList();
 
         // Send first, then persist state only for events that actually delivered, so a transient
-        // push failure doesn't permanently suppress the notification.
-        var sentKeys = new HashSet<string>(StringComparer.Ordinal);
+        // push failure doesn't permanently suppress the notification. eventKey -> fingerprint.
+        var sent = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var candidate in newCandidates)
         {
             stats.NewEvents++;
-            var payload = NotificationPayloads.ReviewRequested(
-                candidate.Repository,
-                candidate.Number,
-                candidate.Title,
-                candidate.Url);
-
-            if (await SendToAllAsync(userId, subscriptions, payload, stats, cancellationToken))
+            if (await SendToAllAsync(userId, subscriptions, candidate.PayloadJson, stats, cancellationToken))
             {
-                sentKeys.Add(ReviewRequestDetection.EventKey(candidate.Repository, candidate.Number));
+                sent[candidate.EventKey] = candidate.Fingerprint;
             }
         }
 
@@ -222,11 +246,11 @@ sealed class NotificationDetectorService(
         {
             var changed = false;
 
-            foreach (var key in sentKeys)
+            foreach (var (key, fingerprint) in sent)
             {
                 state.Events[key] = new NotificationEventState
                 {
-                    Fingerprint = ReviewRequestDetection.RequestedFingerprint,
+                    Fingerprint = fingerprint,
                     LastNotifiedAt = now
                 };
                 changed = true;
@@ -251,8 +275,9 @@ sealed class NotificationDetectorService(
                 }
             }
 
-            // Prune entries for repos we scanned this cycle where the user is no longer a
-            // requested reviewer, so a future re-request notifies again.
+            // Prune entries for repos we scanned this cycle where the trigger no longer applies
+            // (e.g. the user is no longer a requested reviewer, or the PR is no longer ready to
+            // merge), so a future re-entry notifies again.
             foreach (var key in state.Events.Keys.ToList())
             {
                 if (currentKeys.Contains(key))
@@ -260,7 +285,7 @@ sealed class NotificationDetectorService(
                     continue;
                 }
 
-                if (ReviewRequestDetection.TryGetRepository(key, out var repository)
+                if (TryGetEventRepository(key, out var repository)
                     && scannedRepositories.Contains(repository))
                 {
                     state.Events.Remove(key);
@@ -272,6 +297,25 @@ sealed class NotificationDetectorService(
             return changed;
         }, cancellationToken);
     }
+
+    private static void AddCandidate(
+        Dictionary<long, List<DetectedNotification>> candidatesByUser,
+        DetectedNotification candidate)
+    {
+        if (!candidatesByUser.TryGetValue(candidate.UserId, out var list))
+        {
+            list = [];
+            candidatesByUser[candidate.UserId] = list;
+        }
+
+        list.Add(candidate);
+    }
+
+    // Recovers the repository slug from any known notification event key so stale state can be
+    // pruned regardless of which trigger wrote it.
+    private static bool TryGetEventRepository(string eventKey, out string repository) =>
+        ReviewRequestDetection.TryGetRepository(eventKey, out repository)
+        || ReadyToMergeDetection.TryGetRepository(eventKey, out repository);
 
     private async Task<bool> SendToAllAsync(
         long userId,
@@ -303,10 +347,17 @@ sealed class NotificationDetectorService(
         return anySent;
     }
 
-    private IReadOnlyList<RepositoryName> ResolveRepositories()
+    internal IReadOnlyList<RepositoryName> ResolveRepositories()
     {
         var result = new List<RepositoryName>();
-        foreach (var repository in warmupOptions.Value.Repositories)
+        var repositories = dashboardOptions.Value.Repositories
+            .Concat(dashboardOptions.Value.ShipWeekRepositories)
+            .Select(repository => repository?.Trim())
+            .Where(repository => !string.IsNullOrWhiteSpace(repository))
+            .Select(repository => repository!)
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var repository in repositories)
         {
             if (RepositoryName.TryParse(repository, out var repositoryName))
             {
@@ -321,12 +372,29 @@ sealed class NotificationDetectorService(
         return result;
     }
 
+    private HashSet<string> ResolveDoNotMergeLabels() =>
+        dashboardOptions.Value.DoNotMergeLabels
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Select(label => label.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
     private TimeSpan GetInterval()
     {
         var minutes = webPushOptions.Value.DetectionIntervalMinutes;
         return minutes <= 0 ? TimeSpan.FromMinutes(5) : TimeSpan.FromMinutes(minutes);
     }
 }
+
+// One ready-to-send notification for a single user: a deduped event with its payload. Both
+// triggers (review_requested, ready_to_merge) map their candidates to this so the detector
+// shares one send/dedupe/prune path.
+sealed record DetectedNotification(
+    long UserId,
+    string Repository,
+    int Number,
+    string EventKey,
+    string Fingerprint,
+    string PayloadJson);
 
 // Per-cycle counters for observability. No secrets, only counts.
 sealed class DetectorCycleStats
