@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 public static class GitHubPullRequestRoutes
 {
@@ -16,15 +17,13 @@ public static class GitHubPullRequestRoutes
             [FromQuery] string? state,
             [FromQuery] string? label,
             [FromQuery] bool? refresh,
+            IOptions<DashboardOptions> dashboardOptions,
             GitHubPullRequestService pullRequests,
             CancellationToken cancellationToken) =>
         {
-            if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
+            if (!TryResolveRepositoryName(repo, dashboardOptions.Value.Repositories, out var repositoryName))
             {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
-                });
+                return InvalidRepository();
             }
 
             var normalizedState = string.IsNullOrWhiteSpace(state) ? "open" : state.Trim().ToLowerInvariant();
@@ -48,15 +47,13 @@ public static class GitHubPullRequestRoutes
             [FromQuery] string? state,
             [FromQuery] string? label,
             [FromQuery] bool? refresh,
+            IOptions<DashboardOptions> dashboardOptions,
             GitHubPullRequestService pullRequests,
             CancellationToken cancellationToken) =>
         {
-            if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
+            if (!TryResolveRepositoryName(repo, dashboardOptions.Value.Repositories, out var repositoryName))
             {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
-                });
+                return InvalidRepository();
             }
 
             var normalizedState = string.IsNullOrWhiteSpace(state) ? "open" : state.Trim().ToLowerInvariant();
@@ -90,15 +87,13 @@ public static class GitHubPullRequestRoutes
             [FromQuery] string? state,
             [FromQuery] string? label,
             [FromQuery] bool? refresh,
+            IOptions<DashboardOptions> dashboardOptions,
             GitHubPullRequestService pullRequests,
             CancellationToken cancellationToken) =>
         {
-            if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
+            if (!TryResolveRepositoryName(repo, dashboardOptions.Value.Repositories, out var repositoryName))
             {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
-                });
+                return InvalidRepository();
             }
 
             var normalizedState = string.IsNullOrWhiteSpace(state) ? "open" : state.Trim().ToLowerInvariant();
@@ -128,15 +123,13 @@ public static class GitHubPullRequestRoutes
             [FromQuery] string? milestone,
             [FromQuery] string? releaseBranch,
             [FromQuery] bool? refresh,
+            IOptions<DashboardOptions> dashboardOptions,
             GitHubPullRequestService pullRequests,
             CancellationToken cancellationToken) =>
         {
-            if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
+            if (!TryResolveRepositoryName(repo, dashboardOptions.Value.ShipWeekRepositories, out var repositoryName))
             {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
-                });
+                return InvalidRepository();
             }
 
             var normalizedMilestone = milestone?.Trim();
@@ -166,15 +159,13 @@ public static class GitHubPullRequestRoutes
             [FromQuery] string? repo,
             [FromQuery] bool? refresh,
             PullRequestChecksRequest request,
+            IOptions<DashboardOptions> dashboardOptions,
             GitHubPullRequestService pullRequests,
             CancellationToken cancellationToken) =>
         {
-            if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
+            if (!TryResolveRepositoryName(repo, dashboardOptions.Value.Repositories, out var repositoryName))
             {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
-                });
+                return InvalidRepository();
             }
 
             var requestedPullRequests = request.PullRequests ?? [];
@@ -198,6 +189,7 @@ public static class GitHubPullRequestRoutes
             int number,
             [FromQuery] string? repo,
             [FromQuery] bool? refresh,
+            IOptions<DashboardOptions> dashboardOptions,
             GitHubPullRequestService pullRequests,
             CancellationToken cancellationToken) =>
         {
@@ -209,12 +201,9 @@ public static class GitHubPullRequestRoutes
                 });
             }
 
-            if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
+            if (!TryResolveRepositoryName(repo, dashboardOptions.Value.Repositories, out var repositoryName))
             {
-                return Results.ValidationProblem(new Dictionary<string, string[]>
-                {
-                    ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
-                });
+                return InvalidRepository();
             }
 
             return Results.Ok(await pullRequests.GetTimelineAsync(repositoryName, number, refresh == true, cancellationToken));
@@ -238,15 +227,13 @@ public static class GitHubPullRequestRoutes
         [FromQuery] string? repo,
         [FromQuery] string? state,
         [FromQuery] bool? refresh,
+        IOptions<DashboardOptions> dashboardOptions,
         GitHubPullRequestService pullRequests,
         CancellationToken cancellationToken)
     {
-        if (!RepositoryName.TryParse(repo ?? "microsoft/aspire", out var repositoryName))
+        if (!TryResolveRepositoryName(repo, dashboardOptions.Value.Repositories, out var repositoryName))
         {
-            return Results.ValidationProblem(new Dictionary<string, string[]>
-            {
-                ["repo"] = ["Use the owner/repo format, for example microsoft/aspire."]
-            });
+            return InvalidRepository();
         }
 
         var normalizedState = string.IsNullOrWhiteSpace(state) ? "open" : state.Trim().ToLowerInvariant();
@@ -278,4 +265,24 @@ public static class GitHubPullRequestRoutes
                 : new PullRequestStreamItem(repository, entry.PullRequest, entry.IsStale);
         }
     }
+
+    private static bool TryResolveRepositoryName(
+        string? repo,
+        IReadOnlyList<string> configuredRepositories,
+        out RepositoryName repositoryName)
+    {
+        repositoryName = default;
+        var repositoryInput = string.IsNullOrWhiteSpace(repo)
+            ? configuredRepositories.FirstOrDefault()
+            : repo;
+
+        return !string.IsNullOrWhiteSpace(repositoryInput)
+            && RepositoryName.TryParse(repositoryInput, out repositoryName);
+    }
+
+    private static IResult InvalidRepository() =>
+        Results.ValidationProblem(new Dictionary<string, string[]>
+        {
+            ["repo"] = ["Use the owner/repo format."]
+        });
 }

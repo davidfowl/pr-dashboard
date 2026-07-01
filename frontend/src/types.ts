@@ -6,6 +6,30 @@ export type AppInfoResponse = {
   commitUrl?: string;
 };
 
+export type DashboardConfig = {
+  repositories: string[];
+  repositoryInput: string;
+  shipWeekRepositories: string[];
+  shipWeekRepositoryInput: string;
+  coreTeamMembers: string[];
+  coreTeamMemberAliasSuffixes: string[];
+  communityRepositories: string[];
+  currentRelease: string;
+  shipWeekReleaseBranch: string;
+  docsFromCodeRepository: string;
+  docsFromCodeLabel: string;
+  doNotMergeLabels: string[];
+  botAuthors: string[];
+  nonBlockingCheckFailureRules: DashboardCheckFailureRule[];
+};
+
+export type DashboardCheckFailureRule = {
+  repository: string;
+  label: string;
+  checkNames: string[];
+  checkNameContains: string[];
+};
+
 export type AuthStatus = {
   authenticated: boolean;
   configured: boolean;
@@ -13,6 +37,16 @@ export type AuthStatus = {
   source?: string;
   login?: string;
   message: string;
+};
+
+export type DevelopmentGitHubAccount = {
+  login: string;
+  active: boolean;
+};
+
+export type DevelopmentGitHubAccountsResponse = {
+  accounts: DevelopmentGitHubAccount[];
+  selectedLogin?: string | null;
 };
 
 export type PullState = 'open' | 'closed' | 'all';

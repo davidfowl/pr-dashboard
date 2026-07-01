@@ -1,10 +1,4 @@
-import {
-  currentRelease,
-  defaultRepos,
-  defaultShipWeekReleaseBranch,
-  defaultShipWeekRepoInput,
-} from '../constants';
-import type { DashboardMode } from '../types';
+import type { DashboardConfig, DashboardMode } from '../types';
 
 export type ShipWeekRouteParams = {
   repositoryInput: string;
@@ -12,14 +6,32 @@ export type ShipWeekRouteParams = {
   releaseBranchInput: string;
 };
 
-export function parseRepositories(value: string, fallbackRepositories = defaultRepos) {
+export function parseRepositories(value: string, fallbackRepositories: string[] = []) {
   const repositories = value
     .split(/[,\s]+/)
-    .map((repository) => repository.trim())
+    .map((repository) => normalizeRepositoryInput(repository.trim()))
     .filter(Boolean);
 
   const uniqueRepositories = [...new Set(repositories)];
   return uniqueRepositories.length > 0 ? uniqueRepositories : fallbackRepositories;
+}
+
+function normalizeRepositoryInput(value: string) {
+  try {
+    const url = new URL(value);
+    if (url.hostname !== 'github.com' && url.hostname !== 'www.github.com') {
+      return value;
+    }
+
+    const [owner, repository] = url.pathname.split('/').filter(Boolean);
+    if (!owner || !repository) {
+      return value;
+    }
+
+    return `${owner}/${repository.replace(/\.git$/i, '')}`;
+  } catch {
+    return value;
+  }
 }
 
 const bucketHashPrefix = '#bucket/';
@@ -82,34 +94,52 @@ export function parseDashboardMode(search: string): DashboardMode {
   return 'review';
 }
 
-export function parseShipWeekRouteParams(search: string): ShipWeekRouteParams {
-  const searchParams = new URLSearchParams(search);
-  return normalizeShipWeekRouteParams({
-    repositoryInput: searchParams.get('repos') ?? '',
-    milestoneInput: searchParams.get('milestone') ?? '',
-    releaseBranchInput: searchParams.get('releaseBranch') ?? '',
-  });
+export function replaceLegacyRepositorySearchParam() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has('repos')) {
+    return false;
+  }
+
+  url.searchParams.delete('repos');
+  window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+  return true;
 }
 
-export function normalizeShipWeekRouteParams(params: Partial<ShipWeekRouteParams>): ShipWeekRouteParams {
+export function parseShipWeekRouteParams(search: string, config: DashboardConfig): ShipWeekRouteParams {
+  const searchParams = new URLSearchParams(search);
+  return normalizeShipWeekRouteParams({
+    repositoryInput: config.shipWeekRepositoryInput,
+    milestoneInput: searchParams.get('milestone') ?? '',
+    releaseBranchInput: searchParams.get('releaseBranch') ?? '',
+  }, config);
+}
+
+export function normalizeShipWeekRouteParams(
+  params: Partial<ShipWeekRouteParams>,
+  config: DashboardConfig,
+): ShipWeekRouteParams {
   return {
-    repositoryInput: params.repositoryInput?.trim() || defaultShipWeekRepoInput,
-    milestoneInput: params.milestoneInput?.trim() || currentRelease,
-    releaseBranchInput: params.releaseBranchInput?.trim() || defaultShipWeekReleaseBranch,
+    repositoryInput: params.repositoryInput?.trim() || config.shipWeekRepositoryInput,
+    milestoneInput: params.milestoneInput?.trim() || config.currentRelease,
+    releaseBranchInput: params.releaseBranchInput?.trim() || config.shipWeekReleaseBranch,
   };
 }
 
-export function createShipWeekUrl(params: ShipWeekRouteParams) {
+export function createShipWeekUrl(params: ShipWeekRouteParams, config: DashboardConfig) {
   const url = new URL(window.location.href);
   url.hash = '';
-  applyDashboardModeSearchParams(url.searchParams, 'ship', params);
+  applyDashboardModeSearchParams(url.searchParams, 'ship', config, params);
   return url.toString();
 }
 
-export function pushDashboardModeHistory(mode: DashboardMode, shipWeekParams?: ShipWeekRouteParams) {
+export function pushDashboardModeHistory(
+  mode: DashboardMode,
+  config: DashboardConfig,
+  shipWeekParams?: ShipWeekRouteParams,
+) {
   const url = new URL(window.location.href);
   url.hash = '';
-  applyDashboardModeSearchParams(url.searchParams, mode, shipWeekParams);
+  applyDashboardModeSearchParams(url.searchParams, mode, config, shipWeekParams);
   const nextUrl = `${url.pathname}${url.search}${url.hash}`;
   if (`${window.location.pathname}${window.location.search}${window.location.hash}` !== nextUrl) {
     window.history.pushState({ view: 'dashboard', mode, shipWeekParams }, '', nextUrl);
@@ -119,6 +149,7 @@ export function pushDashboardModeHistory(mode: DashboardMode, shipWeekParams?: S
 function applyDashboardModeSearchParams(
   searchParams: URLSearchParams,
   mode: DashboardMode,
+  config: DashboardConfig,
   shipWeekParams?: ShipWeekRouteParams,
 ) {
   searchParams.set('mode', mode);
@@ -129,8 +160,8 @@ function applyDashboardModeSearchParams(
     return;
   }
 
-  const params = normalizeShipWeekRouteParams(shipWeekParams ?? {});
-  searchParams.set('repos', params.repositoryInput);
+  const params = normalizeShipWeekRouteParams(shipWeekParams ?? {}, config);
+  searchParams.delete('repos');
   searchParams.set('milestone', params.milestoneInput);
   if (params.releaseBranchInput) {
     searchParams.set('releaseBranch', params.releaseBranchInput);

@@ -13,8 +13,8 @@ sealed class NotificationDetectorService(
     IServiceScopeFactory scopeFactory,
     INotificationStore store,
     IPushSender sender,
-    IOptions<GitHubCacheWarmupOptions> warmupOptions,
     IOptions<WebPushOptions> webPushOptions,
+    IOptions<DashboardOptions> dashboardOptions,
     TimeProvider timeProvider,
     ILogger<NotificationDetectorService> logger) : BackgroundService
 {
@@ -125,6 +125,8 @@ sealed class NotificationDetectorService(
         // Scan each allowlist repo from the (warmed) public cache and collect candidates per
         // user. Track which repos were scanned successfully so we only prune state for those.
         var now = timeProvider.GetUtcNow();
+        var doNotMergeLabels = ResolveDoNotMergeLabels();
+        var nonBlockingCheckFailureRules = dashboardOptions.Value.NonBlockingCheckFailureRules;
         var candidatesByUser = new Dictionary<long, List<DetectedNotification>>();
         var scannedRepositories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var repository in repositories)
@@ -162,7 +164,13 @@ sealed class NotificationDetectorService(
                     NotificationPayloads.ReviewRequested(candidate.Repository, candidate.Number, candidate.Title, candidate.Url)));
             }
 
-            foreach (var candidate in ReadyToMergeDetection.DetectForRepository(repository.ToString(), pullRequests, readyToMergeUserIds, now))
+            foreach (var candidate in ReadyToMergeDetection.DetectForRepository(
+                repository.ToString(),
+                pullRequests,
+                readyToMergeUserIds,
+                now,
+                doNotMergeLabels,
+                nonBlockingCheckFailureRules))
             {
                 AddCandidate(candidatesByUser, new DetectedNotification(
                     candidate.UserId,
@@ -339,10 +347,15 @@ sealed class NotificationDetectorService(
         return anySent;
     }
 
-    private IReadOnlyList<RepositoryName> ResolveRepositories()
+    internal IReadOnlyList<RepositoryName> ResolveRepositories()
     {
         var result = new List<RepositoryName>();
-        foreach (var repository in warmupOptions.Value.Repositories)
+        var repositories = dashboardOptions.Value.Repositories
+            .Concat(dashboardOptions.Value.ShipWeekRepositories)
+            .Where(repository => !string.IsNullOrWhiteSpace(repository))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var repository in repositories)
         {
             if (RepositoryName.TryParse(repository, out var repositoryName))
             {
@@ -356,6 +369,12 @@ sealed class NotificationDetectorService(
 
         return result;
     }
+
+    private HashSet<string> ResolveDoNotMergeLabels() =>
+        dashboardOptions.Value.DoNotMergeLabels
+            .Where(label => !string.IsNullOrWhiteSpace(label))
+            .Select(label => label.Trim())
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private TimeSpan GetInterval()
     {

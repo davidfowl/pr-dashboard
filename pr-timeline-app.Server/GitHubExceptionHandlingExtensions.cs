@@ -9,9 +9,19 @@ public static class GitHubExceptionHandlingExtensions
             exceptionApp.Run(async context =>
             {
                 var exception = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+                var logger = context.RequestServices
+                    .GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("GitHubExceptionHandler");
 
                 if (exception is GitHubApiException gitHubException)
                 {
+                    var repository = context.Request.Query["repo"].ToString();
+                    logger.LogWarning(
+                        "GitHub API request failed. Path={RequestPath}, Repository={Repository}, StatusCode={GitHubStatusCode}, ExceptionType={ExceptionType}.",
+                        context.Request.Path.Value,
+                        string.IsNullOrWhiteSpace(repository) ? null : repository,
+                        (int)gitHubException.StatusCode,
+                        gitHubException.GetType().Name);
                     context.Response.StatusCode = (int)gitHubException.StatusCode;
                     await Results.Problem(
                         title: "GitHub API request failed",
@@ -21,6 +31,11 @@ public static class GitHubExceptionHandlingExtensions
                     return;
                 }
 
+                logger.LogError(
+                    exception,
+                    "Unexpected server error while handling request. Path={RequestPath}, ExceptionType={ExceptionType}.",
+                    context.Request.Path.Value,
+                    exception?.GetType().Name ?? "unknown");
                 context.Response.StatusCode = StatusCodes.Status500InternalServerError;
                 await Results.Problem(
                     title: "Unexpected server error",

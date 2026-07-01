@@ -3,6 +3,8 @@ namespace pr_timeline_app.Tests;
 public sealed class ReadyToMergeDetectionTests
 {
     private static readonly DateTimeOffset s_now = DateTimeOffset.UnixEpoch + TimeSpan.FromDays(30);
+    private static readonly HashSet<string> s_doNotMergeLabels =
+        new(StringComparer.OrdinalIgnoreCase) { "needs-author-action", "no-merge" };
 
     [Fact]
     public void EventKeyAndTryGetRepositoryFollowConventions()
@@ -19,7 +21,7 @@ public sealed class ReadyToMergeDetectionTests
         var pr = ReadyPr(1, ownerUserId: 7, approverIds: [8, 9]);
 
         var detected = ReadyToMergeDetection
-            .DetectForRepository("O/R", [pr], new HashSet<long> { 7, 8, 9 }, s_now)
+            .DetectForRepository("O/R", [pr], new HashSet<long> { 7, 8, 9 }, s_now, s_doNotMergeLabels)
             .ToList();
 
         Assert.Equal(3, detected.Count);
@@ -36,7 +38,7 @@ public sealed class ReadyToMergeDetectionTests
         var pr = ReadyPr(1, ownerUserId: 7, approverIds: [8]);
 
         var detected = ReadyToMergeDetection
-            .DetectForRepository("o/r", [pr], new HashSet<long> { 8 }, s_now)
+            .DetectForRepository("o/r", [pr], new HashSet<long> { 8 }, s_now, s_doNotMergeLabels)
             .ToList();
 
         Assert.Single(detected);
@@ -50,7 +52,7 @@ public sealed class ReadyToMergeDetectionTests
         var pr = ReadyPr(1, ownerUserId: 7, approverIds: [7, 8]);
 
         var detected = ReadyToMergeDetection
-            .DetectForRepository("o/r", [pr], new HashSet<long> { 7, 8 }, s_now)
+            .DetectForRepository("o/r", [pr], new HashSet<long> { 7, 8 }, s_now, s_doNotMergeLabels)
             .ToList();
 
         Assert.Equal(2, detected.Count);
@@ -63,7 +65,7 @@ public sealed class ReadyToMergeDetectionTests
     [Fact]
     public void IsReadyToMergeAcceptsAFreshlyApprovedCleanPr()
     {
-        Assert.True(ReadyToMergeDetection.IsReadyToMerge(ReadyPr(1, 7, [8]), s_now));
+        Assert.True(ReadyToMergeDetection.IsReadyToMerge(ReadyPr(1, 7, [8]), s_now, s_doNotMergeLabels));
     }
 
     [Fact]
@@ -78,13 +80,89 @@ public sealed class ReadyToMergeDetectionTests
             // Aging: approved more than two days ago.
             ReadyPr(1, 7, [8]) with { Review = Approved([8]) with { LastApprovedAt = s_now - TimeSpan.FromDays(3) } },
             ReadyPr(1, 7, [8]) with { Checks = Failing() },
+            ReadyPr(1, 7, [8]) with { Checks = Pending() },
+            ReadyPr(1, 7, [8]) with { Checks = ChecksStatus.Unknown },
             ReadyPr(1, 7, [8]) with { Review = Approved([8]) with { UnresolvedThreadCount = 1, RequiresConversationResolution = true } },
             ReadyPr(1, 7, [8]) with { MergeableState = "dirty" },
             ReadyPr(1, 7, [8]) with { Labels = ["no-merge"] },
             ReadyPr(1, 7, [8]) with { Labels = ["needs-author-action"] },
         };
 
-        Assert.All(notReady, pullRequest => Assert.False(ReadyToMergeDetection.IsReadyToMerge(pullRequest, s_now)));
+        Assert.All(notReady, pullRequest => Assert.False(ReadyToMergeDetection.IsReadyToMerge(pullRequest, s_now, s_doNotMergeLabels)));
+    }
+
+    [Fact]
+    public void IsReadyToMergeUsesConfiguredDoNotMergeLabels()
+    {
+        var configuredLabels = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "blocked-by-policy" };
+
+        Assert.False(ReadyToMergeDetection.IsReadyToMerge(
+            ReadyPr(1, 7, [8]) with { Labels = ["BLOCKED-BY-POLICY"] },
+            s_now,
+            configuredLabels));
+        Assert.True(ReadyToMergeDetection.IsReadyToMerge(
+            ReadyPr(2, 7, [8]) with { Labels = ["no-merge"] },
+            s_now,
+            configuredLabels));
+    }
+
+    [Fact]
+    public void IsReadyToMergeUsesConfiguredNonBlockingCheckFailureRules()
+    {
+        var nonBlockingRules = new[]
+        {
+            new DashboardCheckFailureRuleOptions
+            {
+                Repository = "O/R",
+                CheckNames = ["GitOps/GitHubPop"],
+                CheckNameContains = ["proof of presence"]
+            }
+        };
+
+        Assert.True(ReadyToMergeDetection.IsReadyToMerge(
+            "o/r",
+            ReadyPr(1, 7, [8]) with { Checks = Failing("GitOps/GitHubPop") },
+            s_now,
+            s_doNotMergeLabels,
+            nonBlockingRules));
+        Assert.True(ReadyToMergeDetection.IsReadyToMerge(
+            "o/r",
+            ReadyPr(2, 7, [8]) with { Checks = Failing("required proof of presence") },
+            s_now,
+            s_doNotMergeLabels,
+            nonBlockingRules));
+    }
+
+    [Fact]
+    public void IsReadyToMergeRejectsPendingOrMixedNonBlockingFailures()
+    {
+        var nonBlockingRules = new[]
+        {
+            new DashboardCheckFailureRuleOptions
+            {
+                Repository = "o/r",
+                CheckNames = ["GitOps/GitHubPop"]
+            }
+        };
+
+        Assert.False(ReadyToMergeDetection.IsReadyToMerge(
+            "o/r",
+            ReadyPr(1, 7, [8]) with { Checks = Failing("GitOps/GitHubPop") with { PendingCount = 1 } },
+            s_now,
+            s_doNotMergeLabels,
+            nonBlockingRules));
+        Assert.False(ReadyToMergeDetection.IsReadyToMerge(
+            "o/r",
+            ReadyPr(2, 7, [8]) with { Checks = Failing("GitOps/GitHubPop", "blocking-check") },
+            s_now,
+            s_doNotMergeLabels,
+            nonBlockingRules));
+        Assert.False(ReadyToMergeDetection.IsReadyToMerge(
+            "other/repo",
+            ReadyPr(3, 7, [8]) with { Checks = Failing("GitOps/GitHubPop") },
+            s_now,
+            s_doNotMergeLabels,
+            nonBlockingRules));
     }
 
     private static ReviewStatus Approved(long[] approverIds) =>
@@ -101,8 +179,22 @@ public sealed class ReadyToMergeDetectionTests
             ApprovedReviewerIds = approverIds
         };
 
-    private static ChecksStatus Failing() =>
-        ChecksStatus.Unknown with { State = "failure", FailureCount = 1, TotalCount = 1 };
+    private static ChecksStatus Passing() =>
+        ChecksStatus.Unknown with { State = "success", TotalCount = 1, SuccessCount = 1 };
+
+    private static ChecksStatus Pending() =>
+        ChecksStatus.Unknown with { State = "pending", TotalCount = 1, PendingCount = 1 };
+
+    private static ChecksStatus Failing(params string[] names) =>
+        ChecksStatus.Unknown with
+        {
+            State = "failure",
+            FailureCount = names.Length == 0 ? 1 : names.Length,
+            TotalCount = names.Length == 0 ? 1 : names.Length,
+            FailingChecks = names.Length == 0
+                ? [new FailingCheck("blocking-check", "failure", null)]
+                : names.Select(name => new FailingCheck(name, "failure", null)).ToArray()
+        };
 
     private static PullRequestSummary ReadyPr(int number, long ownerUserId, long[] approverIds) =>
         new(
@@ -127,7 +219,7 @@ public sealed class ReadyToMergeDetectionTests
             null,
             "clean",
             Approved(approverIds),
-            ChecksStatus.Unknown)
+            Passing())
         {
             OwnerUserId = ownerUserId
         };

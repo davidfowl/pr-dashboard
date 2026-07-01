@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
@@ -12,6 +13,7 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
@@ -3377,6 +3379,33 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListEndpointUsesConfiguredDefaultRepositoryWhenRepoIsOmitted()
+    {
+        using var cache = new MemoryCache(new MemoryCacheOptions());
+        var gitHub = new FakeGitHubApi()
+            .Respond("repos/example/repo", "public-cache-token", _ => Json("""{ "visibility": "public" }"""))
+            .Respond(
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100",
+                "token-a",
+                _ => Json(PullRequestsJson([PullRequestJson(1, title: "Configured default")])))
+            .Respond("repos/example/repo/pulls/1/reviews?per_page=100", "token-a", _ => Json("[]"))
+            .Respond("repos/example/repo/pulls/1", "token-a", _ => Json(PullRequestDetailsJson(1)));
+        await using var app = await CreatePullRequestTestAppAsync(gitHub, cache, "token-a");
+        using var httpClient = CreateHttpClient(app);
+
+        using var response = await httpClient.GetAsync(
+            "/api/github/pulls?state=open",
+            TestContext.Current.CancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.Content.ReadFromJsonAsync<PullRequestListResponse>(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(body);
+        Assert.Equal("example/repo", body.Repository);
+        Assert.Equal("Configured default", Assert.Single(body.PullRequests).Title);
+    }
+
+    [Fact]
     public async Task StreamPullRequestsDoesNotDowngradeStaleItemsWhenRefreshFailsBeforeBatchIsEnriched()
     {
         var listRequests = 0;
@@ -5310,7 +5339,9 @@ public sealed class GitHubClientTests
         };
         var tokenProvider = new GitHubTokenProvider(
             new HttpContextAccessor { HttpContext = CreateHttpContextWithGitHubToken() },
-            new TestHostEnvironment());
+            new TestHostEnvironment(),
+            CreateConfiguration(),
+            new TestDevelopmentGitHubCliAuth());
         var cache = new MemoryCache(new MemoryCacheOptions());
         var options = CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
@@ -5338,7 +5369,9 @@ public sealed class GitHubClientTests
         };
         var tokenProvider = new GitHubTokenProvider(
             new HttpContextAccessor { HttpContext = CreateHttpContextWithGitHubToken() },
-            new TestHostEnvironment());
+            new TestHostEnvironment(),
+            CreateConfiguration(),
+            new TestDevelopmentGitHubCliAuth());
         var cache = new MemoryCache(new MemoryCacheOptions());
         var options = CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
@@ -5367,11 +5400,17 @@ public sealed class GitHubClientTests
 
         var options = CreateWarmupOptions();
         builder.Services.AddSingleton(options);
+        builder.Services.AddSingleton(Options.Create(new DashboardOptions
+        {
+            Repositories = ["example/repo"],
+            ShipWeekRepositories = ["example/repo"]
+        }));
         builder.Services.AddSingleton(cache);
         builder.Services.AddSingleton(_ => new HttpClient(new RequestStubGitHubHandler(gitHub.SendAsync))
         {
             BaseAddress = new Uri("https://api.github.com/")
         });
+        builder.Services.AddSingleton<IDevelopmentGitHubCliAuth, TestDevelopmentGitHubCliAuth>();
         builder.Services.AddSingleton<GitHubTokenProvider>();
         builder.Services.AddSingleton<GitHubPublicCacheIdentity>();
         builder.Services.AddSingleton<GitHubPublicCacheStore>();
@@ -5458,7 +5497,9 @@ public sealed class GitHubClientTests
         };
         var tokenProvider = new GitHubTokenProvider(
             new HttpContextAccessor { HttpContext = CreateHttpContextWithGitHubToken(token) },
-            new TestHostEnvironment());
+            new TestHostEnvironment(),
+            CreateConfiguration(),
+            new TestDevelopmentGitHubCliAuth());
         options ??= CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
         publicCacheStore ??= new GitHubPublicCacheStore(cache);
@@ -5481,7 +5522,9 @@ public sealed class GitHubClientTests
         };
         var tokenProvider = new GitHubTokenProvider(
             new HttpContextAccessor { HttpContext = CreateAnonymousHttpContext() },
-            new TestHostEnvironment());
+            new TestHostEnvironment(),
+            CreateConfiguration(),
+            new TestDevelopmentGitHubCliAuth());
         options ??= CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
         publicCacheStore ??= new GitHubPublicCacheStore(cache);
@@ -5502,10 +5545,16 @@ public sealed class GitHubClientTests
                 : repositories
         });
 
+    private static IConfiguration CreateConfiguration(
+        IEnumerable<KeyValuePair<string, string?>>? values = null) =>
+        new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
+            .Build();
+
     private static GitHubCacheScope CreateTokenScopeForTestToken(string token)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(token));
-        return GitHubCachePolicy.CreateTokenScope($"oauth:{Convert.ToHexString(hash)[..16]}:0");
+        return GitHubCachePolicy.CreateTokenScope($"oauth:{Convert.ToHexString(hash)[..16]}:none");
     }
 
     private static bool TryGetChecksHeadSha(string path, out string headSha)
@@ -6077,6 +6126,15 @@ public sealed class GitHubClientTests
     {
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
             route(request, cancellationToken);
+    }
+
+    private sealed class TestDevelopmentGitHubCliAuth : IDevelopmentGitHubCliAuth
+    {
+        public Task<string?> GetTokenAsync(string? user, CancellationToken cancellationToken) =>
+            Task.FromResult<string?>(null);
+
+        public Task<IReadOnlyList<DevelopmentGitHubAccount>> GetAccountsAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<DevelopmentGitHubAccount>>([]);
     }
 
     private sealed class TestHostEnvironment : IHostEnvironment

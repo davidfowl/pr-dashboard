@@ -153,18 +153,22 @@ public sealed class NotificationDetectorServiceTests
     private static NotificationDetectorService CreateService(
         INotificationStore store,
         IPushSender sender,
-        TimeProvider time) =>
+        TimeProvider time,
+        DashboardOptions? dashboardOptions = null) =>
         new(
             scopeFactory: null!,
             store,
             sender,
-            Options.Create(new GitHubCacheWarmupOptions()),
             Options.Create(new WebPushOptions
             {
                 Enabled = true,
                 PublicKey = "public",
                 PrivateKey = "private",
                 Subject = "mailto:test@example.com"
+            }),
+            Options.Create(dashboardOptions ?? new DashboardOptions
+            {
+                DoNotMergeLabels = ["needs-author-action", "no-merge"]
             }),
             time,
             NullLogger<NotificationDetectorService>.Instance);
@@ -189,6 +193,24 @@ public sealed class NotificationDetectorServiceTests
             ReadyToMergeDetection.EventKey(repo, number),
             ReadyToMergeDetection.ReadyFingerprint,
             NotificationPayloads.ReadyToMerge(ReadyToMergeRole.Author, repo, number, $"PR {number}", ReadyToMergeDetection.DeepLink(repo, number)));
+
+    [Fact]
+    public void ResolveRepositoriesUsesDashboardRepositoriesAndShipWeekRepositories()
+    {
+        var service = CreateService(
+            new InMemoryNotificationStore(),
+            new FakePushSender(),
+            new TestTimeProvider(),
+            new DashboardOptions
+            {
+                Repositories = ["o/r", "duplicate/repo", "bad repo"],
+                ShipWeekRepositories = ["duplicate/repo", "ship/repo"]
+            });
+
+        var repositories = service.ResolveRepositories().Select(repository => repository.ToString()).ToArray();
+
+        Assert.Equal(["o/r", "duplicate/repo", "ship/repo"], repositories);
+    }
 
     [Fact]
     public async Task NewReviewRequestSendsOnceAndDedupesOnRepeat()

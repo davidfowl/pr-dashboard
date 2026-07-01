@@ -1,10 +1,9 @@
 import type { FormEventHandler } from 'react';
 import type { DashboardMode, PullRequestSummary, PullState, ShipWeekIssueSummary } from '../../types';
-import { currentRelease, defaultRepoInput, defaultShipWeekRepoInput, shipWeekReleaseBranchPlaceholder } from '../../constants';
+import { shipWeekReleaseBranchPlaceholder } from '../../constants';
 
 type DashboardFiltersProps = {
   dashboardMode: DashboardMode;
-  repo: string;
   state: PullState;
   pullsLoading: boolean;
   pullRequests: PullRequestSummary[];
@@ -12,14 +11,12 @@ type DashboardFiltersProps = {
   issuesLoading: boolean;
   issues: ShipWeekIssueSummary[];
   issuesError: string | null;
-  shipWeekRepo: string;
   shipWeekMilestone: string;
+  currentRelease: string;
   shipWeekReleaseBranch: string;
   shipWeekLoading: boolean;
-  onRepoChange: (value: string) => void;
   onStateChange: (value: PullState) => void;
   onSubmit: FormEventHandler<HTMLFormElement>;
-  onShipWeekRepoChange: (value: string) => void;
   onShipWeekMilestoneChange: (value: string) => void;
   onShipWeekReleaseBranchChange: (value: string) => void;
   onShipWeekSubmit: FormEventHandler<HTMLFormElement>;
@@ -27,7 +24,6 @@ type DashboardFiltersProps = {
 
 function DashboardFilters({
   dashboardMode,
-  repo,
   state,
   pullsLoading,
   pullRequests,
@@ -35,14 +31,12 @@ function DashboardFilters({
   issuesLoading,
   issues,
   issuesError,
-  shipWeekRepo,
   shipWeekMilestone,
+  currentRelease,
   shipWeekReleaseBranch,
   shipWeekLoading,
-  onRepoChange,
   onStateChange,
   onSubmit,
-  onShipWeekRepoChange,
   onShipWeekMilestoneChange,
   onShipWeekReleaseBranchChange,
   onShipWeekSubmit,
@@ -63,17 +57,6 @@ function DashboardFilters({
       {repoModeActive ? (
         <>
           <form className="repo-form" onSubmit={onSubmit}>
-            <label>
-              <span>{issuesModeActive ? 'Issue repositories' : 'Repositories'}</span>
-              <input
-                value={repo}
-                onChange={(event) => onRepoChange(event.target.value)}
-                placeholder={defaultRepoInput}
-                autoComplete="off"
-              />
-              <small>Separate multiple repositories with commas.</small>
-            </label>
-
             <label>
               <span>State</span>
               <select value={state} onChange={(event) => onStateChange(event.target.value as PullState)}>
@@ -105,17 +88,6 @@ function DashboardFilters({
         </>
       ) : (
         <form className="repo-form ship-week-form" onSubmit={onShipWeekSubmit}>
-          <label>
-            <span>Ship mode repositories</span>
-            <input
-              value={shipWeekRepo}
-              onChange={(event) => onShipWeekRepoChange(event.target.value)}
-              placeholder={defaultShipWeekRepoInput}
-              autoComplete="off"
-            />
-            <small>Separate multiple repositories with commas. Ship mode includes generated aspire.dev docs PRs.</small>
-          </label>
-
           <label>
             <span>Milestone</span>
             <input

@@ -1,14 +1,48 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { personalPickActions } from '../constants';
+import { emptyDashboardConfig, setActiveDashboardConfig } from '../dashboardConfig';
 import type { PullRequestSummary, ReviewStatus, ShipWeekIssueSummary, ShipWeekResponse } from '../types';
 import {
   createAttentionBuckets,
   createAttentionSignals,
   createDeveloperPullRequestCounts,
+  createForMeItems,
   createFocusIssueBuckets,
   createShipWeekScopeGroups,
   isPullRequestWithinFocusAgeLimit,
   pullRequestFocusActivityAt,
+  visibleCheckState,
 } from './models';
+
+beforeEach(() => {
+  setActiveDashboardConfig({
+    ...emptyDashboardConfig,
+    repositories: ['example/repo'],
+    repositoryInput: 'example/repo',
+    shipWeekRepositories: ['example/repo'],
+    shipWeekRepositoryInput: 'example/repo',
+    coreTeamMembers: ['davidfowl', 'karolz-ms', 'DamianEdwards', 'JamesNK'],
+    coreTeamMemberAliasSuffixes: ['_corp'],
+    communityRepositories: ['CommunityToolkit/Aspire'],
+    currentRelease: '13.4',
+    docsFromCodeRepository: 'microsoft/aspire.dev',
+    docsFromCodeLabel: 'docs-from-code',
+    doNotMergeLabels: ['needs-author-action', 'no-merge'],
+    botAuthors: ['dotnet-maestro'],
+    nonBlockingCheckFailureRules: [
+      {
+        repository: 'private-org/service',
+        label: 'presence policy',
+        checkNames: ['Policy/Presence'],
+        checkNameContains: ['presence policy'],
+      },
+    ],
+  });
+});
+
+afterEach(() => {
+  setActiveDashboardConfig(emptyDashboardConfig);
+});
 
 type PrOverrides = Partial<Omit<PullRequestSummary, 'review' | 'checks'>> & {
   number: number;
@@ -114,6 +148,95 @@ describe('createDeveloperPullRequestCounts', () => {
     expect(karol?.openPullRequestCount).toBe(1);
     expect(karol?.repositories).toEqual(['example/repo']);
   });
+
+  it('counts configured aliases as core team members', () => {
+    const counts = createDeveloperPullRequestCounts([
+      pr({ number: 4, author: 'jamesnk_corp' }),
+      pr({ number: 5, author: 'teammate_corp' }),
+    ]);
+
+    const james = counts.find((count) => count.actor === 'JamesNK');
+    const teammate = counts.find((count) => count.actor === 'teammate_corp');
+
+    expect(james?.openPullRequestCount).toBe(1);
+    expect(teammate?.openPullRequestCount).toBe(1);
+    expect(teammate?.repositories).toEqual(['example/repo']);
+  });
+});
+
+describe('createForMeItems', () => {
+  it('does not ask authors to fix configured non-blocking check failures', () => {
+    const picks = createForMeItems([
+      pr({
+        number: 49,
+        repository: 'private-org/service',
+        author: 'davidfowl',
+        checks: {
+          state: 'failure',
+          totalCount: 2,
+          successCount: 1,
+          failureCount: 1,
+          failingChecks: [
+            {
+              name: 'Policy/Presence',
+              conclusion: 'failure',
+              htmlUrl: 'https://github.com/private-org/service/runs/1',
+            },
+          ],
+        },
+      }),
+      pr({
+        number: 50,
+        repository: 'private-org/service',
+        author: 'davidfowl',
+        checks: {
+          state: 'failure',
+          totalCount: 2,
+          successCount: 1,
+          failureCount: 1,
+          failingChecks: [
+            {
+              name: 'Build',
+              conclusion: 'failure',
+              htmlUrl: 'https://github.com/private-org/service/runs/2',
+            },
+          ],
+        },
+      }),
+    ], 'davidfowl');
+
+    expect(picks.map((pick) => [pick.pullRequest.number, pick.action])).toEqual([
+      [50, personalPickActions.fixCi],
+    ]);
+  });
+
+  it('does not show CI failing on review requests with configured non-blocking failures', () => {
+    const picks = createForMeItems([
+      pr({
+        number: 51,
+        repository: 'private-org/service',
+        author: 'teammate',
+        requestedReviewers: ['davidfowl'],
+        checks: {
+          state: 'failure',
+          totalCount: 2,
+          successCount: 1,
+          failureCount: 1,
+          failingChecks: [
+            {
+              name: 'Policy/Presence',
+              conclusion: 'failure',
+              htmlUrl: 'https://github.com/private-org/service/runs/1',
+            },
+          ],
+        },
+      }),
+    ], 'davidfowl');
+
+    expect(picks).toHaveLength(1);
+    expect(picks[0].action).toBe(personalPickActions.reviewThis);
+    expect(picks[0].reason).not.toContain('CI failing');
+  });
 });
 
 describe('createShipWeekScopeGroups', () => {
@@ -192,6 +315,125 @@ describe('createAttentionBuckets lane routing', () => {
       pr({ number: 4, review: { state: 'waiting', unresolvedThreadCount: 1 } }),
     ]);
     expect(inBucket(buckets, 'Unresolved feedback', 4)).toBe(true);
+  });
+
+  it('routes configured team-alias authors through core-team lanes', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 45, author: 'teammate_corp' }),
+    ]);
+
+    expect(inBucket(buckets, 'Needs review', 45)).toBe(true);
+    expect(inBucket(buckets, 'Community', 45)).toBe(false);
+  });
+
+  it('routes configured non-blocking check failures through core-team lanes', () => {
+    const pullRequest = pr({
+      number: 46,
+      repository: 'private-org/service',
+      author: 'teammate_corp',
+      checks: {
+        state: 'failure',
+        totalCount: 2,
+        successCount: 1,
+        failureCount: 1,
+        failingChecks: [
+          {
+            name: 'Policy/Presence',
+            conclusion: 'failure',
+            htmlUrl: 'https://github.com/private-org/service/runs/1',
+          },
+        ],
+      },
+    });
+    const buckets = createAttentionBuckets([pullRequest]);
+    const signals = createAttentionSignals({ pullRequest, reason: '' });
+
+    expect(inBucket(buckets, 'Needs review', 46)).toBe(true);
+    expect(inBucket(buckets, 'CI failing', 46)).toBe(false);
+    expect(signals.map((signal) => signal.label)).toContain('presence policy');
+    expect(signals.map((signal) => signal.label)).not.toContain('CI failing · 1 check');
+  });
+
+  it('keeps configured non-blocking check failures pending when other checks are still running', () => {
+    const pullRequest = pr({
+      number: 48,
+      repository: 'private-org/service',
+      author: 'teammate_corp',
+      review: { state: 'approved', approvalCount: 1 },
+      checks: {
+        state: 'failure',
+        totalCount: 3,
+        successCount: 1,
+        failureCount: 1,
+        pendingCount: 1,
+        failingChecks: [
+          {
+            name: 'Policy/Presence',
+            conclusion: 'failure',
+            htmlUrl: 'https://github.com/private-org/service/runs/1',
+          },
+        ],
+      },
+    });
+    const signals = createAttentionSignals({ pullRequest, reason: '' });
+
+    expect(inBucket(createAttentionBuckets([pullRequest]), 'Ready to merge', 48)).toBe(false);
+    expect(visibleCheckState(pullRequest)).toBe('pending');
+    expect(signals.map((signal) => signal.label)).toContain('wait for CI');
+    expect(signals.map((signal) => signal.label)).toContain('presence policy');
+    expect(signals.map((signal) => signal.label)).not.toContain('merge');
+  });
+
+  it('keeps configured aggregate failures loading until check details identify a non-blocking check', () => {
+    const pullRequest = pr({
+      number: 47,
+      repository: 'private-org/service',
+      author: 'teammate_corp',
+      review: { state: 'approved', approvalCount: 1 },
+      checks: {
+        state: 'failure',
+        totalCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        failingChecks: [],
+      },
+    });
+    const buckets = createAttentionBuckets([pullRequest]);
+    const labels = createAttentionSignals({ pullRequest, reason: '' }).map((signal) => signal.label);
+
+    expect(visibleCheckState(pullRequest)).toBe('unknown');
+    expect(inBucket(buckets, 'Ready to merge', 47)).toBe(false);
+    expect(inBucket(buckets, 'CI failing', 47)).toBe(false);
+    expect(labels).toContain('wait for CI');
+    expect(labels).not.toContain('CI failing');
+    expect(labels).not.toContain('presence policy');
+    expect(labels).not.toContain('merge');
+  });
+
+  it('keeps other failures in the CI failing lane', () => {
+    const buckets = createAttentionBuckets([
+      pr({
+        number: 48,
+        repository: 'private-org/service',
+        author: 'teammate_corp',
+        checks: {
+          state: 'failure',
+          totalCount: 2,
+          successCount: 1,
+          failureCount: 1,
+          failingChecks: [
+            {
+              name: 'Build',
+              conclusion: 'failure',
+              htmlUrl: 'https://github.com/private-org/service/runs/2',
+            },
+          ],
+        },
+      }),
+    ]);
+
+    expect(inBucket(buckets, 'CI failing', 48)).toBe(true);
+    expect(inBucket(buckets, 'Needs review', 48)).toBe(true);
   });
 
   it('routes a changes-requested PR to Author response', () => {

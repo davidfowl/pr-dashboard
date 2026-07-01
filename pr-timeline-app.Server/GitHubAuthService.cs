@@ -1,9 +1,39 @@
-sealed class GitHubAuthService(GitHubTokenProvider tokenProvider, GitHubClient gitHub, IHostEnvironment environment)
+sealed class GitHubAuthService(
+    GitHubTokenProvider tokenProvider,
+    GitHubClient gitHub,
+    IHostEnvironment environment,
+    ILogger<GitHubAuthService> logger)
 {
     public async Task<AuthStatusResponse> GetStatusAsync(CancellationToken cancellationToken)
     {
+        logger.LogInformation(
+            "Checking GitHub authentication status. OAuthConfigured={GitHubOAuthConfigured}.",
+            GitHubOAuthConfiguration.IsConfigured);
+
         var token = await tokenProvider.GetTokenAsync(cancellationToken);
-        var login = token is null ? null : await gitHub.GetCurrentUserLoginAsync(cancellationToken);
+        string? login = null;
+        if (token is not null)
+        {
+            try
+            {
+                login = await gitHub.GetCurrentUserLoginAsync(cancellationToken);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                logger.LogWarning(
+                    ex,
+                    "GitHub authentication status could not resolve the current user. TokenSource={GitHubTokenSource}.",
+                    token.Source);
+                throw;
+            }
+        }
+
+        logger.LogInformation(
+            "GitHub authentication status resolved. Authenticated={GitHubAuthenticated}, TokenSource={GitHubTokenSource}, LoginResolved={GitHubLoginResolved}, OAuthConfigured={GitHubOAuthConfigured}.",
+            token is not null,
+            token?.Source ?? "none",
+            !string.IsNullOrWhiteSpace(login),
+            GitHubOAuthConfiguration.IsConfigured);
 
         return new AuthStatusResponse(
             Authenticated: token is not null,

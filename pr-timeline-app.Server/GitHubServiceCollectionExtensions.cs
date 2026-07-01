@@ -18,6 +18,7 @@ public static class GitHubServiceCollectionExtensions
         services.AddMemoryCache();
         services.AddScoped<GitHubAuthService>();
         services.AddScoped<GitHubPullRequestService>();
+        services.AddSingleton<IDevelopmentGitHubCliAuth, DevelopmentGitHubCliAuth>();
         services.AddSingleton<GitHubTokenProvider>();
         services.AddSingleton<GitHubPublicCacheIdentity>();
         services.AddSingleton<GitHubPublicCacheStore>();
@@ -43,6 +44,51 @@ public static class GitHubServiceCollectionExtensions
                 options.ClientSecret = GitHubOAuthConfiguration.ClientSecret ?? "";
                 options.SaveTokens = true;
                 options.Scope.Clear();
+                options.Events.OnRedirectToAuthorizationEndpoint = context =>
+                {
+                    context.HttpContext.RequestServices
+                        .GetRequiredService<ILoggerFactory>()
+                        .CreateLogger("GitHubOAuth")
+                        .LogInformation("Redirecting to GitHub OAuth authorization endpoint.");
+                    context.Response.Redirect(context.RedirectUri);
+                    return Task.CompletedTask;
+                };
+                options.Events.OnCreatingTicket = context =>
+                {
+                    context.HttpContext.RequestServices
+                        .GetRequiredService<ILoggerFactory>()
+                        .CreateLogger("GitHubOAuth")
+                        .LogInformation(
+                            "GitHub OAuth ticket received. AccessTokenPresent={GitHubAccessTokenPresent}, RefreshTokenPresent={GitHubRefreshTokenPresent}.",
+                            !string.IsNullOrWhiteSpace(context.AccessToken),
+                            !string.IsNullOrWhiteSpace(context.RefreshToken));
+
+                    context.HttpContext.RequestServices
+                        .GetRequiredService<GitHubTokenProvider>()
+                        .RecordLogin(context.Properties);
+                    return Task.CompletedTask;
+                };
+                options.Events.OnTicketReceived = context =>
+                {
+                    context.HttpContext.RequestServices
+                        .GetRequiredService<ILoggerFactory>()
+                        .CreateLogger("GitHubOAuth")
+                        .LogInformation(
+                            "GitHub OAuth ticket accepted. PrincipalAuthenticated={GitHubPrincipalAuthenticated}.",
+                            context.Principal?.Identity?.IsAuthenticated == true);
+                    return Task.CompletedTask;
+                };
+                options.Events.OnRemoteFailure = context =>
+                {
+                    context.HttpContext.RequestServices
+                        .GetRequiredService<ILoggerFactory>()
+                        .CreateLogger("GitHubOAuth")
+                        .LogWarning(
+                            "GitHub OAuth remote failure. FailureType={GitHubOAuthFailureType}, FailureMessage={GitHubOAuthFailureMessage}.",
+                            context.Failure?.GetType().Name ?? "unknown",
+                            context.Failure?.Message ?? "");
+                    return Task.CompletedTask;
+                };
             });
         }
 

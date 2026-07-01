@@ -21,15 +21,7 @@ aspire start
 
 Open the Vite frontend at <http://localhost:5173/>.
 
-By default, the dashboard watches:
-
-- `microsoft/aspire`
-- `microsoft/aspire.dev`
-- `microsoft/aspire-skills`
-- `microsoft/dcp`
-- `CommunityToolkit/Aspire`
-
-You can replace that list in the dashboard with any comma-separated `owner/repo` values.
+The dashboard repositories, ship-mode repositories, core team, and release/docs settings are configured by the server `Dashboard` config section. Configure repositories as `owner/repo` values. If a configured repository is not accessible to the current token or public cache, the client logs the per-repository failure, skips that repository's rows, and keeps loading the rest of the dashboard.
 
 ## GitHub auth
 

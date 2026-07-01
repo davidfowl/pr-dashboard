@@ -1,12 +1,9 @@
 import {
-  coreTeamMembers,
-  currentRelease,
   dayMs,
-  docsFromCodeLabel,
-  docsFromCodeRepository,
   hourMs,
   personalPickActions,
 } from '../constants';
+import { getDashboardConfig } from '../dashboardConfig';
 import type {
   ActivityMarker,
   ActivityModel,
@@ -14,6 +11,8 @@ import type {
   AttentionIssueBucket,
   AttentionItem,
   AttentionSignal,
+  CheckState,
+  DashboardCheckFailureRule,
   DeveloperPullRequestCount,
   DeveloperStats,
   MergeableState,
@@ -53,11 +52,6 @@ const myDraftPullRequestsBucketLabel = 'My draft PRs';
 const agedOutCommunityBucketLabel = 'Aged out community';
 const ctiTeamTitleMarker = '[aspiree2e]';
 const releaseBlockingLabelMarker = 'blocking-release';
-// Labels that mark a PR as "do not merge / waiting on the author"; matched case-insensitively.
-// Different repos in the dashboard use different names (e.g. needs-author-action, NO-MERGE), so
-// honor any of them.
-const doNotMergeLabels = new Set(['needs-author-action', 'no-merge']);
-const knownBotAuthors = new Set(['dotnet-maestro']);
 
 type FocusIssueBucketDefinition = Omit<AttentionIssueBucket, 'issues'> & {
   matches: (issue: ShipWeekIssueSummary) => boolean;
@@ -87,29 +81,37 @@ const focusIssueBucketDefinitions: FocusIssueBucketDefinition[] = [
 ];
 
 export function createDeveloperPullRequestCounts(pullRequests: PullRequestSummary[]): DeveloperPullRequestCount[] {
-  const coreTeamKeys = new Set(coreTeamMembers.map(actorIdentityKey));
+  const coreTeamMembers = getDashboardConfig().coreTeamMembers;
   const pullRequestsByDeveloper = new Map<string, PullRequestSummary[]>(
     coreTeamMembers.map((member) => [actorIdentityKey(member), []]),
+  );
+  const developerActorsByKey = new Map<string, string>(
+    coreTeamMembers.map((member) => [actorIdentityKey(member), member]),
   );
 
   for (const pullRequest of pullRequests) {
     if (
       pullRequest.state !== 'open'
-      || isCommunityToolkitPullRequest(pullRequest)
+      || isConfiguredCommunityRepositoryPullRequest(pullRequest)
       || shouldHideFromSharedPullRequestLists(pullRequest)
     ) {
       continue;
     }
 
-    const authorKey = actorIdentityKey(pullRequest.author);
-    if (coreTeamKeys.has(authorKey)) {
-      pullRequestsByDeveloper.get(authorKey)?.push(pullRequest);
+    const developerActor = coreTeamOwnershipActor(pullRequest.author);
+    if (developerActor) {
+      const developerKey = actorIdentityKey(developerActor);
+      if (!pullRequestsByDeveloper.has(developerKey)) {
+        pullRequestsByDeveloper.set(developerKey, []);
+        developerActorsByKey.set(developerKey, developerActor);
+      }
+
+      pullRequestsByDeveloper.get(developerKey)?.push(pullRequest);
     }
   }
 
-  return coreTeamMembers
-    .map((member) => {
-      const developerPullRequests = pullRequestsByDeveloper.get(actorIdentityKey(member)) ?? [];
+  return [...pullRequestsByDeveloper.entries()]
+    .map(([developerKey, developerPullRequests]) => {
       const repositories = [...new Set(developerPullRequests.map((pullRequest) => pullRequest.repository))]
         .sort((first, second) => first.localeCompare(second));
       const latestUpdatedAt = developerPullRequests
@@ -117,7 +119,7 @@ export function createDeveloperPullRequestCounts(pullRequests: PullRequestSummar
         .sort((first, second) => new Date(second).getTime() - new Date(first).getTime())[0];
 
       return {
-        actor: member,
+        actor: developerActorsByKey.get(developerKey) ?? developerKey,
         openPullRequestCount: developerPullRequests.length,
         repositories,
         latestUpdatedAt,
@@ -158,31 +160,34 @@ function createPersonalPick(pullRequest: PullRequestSummary, login: string): Pic
   }
 
   if (hasNeedsAuthorActionLabel(pullRequest)) {
+    const holdLabel = matchingDoNotMergeLabel(pullRequest) ?? 'a configured hold label';
     return sameLogin(pullRequest.author, login)
       ? {
         pullRequest,
         action: personalPickActions.needsAttention,
-        reason: `Your PR is labeled ${matchingDoNotMergeLabel(pullRequest) ?? 'no-merge'} · ${pickReason(pullRequest)}`,
+        reason: `Your PR is labeled ${holdLabel} · ${pickReason(pullRequest)}`,
         tone: 'danger',
         personal: true,
       }
       : null;
   }
 
-  if (sameLogin(pullRequest.author, login) && pullRequest.checks?.state === 'failure') {
+  if (sameLogin(pullRequest.author, login) && isChecksFailing(pullRequest)) {
+    const failureCount = pullRequest.checks?.failureCount ?? 0;
     return {
       pullRequest,
       action: personalPickActions.fixCi,
-      reason: `${pullRequest.checks.failureCount > 0 ? `Your PR has ${formatCount(pullRequest.checks.failureCount, 'failing check')}` : 'Your PR is failing CI'} · ${pickReason(pullRequest)}`,
+      reason: `${failureCount > 0 ? `Your PR has ${formatCount(failureCount, 'failing check')}` : 'Your PR is failing CI'} · ${pickReason(pullRequest)}`,
       tone: 'danger',
       personal: true,
     };
   }
 
   if (pullRequest.requestedReviewers.some((reviewer) => sameLogin(reviewer, login))) {
-    const ciSuffix = pullRequest.checks?.state === 'failure'
+    const checkState = visibleCheckState(pullRequest);
+    const ciSuffix = checkState === 'failure'
       ? ' · CI failing'
-      : pullRequest.checks?.state === 'pending'
+      : checkState === 'pending'
         ? ' · CI running'
         : '';
     return {
@@ -325,7 +330,7 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[], login
     },
     {
       label: 'Community Toolkit',
-      summary: 'CommunityToolkit/Aspire PRs in the shared Aspire queue.',
+      summary: 'Configured community repository PRs in the shared Aspire queue.',
       tone: 'accent',
       metric: 'toolkit review',
       items: [],
@@ -401,8 +406,7 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[], login
   // Unlike the other shared lists (core-team ownership, Ship week) which use
   // shouldHideFromSharedPullRequestLists, the attention board surfaces merge-conflict PRs in their
   // own "Merge conflicts" lane (kept out of the Needs attention focus queue). Only PRs carrying a
-  // do-not-merge label (any name in doNotMergeLabels, e.g. NO-MERGE or needs-author-action) are
-  // hidden from these shared lanes.
+  // configured do-not-merge label are hidden from these shared lanes.
   const visibleOpenPullRequests = pullRequests.filter((item) =>
     item.state === 'open' && !hasNeedsAuthorActionLabel(item));
 
@@ -532,8 +536,9 @@ const coldIssueMs = 14 * dayMs;
 export function createIssueSignals(issue: ShipWeekIssueSummary): AttentionSignal[] {
   const action = issueActionSignal(issue);
   const signals: AttentionSignal[] = [action];
+  const currentRelease = getDashboardConfig().currentRelease;
 
-  if (targetsCurrentReleaseIssue(issue)) {
+  if (currentRelease && targetsCurrentReleaseIssue(issue)) {
     signals.push({ label: `release ${currentRelease}`, tone: 'danger' });
   }
 
@@ -643,6 +648,11 @@ function shipWeekIssueSignalLabels(issue: ShipWeekIssueSummary) {
 }
 
 function targetsCurrentReleaseIssue(issue: ShipWeekIssueSummary) {
+  const currentRelease = getDashboardConfig().currentRelease;
+  if (!currentRelease) {
+    return false;
+  }
+
   return [
     issue.title,
     issue.milestone,
@@ -689,11 +699,12 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
     labels.push('Docs');
   }
 
-  if (isCommunityToolkitPullRequest(pullRequest)) {
+  if (isConfiguredCommunityRepositoryPullRequest(pullRequest)) {
     labels.push('Community Toolkit');
   }
 
   const ciFailing = isChecksFailing(pullRequest);
+  const checksPending = isChecksPending(pullRequest);
   if (ciFailing) {
     labels.push('CI failing');
   }
@@ -721,13 +732,14 @@ function reviewBucketLabels(pullRequest: PullRequestSummary) {
   const unresolvedFeedbackBlocksMerge =
     unresolvedFeedback && pullRequest.review.requiresConversationResolution;
 
-  // Failing CI, merge-blocking unresolved threads, merge conflicts, or a do-not-merge label
+  // Failing CI, merge-blocking unresolved threads, merge conflicts, or a configured hold label
   // disqualify "Ready to merge" — the PR is not actually ready to land until CI is green,
   // conversations that gate merging are resolved, it merges cleanly, and it is not explicitly held
-  // by a no-merge label.
+  // by policy.
   if (pullRequest.review.state === 'approved'
     && !approvedButAging
     && !ciFailing
+    && !checksPending
     && !unresolvedFeedbackBlocksMerge
     && !mergeConflicts
     && !hasNeedsAuthorActionLabel(pullRequest)) {
@@ -794,7 +806,7 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
     case 'Docs':
       return 'generated docs';
     case 'Community Toolkit':
-      return 'CommunityToolkit/Aspire';
+      return pullRequest.repository;
     case 'Bots / automation':
       return 'bot';
     case 'Community':
@@ -832,11 +844,31 @@ function hasUnresolvedFeedback(pullRequest: PullRequestSummary) {
 }
 
 export function isChecksFailing(pullRequest: PullRequestSummary) {
-  return pullRequest.checks?.state === 'failure';
+  return pullRequest.checks?.state === 'failure'
+    && !isNonBlockingAggregateFailure(pullRequest)
+    && !nonBlockingOnlyFailureRule(pullRequest);
+}
+
+export function visibleCheckState(pullRequest: PullRequestSummary): CheckState | undefined {
+  if (isNonBlockingAggregateFailure(pullRequest)) {
+    return 'unknown';
+  }
+
+  if (!nonBlockingOnlyFailureRule(pullRequest)) {
+    return pullRequest.checks?.state;
+  }
+
+  return pullRequest.checks.pendingCount > 0 ? 'pending' : 'success';
+}
+
+export function needsVisibleCheckDetails(pullRequest: PullRequestSummary) {
+  return pullRequest.checks?.state === 'unknown'
+    || isNonBlockingAggregateFailure(pullRequest);
 }
 
 function isChecksPending(pullRequest: PullRequestSummary) {
-  return pullRequest.checks?.state === 'pending' || pullRequest.checks?.state === 'unknown';
+  const checkState = visibleCheckState(pullRequest);
+  return checkState === 'pending' || checkState === 'unknown';
 }
 
 export function hasMergeConflicts(pullRequest: PullRequestSummary) {
@@ -848,7 +880,8 @@ export function hasNeedsAuthorActionLabel(pullRequest: PullRequestSummary) {
 }
 
 function matchingDoNotMergeLabel(pullRequest: PullRequestSummary): string | null {
-  return pullRequest.labels.find((label) => doNotMergeLabels.has(label.toLowerCase())) ?? null;
+  const configuredLabels = new Set(getDashboardConfig().doNotMergeLabels.map((label) => label.toLowerCase()));
+  return pullRequest.labels.find((label) => configuredLabels.has(label.toLowerCase())) ?? null;
 }
 
 export function shouldHideFromSharedPullRequestLists(pullRequest: PullRequestSummary) {
@@ -901,17 +934,22 @@ function needsReReview(pullRequest: PullRequestSummary) {
 }
 
 export function isGeneratedDocsPullRequest(pullRequest: PullRequestSummary) {
-  return pullRequest.repository.toLowerCase() === docsFromCodeRepository
-    && pullRequest.labels.some((label) => label.toLowerCase() === docsFromCodeLabel);
+  const config = getDashboardConfig();
+  return config.docsFromCodeRepository.length > 0
+    && config.docsFromCodeLabel.length > 0
+    && pullRequest.repository.toLowerCase() === config.docsFromCodeRepository.toLowerCase()
+    && pullRequest.labels.some((label) => label.toLowerCase() === config.docsFromCodeLabel.toLowerCase());
 }
 
-function isCommunityToolkitPullRequest(pullRequest: PullRequestSummary) {
-  return pullRequest.repository.toLowerCase() === 'communitytoolkit/aspire';
+function isConfiguredCommunityRepositoryPullRequest(pullRequest: PullRequestSummary) {
+  const repository = pullRequest.repository.toLowerCase();
+  return getDashboardConfig().communityRepositories
+    .some((communityRepository) => communityRepository.toLowerCase() === repository);
 }
 
 export function isCommunityPullRequest(pullRequest: PullRequestSummary) {
   return isCommunityAuthor(pullRequest.author)
-    && !isCommunityToolkitPullRequest(pullRequest);
+    && !isConfiguredCommunityRepositoryPullRequest(pullRequest);
 }
 
 export function isAgedOutCommunityPullRequest(pullRequest: PullRequestSummary) {
@@ -970,7 +1008,49 @@ function isCommunityAuthor(author: string) {
 }
 
 function isCoreTeamAuthor(author: string) {
-  return coreTeamMembers.some((member) => actorIdentityKey(member) === actorIdentityKey(author));
+  return coreTeamOwnershipActor(author) !== null;
+}
+
+function coreTeamOwnershipActor(author: string) {
+  const coreTeamMember = matchingCoreTeamMember(author);
+  if (coreTeamMember) {
+    return coreTeamMember;
+  }
+
+  return isConfiguredTeamAlias(author) ? author : null;
+}
+
+function matchingCoreTeamMember(author: string) {
+  const authorKey = actorIdentityKey(author);
+  const coreTeamMembers = getDashboardConfig().coreTeamMembers;
+  const matchingMember = coreTeamMembers.find((member) => actorIdentityKey(member) === authorKey);
+  if (matchingMember) {
+    return matchingMember;
+  }
+
+  const teamAliasBase = configuredTeamAliasBase(author);
+  if (!teamAliasBase) {
+    return null;
+  }
+
+  const aliasBaseKey = actorIdentityKey(teamAliasBase);
+  return coreTeamMembers.find((member) => actorIdentityKey(member) === aliasBaseKey) ?? null;
+}
+
+function configuredTeamAliasBase(author: string) {
+  const normalized = author.toLowerCase();
+  const suffix = getDashboardConfig().coreTeamMemberAliasSuffixes.find((candidate) => {
+    const normalizedSuffix = candidate.toLowerCase();
+    return normalizedSuffix.length > 0
+      && normalized.endsWith(normalizedSuffix)
+      && normalized.length > normalizedSuffix.length;
+  });
+
+  return suffix ? author.slice(0, -suffix.length) : null;
+}
+
+function isConfiguredTeamAlias(author: string) {
+  return configuredTeamAliasBase(author) !== null;
 }
 
 export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
@@ -993,7 +1073,8 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
     signals.push(progress);
   }
 
-  if (targetsCurrentRelease(pullRequest)) {
+  const currentRelease = getDashboardConfig().currentRelease;
+  if (currentRelease && targetsCurrentRelease(pullRequest)) {
     signals.push({ label: `release ${currentRelease}`, tone: 'danger' });
   }
 
@@ -1030,7 +1111,7 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
     signals.push({ label: 'docs', tone: 'accent' });
   }
 
-  if (isCommunityToolkitPullRequest(pullRequest)) {
+  if (isConfiguredCommunityRepositoryPullRequest(pullRequest)) {
     signals.push({ label: 'community toolkit', tone: 'accent' });
   }
 
@@ -1071,7 +1152,7 @@ export function createAttentionSignals(item: AttentionItem): AttentionSignal[] {
   }
 
   const computedLabels = isGeneratedDocsPullRequest(pullRequest)
-    ? pullRequest.labels.filter((label) => label.toLowerCase() !== docsFromCodeLabel)
+    ? pullRequest.labels.filter((label) => label.toLowerCase() !== getDashboardConfig().docsFromCodeLabel.toLowerCase())
     : pullRequest.labels;
 
   for (const label of computedLabels.slice(0, 2)) {
@@ -1093,6 +1174,15 @@ function checksAttentionSignal(pullRequest: PullRequestSummary): AttentionSignal
     return null;
   }
 
+  if (isNonBlockingAggregateFailure(pullRequest)) {
+    return null;
+  }
+
+  const nonBlockingFailure = nonBlockingOnlyFailureRule(pullRequest);
+  if (nonBlockingFailure) {
+    return { label: nonBlockingFailure.label, tone: 'warning' };
+  }
+
   if (checks.state === 'failure') {
     const label = checks.failureCount > 0
       ? `CI failing · ${formatCount(checks.failureCount, 'check')}`
@@ -1109,6 +1199,11 @@ function checksAttentionSignal(pullRequest: PullRequestSummary): AttentionSignal
 }
 
 export function targetsCurrentRelease(pullRequest: PullRequestSummary) {
+  const currentRelease = getDashboardConfig().currentRelease;
+  if (!currentRelease) {
+    return false;
+  }
+
   return [
     pullRequest.title,
     pullRequest.milestone,
@@ -1218,7 +1313,7 @@ function actionSignal(pullRequest: PullRequestSummary): AttentionSignal {
     return { label: 'docs review', tone: 'accent' };
   }
 
-  if (isCommunityToolkitPullRequest(pullRequest)) {
+  if (isConfiguredCommunityRepositoryPullRequest(pullRequest)) {
     return { label: 'toolkit review', tone: 'accent' };
   }
 
@@ -1916,9 +2011,55 @@ function isBotAuthor(author: string) {
     || normalized.includes('bot')
     || normalized === 'copilot'
     || normalized === 'github-actions'
-    || knownBotAuthors.has(normalized);
+    || getDashboardConfig().botAuthors.some((botAuthor) => botAuthor.toLowerCase() === normalized);
 }
 
 function isCopilotAttributedAuthor(author: string) {
   return author.toLowerCase().endsWith('/copilot');
+}
+
+function nonBlockingOnlyFailureRule(pullRequest: PullRequestSummary): DashboardCheckFailureRule | null {
+  const checks = pullRequest.checks;
+  if (!checks || checks.state !== 'failure') {
+    return null;
+  }
+
+  if (checks.failureCount !== checks.failingChecks.length || checks.failingChecks.length === 0) {
+    return null;
+  }
+
+  const matchingRules = checks.failingChecks.map((check) =>
+    matchingNonBlockingCheckFailureRule(pullRequest.repository, check.name));
+  return matchingRules.every((rule) => rule !== undefined) ? matchingRules[0] ?? null : null;
+}
+
+function isNonBlockingAggregateFailure(pullRequest: PullRequestSummary) {
+  const checks = pullRequest.checks;
+  return checks?.state === 'failure'
+    && hasNonBlockingCheckFailureRule(pullRequest.repository)
+    && checks.totalCount === 0
+    && checks.failureCount === 0
+    && checks.failingChecks.length === 0;
+}
+
+function hasNonBlockingCheckFailureRule(repository: string) {
+  return getDashboardConfig().nonBlockingCheckFailureRules.some((rule) => sameRepository(rule.repository, repository));
+}
+
+function matchingNonBlockingCheckFailureRule(repository: string, name: string) {
+  return getDashboardConfig().nonBlockingCheckFailureRules.find((rule) =>
+    sameRepository(rule.repository, repository) && matchesNonBlockingCheckFailureName(rule, name));
+}
+
+function sameRepository(first: string, second: string) {
+  return first.toLowerCase() === second.toLowerCase();
+}
+
+function matchesNonBlockingCheckFailureName(
+  rule: ReturnType<typeof getDashboardConfig>['nonBlockingCheckFailureRules'][number],
+  name: string,
+) {
+  const normalized = name.trim().toLowerCase();
+  return rule.checkNames.some((checkName) => normalized === checkName.toLowerCase())
+    || rule.checkNameContains.some((fragment) => normalized.includes(fragment.toLowerCase()));
 }
