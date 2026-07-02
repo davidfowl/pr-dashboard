@@ -69,7 +69,6 @@ describe('LoadingMetric', () => {
     expect(host.textContent).toBe('0 shown');
     await rerender(2, false, true);
     expect(host.textContent).toBe('2 shown');
-    expect(host.textContent).toBe('2 shown');
 
     await unmountMetric(root);
   });
