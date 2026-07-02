@@ -94,7 +94,10 @@ public sealed class GitHubApiSmokeTests(ServerSmokeFixture fixture) : IClassFixt
         Assert.Contains(schema.Modes, mode => mode.Id == "issues");
         Assert.Contains(schema.Modes, mode =>
             mode.Id == "ship"
-            && mode.DashboardUrl.Contains("repos={owner}/{repo}", StringComparison.Ordinal));
+            && !mode.DashboardUrl.Contains("repos=", StringComparison.Ordinal)
+            && mode.DashboardUrl.Contains("milestone={milestone}", StringComparison.Ordinal)
+            && mode.ApiEndpoints.Any(endpoint =>
+                endpoint.Path.Contains("repo={owner}/{repo}", StringComparison.Ordinal)));
     }
 
     [Fact]

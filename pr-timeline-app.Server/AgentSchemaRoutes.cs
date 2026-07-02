@@ -73,7 +73,7 @@ public static class AgentSchemaRoutes
                 new(
                     Id: "ship",
                     Label: "Ship mode",
-                    DashboardUrl: "/?mode=ship&repos={owner}/{repo}&milestone={milestone}&releaseBranch={branch}",
+                    DashboardUrl: "/?mode=ship&milestone={milestone}&releaseBranch={branch}",
                     UseCases:
                     [
                         "Prepare or inspect release/ship-week work for a milestone.",
