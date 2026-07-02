@@ -669,8 +669,9 @@ function parseDeploymentId(url, fallbackId) {
     if (fallbackId && fallbackId.trim().length > 0) {
         return fallbackId.trim();
     }
-    if (typeof url.searchParams.get("baseUrl") === "string") {
-        return deploymentIdFromUrl(url.searchParams.get("baseUrl"));
+    const baseUrl = url.searchParams.get("baseUrl");
+    if (baseUrl && baseUrl.trim().length > 0) {
+        return deploymentIdFromUrl(baseUrl);
     }
     return fallbackId;
 }
@@ -780,15 +781,17 @@ async function handleApiRequest(req, res, openInput) {
 }
 
 async function startServer(instanceId, openInput) {
+    const serverState = { openInput: openInput ?? {} };
     const server = createServer(async (req, res) => {
         try {
+            const currentOpenInput = serverState.openInput;
             const url = new URL(req.url ?? "/", "http://127.0.0.1");
             if (url.pathname.startsWith("/api/")) {
-                await handleApiRequest(req, res, openInput);
+                await handleApiRequest(req, res, currentOpenInput);
                 return;
             }
             res.setHeader("Content-Type", "text/html; charset=utf-8");
-            res.end(renderHtml(instanceId, openInput));
+            res.end(renderHtml(instanceId, currentOpenInput));
         } catch (error) {
             await sendJson(res, 500, { error: String(error.message ?? error) });
         }
@@ -796,7 +799,13 @@ async function startServer(instanceId, openInput) {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
-    return { server, url: `http://127.0.0.1:${port}/` };
+    return {
+        server,
+        url: `http://127.0.0.1:${port}/`,
+        updateOpenInput: (nextOpenInput) => {
+            serverState.openInput = nextOpenInput ?? {};
+        },
+    };
 }
 
 copilotSession = await joinSession({
@@ -961,14 +970,17 @@ copilotSession = await joinSession({
                 },
             ],
             open: async (ctx) => {
+                const openInput = ctx.input ?? {};
                 let entry = servers.get(ctx.instanceId);
                 if (!entry) {
-                    entry = await startServer(ctx.instanceId, ctx.input ?? {});
+                    entry = await startServer(ctx.instanceId, openInput);
                     servers.set(ctx.instanceId, entry);
+                } else {
+                    entry.updateOpenInput(openInput);
                 }
                 return {
-                    title: ctx.input?.title ?? "Deployed instance manager",
-                    status: ctx.input?.url ? `URL: ${ctx.input.url}` : "No app URL selected",
+                    title: openInput.title ?? "Deployed instance manager",
+                    status: openInput.url ? `URL: ${openInput.url}` : "No app URL selected",
                     url: entry.url,
                 };
             },
