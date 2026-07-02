@@ -26,6 +26,10 @@ function AppInfo() {
 
   return (
     <footer className="site-footer" aria-label="Build information">
+      <a href="/api/agents/schema" target="_blank" rel="noreferrer">
+        Agent schema
+      </a>
+      <span aria-hidden="true">·</span>
       <span>Commit</span>
       {appInfo.commitUrl ? (
         <a href={appInfo.commitUrl} target="_blank" rel="noreferrer">

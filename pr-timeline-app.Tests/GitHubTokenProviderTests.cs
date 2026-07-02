@@ -30,9 +30,10 @@ public sealed class GitHubTokenProviderTests
     [Fact]
     public async Task RecordLoginRefreshesCachedGitHubCliToken()
     {
-        var tokens = new Queue<string?>(["first-token", "second-token"]);
+        var tokens = new Queue<string>(["first-token", "second-token"]);
         var provider = CreateProvider(
-            developmentGitHubCliAuth: new TestDevelopmentGitHubCliAuth((_, _) => Task.FromResult(tokens.Dequeue())),
+            developmentGitHubCliAuth: new TestDevelopmentGitHubCliAuth((_, _) =>
+                Task.FromResult(GitHubCliTokenResult.Success(tokens.Dequeue()))),
             configuration: CreateConfiguration());
 
         var first = await provider.GetTokenAsync(TestContext.Current.CancellationToken);
@@ -58,10 +59,10 @@ public sealed class GitHubTokenProviderTests
                 {
                     lookupStarted.SetResult();
                     await releaseLookup.Task.WaitAsync(cancellationToken);
-                    return "first-token";
+                    return GitHubCliTokenResult.Success("first-token");
                 }
 
-                return "second-token";
+                return GitHubCliTokenResult.Success("second-token");
             }),
             configuration: CreateConfiguration());
 
@@ -100,7 +101,7 @@ public sealed class GitHubTokenProviderTests
             developmentGitHubCliAuth: new TestDevelopmentGitHubCliAuth((_, _) =>
             {
                 calls++;
-                return Task.FromResult<string?>(" gh-token \n");
+                return Task.FromResult(GitHubCliTokenResult.Success(" gh-token \n"));
             }),
             configuration: CreateConfiguration());
 
@@ -308,6 +309,39 @@ public sealed class GitHubTokenProviderTests
     }
 
     [Fact]
+    public async Task GetTokenAsyncReportsGitHubCliFailureInDevelopment()
+    {
+        var provider = CreateProvider(
+            developmentGitHubCliAuth: new TestDevelopmentGitHubCliAuth((_, _) =>
+                Task.FromResult(GitHubCliTokenResult.Failed(127, "gh: command not found"))));
+
+        var token = await provider.GetTokenAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(token);
+        Assert.Equal("`gh auth token` exited with code 127: gh: command not found", provider.LocalAuthFailureMessage);
+    }
+
+    [Fact]
+    public async Task AuthStatusReportsLocalGitHubCliFailure()
+    {
+        var provider = CreateProvider(
+            developmentGitHubCliAuth: new TestDevelopmentGitHubCliAuth((_, _) =>
+                Task.FromResult(GitHubCliTokenResult.NotFound("gh"))));
+        var service = new GitHubAuthService(
+            provider,
+            gitHub: null!,
+            new TestHostEnvironment { EnvironmentName = Environments.Development },
+            new LoggerFactory().CreateLogger<GitHubAuthService>());
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(status.Authenticated);
+        Assert.Contains("No GitHub token is available to the local backend.", status.Message);
+        Assert.Contains("Last local token check failed: `gh` was not found", status.Message);
+        Assert.Contains("If running with Aspire, restart the app after `gh auth login`", status.Message);
+    }
+
+    [Fact]
     public async Task OAuthTokenTakesPrecedenceOverSelectedDevelopmentGitHubUser()
     {
         var developmentGitHubCliAuth = new TestDevelopmentGitHubCliAuth(
@@ -354,7 +388,7 @@ public sealed class GitHubTokenProviderTests
             developmentGitHubCliAuth: new TestDevelopmentGitHubCliAuth((user, _) =>
             {
                 requestedUsers.Add(user);
-                return Task.FromResult<string?>($"{user}-token");
+                return Task.FromResult(GitHubCliTokenResult.Success($"{user}-token"));
             }),
             configuration: CreateConfiguration(new Dictionary<string, string?>
             {
@@ -482,12 +516,13 @@ public sealed class GitHubTokenProviderTests
             getAccountsAsync: _ => throw new InvalidOperationException("gh auth status should not be called in Production."));
 
     private sealed class TestDevelopmentGitHubCliAuth(
-        Func<string?, CancellationToken, Task<string?>>? getTokenAsync = null,
+        Func<string?, CancellationToken, Task<GitHubCliTokenResult>>? getTokenAsync = null,
         Func<CancellationToken, Task<IReadOnlyList<DevelopmentGitHubAccount>>>? getAccountsAsync = null)
         : IDevelopmentGitHubCliAuth
     {
-        public Task<string?> GetTokenAsync(string? user, CancellationToken cancellationToken) =>
-            getTokenAsync?.Invoke(user, cancellationToken) ?? Task.FromResult<string?>(null);
+        public Task<GitHubCliTokenResult> GetTokenAsync(string? user, CancellationToken cancellationToken) =>
+            getTokenAsync?.Invoke(user, cancellationToken) ??
+            Task.FromResult(GitHubCliTokenResult.NotFound("gh"));
 
         public Task<IReadOnlyList<DevelopmentGitHubAccount>> GetAccountsAsync(CancellationToken cancellationToken) =>
             getAccountsAsync?.Invoke(cancellationToken) ??

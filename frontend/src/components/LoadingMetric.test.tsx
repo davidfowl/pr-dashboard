@@ -43,6 +43,18 @@ describe('LoadingMetric', () => {
     await unmountMetric(root);
   });
 
+  it('shows the current partial value when the first load has visible data', async () => {
+    const { host, root, rerender } = await renderMetric(0, true, false);
+
+    expect(host.textContent).toBe('—');
+
+    await rerender(4, true, true);
+
+    expect(host.textContent).toBe('4 PRs');
+
+    await unmountMetric(root);
+  });
+
   it('keeps shown invariant across zero and refreshing states', async () => {
     const { host, root, rerender } = await renderMetric(
       0,
@@ -55,7 +67,6 @@ describe('LoadingMetric', () => {
 
     await rerender(2, true, true);
     expect(host.textContent).toBe('0 shown');
-
     await rerender(2, false, true);
     expect(host.textContent).toBe('2 shown');
 

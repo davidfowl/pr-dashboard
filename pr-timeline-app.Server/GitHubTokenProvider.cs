@@ -36,10 +36,13 @@ sealed class GitHubTokenProvider
         this.logger = logger ?? NullLogger<GitHubTokenProvider>.Instance;
     }
 
+    public string? LocalAuthFailureMessage { get; private set; }
+
     public void Logout()
     {
         selectedDevelopmentGitHubUser = null;
         suppressFallback = true;
+        LocalAuthFailureMessage = "Local token fallback is disabled for this development backend after sign-out.";
         var generation = ResetFallbackCache(incrementFallbackGeneration: true);
         logger.LogInformation(
             "GitHub auth logout reset fallback token state. FallbackGeneration={FallbackGeneration}.",
@@ -54,6 +57,7 @@ sealed class GitHubTokenProvider
         // the discriminator on the ticket so cache rotation is per browser session, not global.
         properties.Items[OAuthTicketCacheDiscriminatorKey] = Guid.NewGuid().ToString("N");
         suppressFallback = false;
+        LocalAuthFailureMessage = null;
         ResetFallbackCache(incrementFallbackGeneration: false);
         logger.LogInformation("GitHub OAuth login ticket recorded and token fallback cache reset.");
     }
@@ -71,6 +75,7 @@ sealed class GitHubTokenProvider
 
         selectedDevelopmentGitHubUser = string.IsNullOrWhiteSpace(user) ? null : user.Trim();
         suppressFallback = false;
+        LocalAuthFailureMessage = null;
         var generation = ResetFallbackCache(incrementFallbackGeneration: true);
         logger.LogInformation(
             "Development GitHub account selection changed. Selected={DevelopmentGitHubAccountSelected}, FallbackGeneration={FallbackGeneration}.",
@@ -85,6 +90,7 @@ sealed class GitHubTokenProvider
             var result = await context.AuthenticateAsync();
             if (result?.Properties?.GetTokenValue("access_token") is { Length: > 0 } accessToken)
             {
+                LocalAuthFailureMessage = null;
                 logger.LogDebug(
                     "GitHub token resolved from OAuth cookie. AuthTicketDiscriminatorPresent={AuthTicketDiscriminatorPresent}.",
                     GetOAuthCacheDiscriminator(result.Properties) is not null);
@@ -128,6 +134,7 @@ sealed class GitHubTokenProvider
             ?? configuration["GH_TOKEN"];
         if (!string.IsNullOrWhiteSpace(environmentToken))
         {
+            LocalAuthFailureMessage = null;
             logger.LogDebug("Resolving GitHub token from development environment configuration.");
             return new TokenResult(environmentToken.Trim(), "environment", GetFallbackGeneration());
         }
@@ -163,9 +170,11 @@ sealed class GitHubTokenProvider
             attemptedGitHubCli = true;
             attemptedGitHubCliUser = normalizedUser;
             var ghToken = await developmentGitHubCliAuth.GetTokenAsync(normalizedUser, cancellationToken);
-            if (!string.IsNullOrWhiteSpace(ghToken))
+            if (ghToken.Status == GitHubCliTokenStatus.Success &&
+                !string.IsNullOrWhiteSpace(ghToken.Token))
             {
-                cachedGitHubCliToken = new TokenResult(ghToken.Trim(), "gh", GetFallbackGeneration());
+                LocalAuthFailureMessage = null;
+                cachedGitHubCliToken = new TokenResult(ghToken.Token.Trim(), "gh", GetFallbackGeneration());
                 cachedGitHubCliUser = normalizedUser;
                 logger.LogDebug(
                     "Development gh token resolved. SelectedDevelopmentAccount={DevelopmentGitHubAccountSelected}.",
@@ -173,9 +182,8 @@ sealed class GitHubTokenProvider
                 return cachedGitHubCliToken;
             }
 
-            logger.LogDebug(
-                "Development gh token was unavailable. SelectedDevelopmentAccount={DevelopmentGitHubAccountSelected}.",
-                normalizedUser is not null);
+            LocalAuthFailureMessage = ghToken.FailureMessage;
+            LogGitHubCliFailure(ghToken, normalizedUser is not null);
             return null;
         }
         finally
@@ -215,6 +223,33 @@ sealed class GitHubTokenProvider
         }
 
         return properties.IssuedUtc?.ToUnixTimeMilliseconds().ToString();
+    }
+
+    private void LogGitHubCliFailure(GitHubCliTokenResult result, bool selectedDevelopmentAccount)
+    {
+        switch (result.Status)
+        {
+            case GitHubCliTokenStatus.NotFound:
+                logger.LogWarning(
+                    "Development gh token fallback failed because {ExecutableName} was not found. SelectedDevelopmentAccount={DevelopmentGitHubAccountSelected}. If running locally with Aspire, ensure PATH/HOME are forwarded to the server resource or set GITHUB_TOKEN/GH_TOKEN before starting.",
+                    result.ExecutableName ?? "gh",
+                    selectedDevelopmentAccount);
+                break;
+
+            case GitHubCliTokenStatus.Failed:
+                logger.LogWarning(
+                    "Development gh token fallback failed with exit code {ExitCode}: {Error}. SelectedDevelopmentAccount={DevelopmentGitHubAccountSelected}.",
+                    result.ExitCode,
+                    result.SafeError,
+                    selectedDevelopmentAccount);
+                break;
+
+            case GitHubCliTokenStatus.TimedOut:
+                logger.LogWarning(
+                    "Development gh token fallback timed out after 5 seconds. SelectedDevelopmentAccount={DevelopmentGitHubAccountSelected}.",
+                    selectedDevelopmentAccount);
+                break;
+        }
     }
 
     public async Task<string> GetCacheKeyAsync(CancellationToken cancellationToken)

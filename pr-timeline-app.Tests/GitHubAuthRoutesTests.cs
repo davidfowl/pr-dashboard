@@ -62,7 +62,7 @@ public sealed class GitHubAuthRoutesTests
 
     private sealed class ThrowingDevelopmentGitHubCliAuth : IDevelopmentGitHubCliAuth
     {
-        public Task<string?> GetTokenAsync(string? user, CancellationToken cancellationToken) =>
+        public Task<GitHubCliTokenResult> GetTokenAsync(string? user, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("gh auth should not be called by production dev routes.");
 
         public Task<IReadOnlyList<DevelopmentGitHubAccount>> GetAccountsAsync(CancellationToken cancellationToken) =>

@@ -266,7 +266,7 @@ function pickReason(pullRequest: PullRequestSummary) {
   return signals.join(' · ');
 }
 
-function sameLogin(first: string, second: string) {
+export function sameLogin(first: string, second: string) {
   return actorIdentityKey(first) === actorIdentityKey(second);
 }
 

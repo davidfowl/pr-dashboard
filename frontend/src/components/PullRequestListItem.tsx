@@ -1,16 +1,24 @@
 import { useEffect, useRef } from 'react';
-import type { CheckState, LinkedIssueSummary, PullRequestSummary, VisiblePullRequestHandler } from '../types';
+import { dayMs } from '../constants';
+import type {
+  CheckState,
+  LinkedIssueSummary,
+  PullRequestSummary,
+  VisiblePullRequestHandler,
+} from '../types';
 import { formatRelative } from '../utils/format';
-import { needsVisibleCheckDetails, visibleCheckState } from '../utils/models';
+import { needsVisibleCheckDetails, sameLogin, visibleCheckState } from '../utils/models';
 import PullRequestSignalPills from './PullRequestSignalPills';
 import type { PullRequestSignalPillsProps } from './PullRequestSignalPills';
 
 type PullRequestListItemProps = {
   pullRequest: PullRequestSummary;
+  bucketLabel: string;
   onSelectPullRequest: (repository: string, pullRequest: PullRequestSummary) => void;
   onVisiblePullRequest?: VisiblePullRequestHandler;
   signalProps?: Omit<PullRequestSignalPillsProps, 'pullRequest'>;
   linkedIssues?: LinkedIssueSummary[];
+  login?: string;
   annotation?: string;
 };
 
@@ -23,15 +31,25 @@ const checkBadgeGlyphs: Record<Exclude<CheckState, 'none'>, { glyph: string; lab
 
 function PullRequestListItem({
   pullRequest,
+  bucketLabel,
   onSelectPullRequest,
   onVisiblePullRequest,
   signalProps,
   linkedIssues = [],
+  login,
   annotation,
 }: PullRequestListItemProps) {
   const itemRef = useRef<HTMLElement | null>(null);
   const checksState = visibleCheckState(pullRequest);
   const badge = checksState && checksState !== 'none' ? checkBadgeGlyphs[checksState] : null;
+  const isSignedInAuthor = login ? sameLogin(pullRequest.author, login) : false;
+  const isReadyToMerge = bucketLabel === 'Ready to merge';
+  const updatedAge = updatedAgeParts(pullRequest.updatedAt);
+  const updatedAgeTone = staleUpdatedAgeTone(pullRequest.updatedAt);
+  const leadingSignals = [
+    ...(isSignedInAuthor ? [{ label: 'Yours', tone: 'accent' as const }] : []),
+    ...(signalProps?.leadingSignals ?? []),
+  ];
   const blockingFailingChecks = checksState === 'failure' ? pullRequest.checks?.failingChecks : [];
   const badgeTitle = badge
     ? `${badge.label}${blockingFailingChecks?.length
@@ -77,7 +95,15 @@ function PullRequestListItem({
   }, [checksState, onVisiblePullRequest, pullRequest]);
 
   return (
-    <article ref={itemRef} className="attention-pr-row">
+    <article
+      ref={itemRef}
+      className={[
+        'attention-pr-row',
+        'compact-pr-action-marker-layout',
+        isReadyToMerge ? 'ready-to-merge-entry' : undefined,
+        isSignedInAuthor ? 'signed-in-user-entry' : undefined,
+      ].filter(Boolean).join(' ')}
+    >
       <span className="attention-pr-number">
         {badge && (
           <span
@@ -89,10 +115,25 @@ function PullRequestListItem({
             {badge.glyph}
           </span>
         )}
-        #{pullRequest.number}
+        <a
+          className="attention-pr-number-link"
+          href={pullRequest.htmlUrl}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Open ${pullRequest.repository} #${pullRequest.number} on GitHub`}
+        >
+          #{pullRequest.number}
+        </a>
       </span>
       <span className="attention-pr-repo" title={pullRequest.repository}>
-        {pullRequest.repository}
+        <a
+          className="attention-pr-repo-link"
+          href={repositoryUrl(pullRequest.repository)}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {pullRequest.repository}
+        </a>
       </span>
       <a
         className="attention-pr-title"
@@ -104,28 +145,32 @@ function PullRequestListItem({
         {pullRequest.title}
       </a>
       <span className="attention-pr-meta">
-        {pullRequest.author} · updated {formatRelative(pullRequest.updatedAt)}
+        <span className="attention-pr-author" title={pullRequest.author}>
+          {pullRequest.author}
+        </span>
+        <span className="attention-pr-updated">
+          {' · updated '}
+          <span className={`attention-pr-updated-age${updatedAgeTone ? ` age-tone-${updatedAgeTone}` : ''}`}>
+            {updatedAge.value}
+          </span>
+          {updatedAge.suffix && ` ${updatedAge.suffix}`}
+        </span>
       </span>
       <div className="attention-pr-actions">
-        <a
-          className="attention-pr-github-link"
-          href={pullRequest.htmlUrl}
-          target="_blank"
-          rel="noreferrer"
-          aria-label={`Open ${pullRequest.repository} #${pullRequest.number} on GitHub`}
-        >
-          GitHub
-        </a>
         <button
           type="button"
-          className="attention-pr-timeline-button"
+          className="attention-pr-timeline-button attention-pr-primary-action"
           onClick={() => onSelectPullRequest(pullRequest.repository, pullRequest)}
           aria-label={`View timeline for ${pullRequest.repository} #${pullRequest.number}`}
         >
           View timeline
         </button>
       </div>
-      <PullRequestSignalPills pullRequest={pullRequest} {...signalProps} />
+      <PullRequestSignalPills
+        pullRequest={pullRequest}
+        {...signalProps}
+        leadingSignals={leadingSignals}
+      />
       {annotation && (
         <span className="attention-pr-note">{annotation}</span>
       )}
@@ -146,6 +191,27 @@ function PullRequestListItem({
       )}
     </article>
   );
+}
+
+function repositoryUrl(repository: string) {
+  return `https://github.com/${repository}`;
+}
+
+function updatedAgeParts(value: string) {
+  const relative = formatRelative(value);
+  const [age, suffix] = relative.split(' ', 2);
+  return suffix ? { value: age, suffix } : { value: relative, suffix: '' };
+}
+
+function staleUpdatedAgeTone(value: string) {
+  const age = Date.now() - new Date(value).getTime();
+  if (age >= 14 * dayMs) {
+    return 'danger';
+  }
+  if (age >= 7 * dayMs) {
+    return 'warning';
+  }
+  return null;
 }
 
 export default PullRequestListItem;

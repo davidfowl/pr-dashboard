@@ -37,7 +37,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
           dotnet-quality: preview
 
       - name: Setup Node.js
@@ -70,14 +70,17 @@ jobs:
 
           exit "$exit_code"
 
-      - name: Check Aspire environment
-        run: aspire doctor
-
       - name: Install frontend dependencies
         run: npm --prefix frontend ci --no-audit --no-fund
 
+      - name: Check Aspire environment
+        run: aspire doctor
+
+      - name: Check Aspire AppHost
+        run: aspire publish --list-steps --non-interactive
+
       - name: Build
-        run: dotnet build pr-timeline-app.slnx --nologo
+        run: dotnet build pr-timeline-app.Server/pr-timeline-app.Server.csproj --nologo
 
       - name: Azure login
         uses: azure/login@v2
@@ -87,7 +90,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy with Aspire
-        run: aspire deploy --apphost pr-timeline-app.AppHost/pr-timeline-app.AppHost.csproj --environment Production --non-interactive
+        run: aspire deploy --environment Production --non-interactive
         env:
           Azure__SubscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           Azure__Location: ${{ vars.AZURE_LOCATION }}

@@ -1259,6 +1259,8 @@ public sealed class GitHubClientTests
             TestContext.Current.CancellationToken));
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, exception.StatusCode);
+        Assert.Contains("No live GitHub token is available to the backend", exception.Message);
+        Assert.Contains("GITHUB_TOKEN/GH_TOKEN", exception.Message);
         Assert.Equal(("repos/example/repo", "public-cache-token"), Assert.Single(requests));
     }
 
@@ -1301,7 +1303,7 @@ public sealed class GitHubClientTests
             {
                 "repos/example/repo" when token == "public-cache-token" => Json("""{ "visibility": "public" }"""),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "public-cache-token" => Json(
-                    PullRequestsJson([PullRequestJson(1, title: $"Public list {++listRequests}", body: "Fixes #404")])),
+                    PullRequestsJson([PullRequestJson(1, title: $"Public list {++listRequests}", body: "Fixes #404", headSha: "public-head")])),
                 "graphql" when token == "public-cache-token" && ++graphQlRequests == 1 => Json(PublicGraphQlPullRequestsResponse()),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
             });
@@ -1543,11 +1545,11 @@ public sealed class GitHubClientTests
         Assert.Equal("committed", item.Event);
         Assert.Equal("Ankit Jain", item.Actor);
     }
-
     [Fact]
     public async Task AuthenticatedAllowlistedRepositoryDoesNotUsePublicBaselineBeforeTokenLoad()
     {
         var cache = new MemoryCache(new MemoryCacheOptions());
+        var publicCacheStore = new GitHubPublicCacheStore(cache);
         var requests = new ConcurrentQueue<(string Path, string? Token)>();
         var route = (HttpRequestMessage request, CancellationToken _) =>
         {
@@ -1568,12 +1570,12 @@ public sealed class GitHubClientTests
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
             });
         };
-        var warmupClient = CreateClientFromRequests(route, cache, "token-a");
+        var warmupClient = CreateClientFromRequests(route, cache, "token-a", publicCacheStore: publicCacheStore);
         await warmupClient.TryPrewarmPublicPullRequestsAsync(
             new RepositoryName("example", "repo"),
             "open",
             TestContext.Current.CancellationToken);
-        var authenticatedClient = CreateClientFromRequests(route, cache, "token-a");
+        var authenticatedClient = CreateClientFromRequests(route, cache, "token-a", publicCacheStore: publicCacheStore);
 
         var pullRequests = await authenticatedClient.GetPullRequestsAsync(
             new RepositoryName("example", "repo"),
@@ -1798,9 +1800,9 @@ public sealed class GitHubClientTests
             {
                 "repos/example/repo" when token is null => Json("""{ "visibility": "public" }"""),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "token-a" => Json(
-                    PullRequestsJson([PullRequestJson(1, title: "Token A list")])),
+                    PullRequestsJson([PullRequestJson(1, title: "Token A list", headSha: "token-a-head")])),
                 "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when token == "token-b" => Json(
-                    PullRequestsJson([PullRequestJson(1, title: "Token B live")])),
+                    PullRequestsJson([PullRequestJson(1, title: "Token B live", headSha: "token-b-head")])),
                 "repos/example/repo/pulls/1/reviews?per_page=100" when token is "token-a" or "token-b" => Json("[]"),
                 "repos/example/repo/pulls/1" when token is "token-a" or "token-b" => Json(PullRequestDetailsJson(1)),
                 _ => throw new InvalidOperationException($"Unexpected GitHub request: {path} auth={token ?? "anonymous"}")
@@ -1824,7 +1826,9 @@ public sealed class GitHubClientTests
         var publicCacheLookup = await new GitHubResponseCache(cache, publicCacheStore)
             .GetAsync<IReadOnlyList<PullRequestSummary>>(publicCacheKey, TestContext.Current.CancellationToken);
         Assert.True(publicCacheLookup.Found);
-        Assert.Equal("Token A list", Assert.Single(publicCacheLookup.Value!).Title);
+        var publicPullRequest = Assert.Single(publicCacheLookup.Value!);
+        Assert.Equal("Token A list", publicPullRequest.Title);
+        Assert.Equal("none", publicPullRequest.Checks.State);
         var tokenBKey = GitHubCachePolicy.CreateRepositoryCacheKey(
             CreateTokenScopeForTestToken("token-b"),
             new RepositoryName("example", "repo"),
@@ -1844,6 +1848,7 @@ public sealed class GitHubClientTests
         Assert.Equal("waiting", secondStream[0].Review.State);
         Assert.Equal("none", secondStream[0].Checks.State);
         Assert.Contains(secondStream.Skip(1), pullRequest => pullRequest.Title == "Token B live");
+        Assert.Contains(requests, request => request.Token == "token-b");
         Assert.Contains(requests, request => request.Path == "repos/example/repo" && request.Token is null);
         Assert.DoesNotContain(requests, request => request.Token == "public-cache-token");
     }
@@ -2974,7 +2979,8 @@ public sealed class GitHubClientTests
                         .Select(number => PullRequestJson(
                             number,
                             title: $"First page {number}",
-                            body: number == 1 ? "Fixes #404" : null))),
+                            body: number == 1 ? "Fixes #404" : null,
+                            headSha: $"head-{number}"))),
                     linkHeader: "<https://api.github.com/repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2>; rel=\"next\""),
                 "repos/example/repo/issues/404" => Json(
                     """
@@ -3000,6 +3006,7 @@ public sealed class GitHubClientTests
         Assert.False(secondPageRequested);
         Assert.Equal(1, enumerator.Current.Number);
         Assert.Empty(enumerator.Current.LinkedIssues);
+        Assert.Equal("unknown", enumerator.Current.Checks.State);
 
         var pullRequests = new List<PullRequestSummary> { enumerator.Current };
         PullRequestSummary? enrichedFirstPullRequest = null;
@@ -3600,6 +3607,78 @@ public sealed class GitHubClientTests
 
         Assert.Equal(Enumerable.Range(1, 5), refreshedPullRequests.Select(pullRequest => pullRequest.Number));
         Assert.All(refreshedPullRequests, pullRequest => Assert.StartsWith("Good ", pullRequest.Title));
+    }
+
+    [Fact]
+    public async Task StreamPullRequestsDoesNotPreserveStaleChecksWhenHeadShaChangesBeforeBatchIsEnriched()
+    {
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var responseCache = new GitHubResponseCache(cache, new GitHubPublicCacheStore(cache));
+        await responseCache.SetAsync(
+            GitHubCachePolicy.CreateRepositoryCacheKey(
+                CreateTokenScopeForTestToken("token-a"),
+                repositoryName,
+                "checks",
+                "old-head"),
+            new ChecksStatus(
+                State: "success",
+                TotalCount: 1,
+                SuccessCount: 1,
+                FailureCount: 0,
+                PendingCount: 0,
+                NeutralCount: 0,
+                SkippedCount: 0,
+                CompletedAt: DateTimeOffset.Parse("2026-01-02T00:45:00Z"),
+                FailingChecks: []),
+            TimeSpan.FromMinutes(5),
+            TestContext.Current.CancellationToken);
+        var listRequests = 0;
+        var client = CreateClientFromRequests((request, cancellationToken) =>
+        {
+            _ = cancellationToken;
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            if (TryGetPullRequestNumber(path, "/reviews?per_page=100", out _))
+            {
+                return Task.FromResult(Json("[]"));
+            }
+
+            if (TryGetPullRequestNumber(path, "", out var detailsNumber))
+            {
+                return Task.FromResult(Json(PullRequestDetailsJson(detailsNumber)));
+            }
+
+            return Task.FromResult(path switch
+            {
+                "repos/example/repo" => Json("""{ "visibility": "public" }"""),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" when ++listRequests == 1 => Json(
+                    PullRequestsJson([PullRequestJson(1, title: "Cached old head", headSha: "old-head")])),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    PullRequestsJson([PullRequestJson(1, title: "Fresh new head", headSha: "new-head")]),
+                    linkHeader: "<https://api.github.com/repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2>; rel=\"next\""),
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100&page=2" => Json(
+                    """{ "message": "GitHub unavailable" }""",
+                    HttpStatusCode.ServiceUnavailable),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            });
+        }, cache, "token-a");
+
+        var cachedPullRequests = await EnumerateAsync(client.StreamPullRequestsAsync(
+            repositoryName,
+            "open",
+            false,
+            TestContext.Current.CancellationToken));
+        Assert.Equal("success", cachedPullRequests.Last().Checks.State);
+
+        var refreshedEntries = await EnumerateAsync(client.StreamPullRequestEntriesAsync(
+            repositoryName,
+            "open",
+            true,
+            TestContext.Current.CancellationToken));
+
+        var newHeadBaseline = Assert.Single(refreshedEntries, entry => entry.PullRequest?.Title == "Fresh new head").PullRequest!;
+        Assert.Equal("new-head", newHeadBaseline.HeadSha);
+        Assert.Equal("unknown", newHeadBaseline.Checks.State);
     }
 
     [Fact]
@@ -5200,6 +5279,56 @@ public sealed class GitHubClientTests
     }
 
     [Fact]
+    public async Task PullListHydratesChecksFromCachedHeadShaStatus()
+    {
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var repositoryName = new RepositoryName("example", "repo");
+        var responseCache = new GitHubResponseCache(cache, new GitHubPublicCacheStore(cache));
+        await responseCache.SetAsync(
+            GitHubCachePolicy.CreateRepositoryCacheKey(
+                CreateTokenScopeForTestToken("token-a"),
+                repositoryName,
+                "checks",
+                "cache123"),
+            new ChecksStatus(
+                State: "success",
+                TotalCount: 1,
+                SuccessCount: 1,
+                FailureCount: 0,
+                PendingCount: 0,
+                NeutralCount: 0,
+                SkippedCount: 0,
+                CompletedAt: DateTimeOffset.Parse("2026-01-02T00:45:00Z"),
+                FailingChecks: []),
+            TimeSpan.FromMinutes(5),
+            TestContext.Current.CancellationToken);
+        var requests = new ConcurrentQueue<string>();
+        var client = CreateClientFromRequests((request, _) =>
+        {
+            var path = request.RequestUri?.PathAndQuery.TrimStart('/') ?? "";
+            requests.Enqueue(path);
+
+            return Task.FromResult(path switch
+            {
+                "repos/example/repo/pulls?state=open&sort=created&direction=asc&per_page=100" => Json(
+                    PullRequestsJson([PullRequestJson(1, headSha: "cache123")])),
+                "repos/example/repo/pulls/1/reviews?per_page=100" => Json("[]"),
+                "repos/example/repo/pulls/1" => Json(PullRequestDetailsJson(1)),
+                _ => throw new InvalidOperationException($"Unexpected GitHub request: {path}")
+            });
+        }, cache, "token-a");
+
+        var pullRequests = await client.GetPullRequestsAsync(
+            repositoryName,
+            "open",
+            false,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("success", Assert.Single(pullRequests).Checks.State);
+        Assert.DoesNotContain(requests, path => path.Contains("/commits/cache123/", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ShipWeekCombinesMilestoneIssuesAndReleaseBranchPullRequests()
     {
         var client = CreateClient(path => path switch
@@ -6281,8 +6410,8 @@ public sealed class GitHubClientTests
 
     private sealed class TestDevelopmentGitHubCliAuth : IDevelopmentGitHubCliAuth
     {
-        public Task<string?> GetTokenAsync(string? user, CancellationToken cancellationToken) =>
-            Task.FromResult<string?>(null);
+        public Task<GitHubCliTokenResult> GetTokenAsync(string? user, CancellationToken cancellationToken) =>
+            Task.FromResult(GitHubCliTokenResult.NotFound("gh"));
 
         public Task<IReadOnlyList<DevelopmentGitHubAccount>> GetAccountsAsync(CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<DevelopmentGitHubAccount>>([]);

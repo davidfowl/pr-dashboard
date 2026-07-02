@@ -31,6 +31,7 @@ app.MapGitHubAuthRoutes();
 app.MapDashboardConfigRoutes();
 app.MapGitHubPullRequestRoutes();
 app.MapNotificationRoutes();
+app.MapAgentSchemaRoutes();
 app.MapGet("/api/app-info", (IConfiguration configuration) =>
 {
     var commitSha = configuration["GIT_COMMIT_SHA"]?.Trim() is { Length: > 0 } configuredCommitSha

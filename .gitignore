@@ -9,6 +9,9 @@
 # Local browser automation artifacts
 .playwright-cli/
 
+# Aspire publish artifacts
+aspire-output/
+
 # Some MSBuild/NPM interop paths can be created with Windows separators on Unix.
 **/obj\\*/
 

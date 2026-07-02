@@ -26,3 +26,12 @@ export function beginAbortableLoad(
     finish,
   };
 }
+
+export function cancelAbortableLoad(
+  versionRef: MutableRef<number>,
+  abortControllerRef: MutableRef<AbortController | null>,
+) {
+  versionRef.current += 1;
+  abortControllerRef.current?.abort();
+  abortControllerRef.current = null;
+}

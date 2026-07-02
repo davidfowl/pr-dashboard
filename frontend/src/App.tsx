@@ -31,7 +31,7 @@ import type {
 } from './types';
 import { colorForText } from './utils/format';
 import { readJson } from './utils/http';
-import { beginAbortableLoad } from './utils/loadLifecycle';
+import { beginAbortableLoad, cancelAbortableLoad } from './utils/loadLifecycle';
 import { useMediaQuery } from './utils/useMediaQuery';
 import {
   fetchPullRequestList,
@@ -487,6 +487,14 @@ function App() {
       });
       await readJson(response);
       await loadAuthStatus();
+      cancelAbortableLoad(pullRequestsLoadVersionRef, pullRequestsAbortControllerRef);
+      cancelAbortableLoad(issuesLoadVersionRef, issuesAbortControllerRef);
+      cancelAbortableLoad(shipWeekLoadVersionRef, shipWeekAbortControllerRef);
+      cancelVisibleChecksRequests();
+      setPullsLoading(false);
+      setIssuesLoading(false);
+      setShipWeekLoading(false);
+      setTimelineLoading(false);
       const config = await loadDashboardConfiguration();
       if (config) {
         const shipWeekParams = parseShipWeekRouteParams(window.location.search, config);
@@ -1574,7 +1582,9 @@ function combineShipWeekResponses(
     releaseBranch,
     pullRequests: [
       ...releaseResponses.flatMap((response) => response.pullRequests),
-      ...docsPullRequests.map(createDocsFromCodeShipWeekPullRequest),
+      ...docsPullRequests
+        .filter((pullRequest) => docsFromCodeMatchesReleaseBranch(pullRequest, releaseBranch))
+        .map(createDocsFromCodeShipWeekPullRequest),
     ].sort(compareShipWeekPullRequests),
     issues: releaseResponses
       .flatMap((response) => response.issues)
@@ -1593,6 +1603,14 @@ function createDocsFromCodeShipWeekPullRequest(pullRequest: PullRequestSummary) 
       docsFromCode: true,
     },
   };
+}
+
+function docsFromCodeMatchesReleaseBranch(pullRequest: PullRequestSummary, releaseBranch: string) {
+  if (!releaseBranch || releaseBranch === 'release branches') {
+    return true;
+  }
+
+  return pullRequest.baseRef === releaseBranch;
 }
 
 function compareShipWeekPullRequests(first: ShipWeekResponse['pullRequests'][number], second: ShipWeekResponse['pullRequests'][number]) {
