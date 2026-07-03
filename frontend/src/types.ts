@@ -130,8 +130,10 @@ export type PullRequestListResponse = {
 
 export type AgentReviewQueueResponse = {
   items: AgentReviewQueueItemResponse[];
+  outsideNeedsAttentionItems?: AgentReviewQueueOutsideNeedsAttentionItemResponse[];
   repositories: AgentReviewQueueRepositoryResult[];
   totalCount: number;
+  outsideNeedsAttentionTotalCount?: number;
   generatedAt: string;
 };
 
@@ -142,11 +144,42 @@ export type AgentReviewQueueItemResponse = {
   reason: string;
 };
 
+export type AgentReviewQueueOutsideNeedsAttentionItemResponse = {
+  repository: string;
+  pullRequest: Omit<PullRequestSummary, 'repository'>;
+  bucketLabels: string[];
+  reason: AgentReviewQueueOutsideNeedsAttentionReason;
+};
+
+export type AgentReviewQueueOutsideNeedsAttentionReason = {
+  kind:
+    | 'ci-failing'
+    | 'merge-conflicts'
+    | 'unresolved-feedback'
+    | 'held-by-label'
+    | 'author-response'
+    | 'stale-activity'
+    | 'community-list'
+    | 'specialized-lane'
+    | 'stalled-only'
+    | 'outside-queue';
+  label: string;
+  detail: string;
+  tone: 'danger' | 'warning' | 'success' | 'accent' | 'muted';
+};
+
 export type AgentReviewQueueItem = {
   repository: string;
   pullRequest: PullRequestSummary;
   bucketLabel: string;
   reason: string;
+};
+
+export type AgentReviewQueueOutsideNeedsAttentionItem = {
+  repository: string;
+  pullRequest: PullRequestSummary;
+  bucketLabels: string[];
+  reason: AgentReviewQueueOutsideNeedsAttentionReason;
 };
 
 export type AgentReviewQueueRepositoryResult = {

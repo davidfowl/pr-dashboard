@@ -3,13 +3,21 @@ import type { CSSProperties } from 'react';
 import type {
   AttentionBucket,
   AgentReviewQueueItem,
+  AgentReviewQueueOutsideNeedsAttentionItem,
   DeveloperPullRequestCount,
   PickItem,
   PullRequestSummary,
   VisiblePullRequestHandler,
 } from '../../types';
 import { colorForText, formatCount, formatRelative } from '../../utils/format';
-import { computeCommunityItems, computeFocusExclusionItems, computeFocusItems } from './focusQueue';
+import { isChecksFailing } from '../../utils/models';
+import {
+  compareFocusExclusionItems,
+  computeCommunityItems,
+  computeFocusExclusionItems,
+  computeFocusItems,
+  focusExclusionReason,
+} from './focusQueue';
 import type { CommunityQueueItem, FocusExclusionItem, FocusItem } from './focusQueue';
 import GitHubAvatar from '../GitHubAvatar';
 import HelpTooltip from '../HelpTooltip';
@@ -25,6 +33,7 @@ type QueueOverviewProps = {
   pullRequests: PullRequestSummary[];
   attentionBuckets: AttentionBucket[];
   agentReviewQueueItems: AgentReviewQueueItem[] | null;
+  agentReviewQueueOutsideNeedsAttentionItems: AgentReviewQueueOutsideNeedsAttentionItem[] | null;
   forMeItems: PickItem[];
   loading: boolean;
   hasLoaded: boolean;
@@ -59,6 +68,7 @@ function QueueOverview({
   pullRequests,
   attentionBuckets,
   agentReviewQueueItems,
+  agentReviewQueueOutsideNeedsAttentionItems,
   forMeItems,
   loading,
   hasLoaded,
@@ -71,15 +81,44 @@ function QueueOverview({
   const [showAllCoreMembers, setShowAllCoreMembers] = useState(false);
   const [showFilterInfo, setShowFilterInfo] = useState(false);
 
-  const focusItems = useMemo<FocusItem[]>(
+  const agentFocusItems = useMemo<FocusItem[] | null>(
     () => agentReviewQueueItems !== null
       ? agentReviewQueueItems.map((item) => agentReviewQueueFocusItem(item, attentionBuckets))
-      : computeFocusItems(attentionBuckets),
+      : null,
     [agentReviewQueueItems, attentionBuckets],
   );
+  const focusItems = useMemo<FocusItem[]>(
+    () => agentFocusItems !== null
+      ? agentFocusItems.filter((item) => !isChecksFailing(item.pullRequest))
+      : computeFocusItems(attentionBuckets),
+    [agentFocusItems, attentionBuckets],
+  );
   const focusExclusionItems = useMemo<FocusExclusionItem[]>(
-    () => computeFocusExclusionItems(pullRequests, attentionBuckets, focusItems, login),
-    [attentionBuckets, focusItems, login, pullRequests],
+    () => {
+      if (agentReviewQueueOutsideNeedsAttentionItems) {
+        const outsideItems = agentReviewQueueOutsideNeedsAttentionItems.map((item): FocusExclusionItem => ({
+          ...item,
+          reason: focusExclusionReason(item.pullRequest, item.bucketLabels),
+        }));
+        const outsideKeys = new Set(outsideItems.map((item) => pullRequestKey(item.pullRequest)));
+        const failingFocusItems = agentFocusItems
+          ?.filter((item) => isChecksFailing(item.pullRequest))
+          .filter((item) => !outsideKeys.has(pullRequestKey(item.pullRequest)))
+          .map((item): FocusExclusionItem => {
+            const bucketLabels = [item.bucketLabel];
+            return {
+              pullRequest: item.pullRequest,
+              bucketLabels,
+              reason: focusExclusionReason(item.pullRequest, bucketLabels),
+            };
+          }) ?? [];
+
+        return [...failingFocusItems, ...outsideItems].sort(compareFocusExclusionItems);
+      }
+
+      return computeFocusExclusionItems(pullRequests, attentionBuckets, focusItems, login);
+    },
+    [agentFocusItems, agentReviewQueueOutsideNeedsAttentionItems, attentionBuckets, focusItems, login, pullRequests],
   );
   const communityItems = useMemo<CommunityQueueItem[]>(
     () => computeCommunityItems(pullRequests),
@@ -92,6 +131,11 @@ function QueueOverview({
   const focusShownCount = Math.min(focusItems.length, pullRequestListLimit);
   const communityShownCount = Math.min(communityItems.length, pullRequestListLimit);
   const focusExclusionShownCount = Math.min(focusExclusionItems.length, pullRequestListLimit);
+  const hasApiOutsideNeedsAttentionItems = agentReviewQueueOutsideNeedsAttentionItems !== null;
+  const showOutsideFocusList = hasApiOutsideNeedsAttentionItems || Boolean(login);
+  const outsideFocusListLabel = hasApiOutsideNeedsAttentionItems
+    ? 'Pull requests outside Needs attention'
+    : 'Your pull requests outside Needs attention';
   const loadingLabel = hasLoaded ? 'Refreshing' : 'Loading';
   const reviewBuckets = useMemo<AttentionBucket[]>(
     () => forMeItems.length === 0
@@ -223,10 +267,10 @@ function QueueOverview({
           />
         )}
 
-        {login && (
-          <section className="outside-focus-list" aria-label="Your pull requests outside Needs attention">
+        {showOutsideFocusList && (
+          <section className="outside-focus-list" aria-label={outsideFocusListLabel}>
             <div className="attention-card-header">
-              <span>Your PRs outside Needs attention</span>
+              <span>{hasApiOutsideNeedsAttentionItems ? 'Outside Needs attention' : 'Your PRs outside Needs attention'}</span>
               <div className="section-loading-meta">
                 {loading && <LoadingBadge label={loadingLabel} />}
                 <LoadingMetric
@@ -239,7 +283,9 @@ function QueueOverview({
               </div>
             </div>
             <p>
-              Open non-draft PRs authored by {login} that do not currently qualify for the focused queue.
+              {hasApiOutsideNeedsAttentionItems
+                ? 'Open non-draft PRs that do not currently qualify for the focused queue.'
+                : `Open non-draft PRs authored by ${login} that do not currently qualify for the focused queue.`}
             </p>
             {loading && !hasLoaded && focusExclusionItems.length === 0 ? (
               <LoadingCardPlaceholders count={2} label="Loading out-of-queue pull request cards" />
@@ -258,7 +304,11 @@ function QueueOverview({
                   }))}
                   limit={pullRequestListLimit}
                   preserveOrder
-                  emptyState={loading ? 'Loading your out-of-queue PRs...' : 'No open non-draft PRs authored by you are outside Needs attention.'}
+                  emptyState={loading
+                    ? 'Loading out-of-queue PRs...'
+                    : hasApiOutsideNeedsAttentionItems
+                      ? 'No open non-draft PRs are outside Needs attention.'
+                      : 'No open non-draft PRs authored by you are outside Needs attention.'}
                   onSelectPullRequest={onSelectPullRequest}
                   onVisiblePullRequest={onVisiblePullRequest}
                 />

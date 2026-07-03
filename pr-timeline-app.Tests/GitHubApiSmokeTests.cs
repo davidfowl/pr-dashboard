@@ -120,7 +120,8 @@ public sealed class GitHubApiSmokeTests(ServerSmokeFixture fixture) : IClassFixt
             && !endpoint.Description.Contains("Repeat for each configured repository", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(reviewMode.ApiEndpoints, endpoint =>
             endpoint.Path.Contains("/api/agents/review-queue", StringComparison.Ordinal)
-            && endpoint.Description.Contains("programmatic", StringComparison.OrdinalIgnoreCase));
+            && endpoint.Description.Contains("programmatic", StringComparison.OrdinalIgnoreCase)
+            && endpoint.Description.Contains("outsideNeedsAttentionItems", StringComparison.Ordinal));
         Assert.Contains("Regression", reviewMode.HomepageFocusQueue.BucketPriority);
         Assert.Contains("Ready to merge", reviewMode.HomepageFocusQueue.BucketPriority);
         Assert.Contains("Needs review", reviewMode.HomepageFocusQueue.BucketPriority);

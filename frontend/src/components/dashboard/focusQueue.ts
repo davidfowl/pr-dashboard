@@ -165,7 +165,7 @@ function createBucketLabelsByPullRequest(buckets: AttentionBucket[]) {
   return labelsByPullRequest;
 }
 
-function focusExclusionReason(
+export function focusExclusionReason(
   pullRequest: PullRequestSummary,
   bucketLabels: string[],
 ): FocusExclusionReason {
@@ -296,7 +296,7 @@ function focusBucketRank(label: string) {
   return focusBucketRanks.get(label) ?? Number.MAX_SAFE_INTEGER;
 }
 
-function compareFocusExclusionItems(first: FocusExclusionItem, second: FocusExclusionItem) {
+export function compareFocusExclusionItems(first: FocusExclusionItem, second: FocusExclusionItem) {
   return focusExclusionReasonRank(first.reason.kind) - focusExclusionReasonRank(second.reason.kind)
     || updatedTime(second.pullRequest) - updatedTime(first.pullRequest)
     || first.pullRequest.repository.localeCompare(second.pullRequest.repository)

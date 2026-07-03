@@ -49,6 +49,42 @@ public sealed class AgentReviewQueueTests
     }
 
     [Fact]
+    public void BuildIncludesPullRequestsOutsideNeedsAttentionWithReasons()
+    {
+        var options = new DashboardOptions
+        {
+            CoreTeamMembers = ["alice"],
+            DoNotMergeLabels = ["needs-author-action"]
+        };
+        var pullRequests = new[]
+        {
+            Pr(1, "Focused review", "alice", updatedAt: s_now.AddHours(-1)),
+            Pr(2, "CI failing", "alice", updatedAt: s_now.AddMinutes(-30)) with
+            {
+                Checks = Failing()
+            },
+            Pr(3, "Held", "alice", updatedAt: s_now.AddMinutes(-10), labels: ["needs-author-action"]),
+            Pr(4, "Stale review", "alice", updatedAt: s_now.AddDays(-20))
+        };
+
+        var queue = AgentReviewQueueBuilder.Build(
+            [new PullRequestListResponse("microsoft/aspire", pullRequests)],
+            options,
+            s_now);
+
+        var item = Assert.Single(queue.Items);
+        Assert.Equal(1, item.PullRequest.Number);
+
+        Assert.Equal([2, 3, 4], queue.OutsideNeedsAttentionItems.Select(item => item.PullRequest.Number));
+        Assert.Equal(["CI failing", "Held by label", "Stale activity"], queue.OutsideNeedsAttentionItems.Select(item => item.Reason.Label));
+        Assert.Equal(["ci-failing", "held-by-label", "stale-activity"], queue.OutsideNeedsAttentionItems.Select(item => item.Reason.Kind));
+        Assert.Equal(["CI failing", "Needs review"], queue.OutsideNeedsAttentionItems[0].BucketLabels);
+        Assert.Empty(queue.OutsideNeedsAttentionItems[1].BucketLabels);
+        Assert.Equal(["Stalled", "Needs review"], queue.OutsideNeedsAttentionItems[2].BucketLabels);
+        Assert.Equal(3, queue.OutsideNeedsAttentionTotalCount);
+    }
+
+    [Fact]
     public void BuildFocusQueueOrdersSameBucketByOldestWaitLikeHomepage()
     {
         var options = new DashboardOptions { CoreTeamMembers = ["alice"] };
