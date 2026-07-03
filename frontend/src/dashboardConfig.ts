@@ -83,5 +83,8 @@ function normalizeCheckFailureRules(rules: DashboardConfig['nonBlockingCheckFail
       checkNames: normalizeList(rule.checkNames),
       checkNameContains: normalizeList(rule.checkNameContains),
     }))
-    .filter((rule) => rule.repository && rule.label);
+    .filter((rule) =>
+      rule.repository
+      && rule.label
+      && (rule.checkNames.length > 0 || rule.checkNameContains.length > 0));
 }

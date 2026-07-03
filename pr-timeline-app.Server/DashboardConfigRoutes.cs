@@ -72,7 +72,10 @@ public static class DashboardConfigRoutes
                 Label: rule.Label?.Trim() ?? "",
                 CheckNames: Normalize(rule.CheckNames),
                 CheckNameContains: Normalize(rule.CheckNameContains)))
-            .Where(rule => rule.Repository.Length > 0 && rule.Label.Length > 0)
+            .Where(rule =>
+                rule.Repository.Length > 0
+                && rule.Label.Length > 0
+                && (rule.CheckNames.Length > 0 || rule.CheckNameContains.Length > 0))
             .ToArray();
 
     private static IReadOnlyList<string> GetInvalidRepositoryConfigValues(DashboardOptions options)

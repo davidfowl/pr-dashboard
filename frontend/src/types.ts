@@ -128,6 +128,34 @@ export type PullRequestListResponse = {
   snapshot?: PullRequestListSnapshot | null;
 };
 
+export type AgentReviewQueueResponse = {
+  items: AgentReviewQueueItemResponse[];
+  repositories: AgentReviewQueueRepositoryResult[];
+  totalCount: number;
+  generatedAt: string;
+};
+
+export type AgentReviewQueueItemResponse = {
+  repository: string;
+  pullRequest: Omit<PullRequestSummary, 'repository'>;
+  bucketLabel: string;
+  reason: string;
+};
+
+export type AgentReviewQueueItem = {
+  repository: string;
+  pullRequest: PullRequestSummary;
+  bucketLabel: string;
+  reason: string;
+};
+
+export type AgentReviewQueueRepositoryResult = {
+  repository: string;
+  pullRequestCount: number;
+  snapshot?: PullRequestListSnapshot | null;
+  error?: string | null;
+};
+
 export type PullRequestListSnapshot = {
   source: 'fresh-cache' | 'last-good' | 'live' | 'shared-cache' | string;
   fetchedAt: string;

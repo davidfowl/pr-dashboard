@@ -10,6 +10,7 @@ import DetailView from './components/detail/DetailView';
 import { emptyDashboardConfig, fetchDashboardConfig, getDashboardConfig } from './dashboardConfig';
 import type {
   AuthStatus,
+  AgentReviewQueueItem,
   DashboardConfig,
   DashboardMode,
   DevelopmentGitHubAccount,
@@ -35,6 +36,7 @@ import { beginAbortableLoad, cancelAbortableLoad } from './utils/loadLifecycle';
 import { useMediaQuery } from './utils/useMediaQuery';
 import {
   fetchPullRequestList,
+  fetchAgentReviewQueue,
   fetchPullRequests,
   replacePullRequestsByUpdatedAt,
   upsertManyByUpdatedAt,
@@ -48,6 +50,7 @@ import {
   createForMeItems,
   createTimelineStory,
   createTriageModel,
+  isChecksFailing,
   isGeneratedDocsPullRequest,
   needsVisibleCheckDetails,
 } from './utils/models';
@@ -116,6 +119,7 @@ function App() {
   const isMobileNav = useMediaQuery('(max-width: 720px)');
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => parseDashboardMode(window.location.search));
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
+  const [agentReviewQueueItems, setAgentReviewQueueItems] = useState<AgentReviewQueueItem[] | null>(null);
   const [issues, setIssues] = useState<ShipWeekIssueSummary[]>([]);
   const [reviewLastUpdatedAt, setReviewLastUpdatedAt] = useState<string | null>(null);
   const [reviewSnapshotStatus, setReviewSnapshotStatus] = useState<string | null>(null);
@@ -158,6 +162,7 @@ function App() {
   // cache hits to be incorrectly dropped.
   const currentSelectionRef = useRef<{ repository: string; number: number } | null>(null);
   const checksRequestVersionRef = useRef(0);
+  const agentReviewQueueRequestVersionRef = useRef(0);
   const visibleChecksQueueRef = useRef(new Map<string, VisibleChecksRequestItem>());
   const pendingVisibleChecksRef = useRef(new Set<string>());
   const visibleChecksTimerRef = useRef<number | null>(null);
@@ -549,6 +554,7 @@ function App() {
 
   function clearLoadedGitHubData() {
     setPullRequests([]);
+    setAgentReviewQueueItems(null);
     setIssues([]);
     setIssuesError(null);
     setReviewLastUpdatedAt(null);
@@ -600,6 +606,7 @@ function App() {
     const loadStartedAt = performance.now();
     let firstRowsMs: number | null = null;
     let requestCount = 0;
+    let repositories: string[] = [];
 
     setPullsLoading(true);
     setError(null);
@@ -610,12 +617,13 @@ function App() {
     }
 
     try {
-      const repositories = parseRepositories(repositoryInput, dashboardConfigRef.current.repositories);
+      repositories = parseRepositories(repositoryInput, dashboardConfigRef.current.repositories);
       const hideRepositoryErrors = isConfiguredRepositoryInput(repositoryInput, dashboardConfigRef.current.repositoryInput);
       reviewRefreshParamsRef.current = { repositoryInput, pullState };
       setActiveRepo(repositories.length === 1 ? repositories[0] : `${repositories.length} repos`);
       if (!options.preserveResults) {
         setPullRequests([]);
+        setAgentReviewQueueItems(null);
         setReviewLastUpdatedAt(null);
         setReviewSnapshotStatus(null);
         setReviewSnapshotError(null);
@@ -650,6 +658,9 @@ function App() {
           applyPullRequestListResults(pullRequestGroups, !shouldPollPullRequestSnapshots(pullRequestGroups));
         }
       }
+      if (isCurrentLoad() && pullState === 'open' && shouldPollPullRequestSnapshots(pullRequestGroups)) {
+        void loadAgentReviewQueue(repositories, abortController.signal);
+      }
     } catch (err) {
       if (!isCurrentLoad() || (err instanceof DOMException && err.name === 'AbortError')) {
         return;
@@ -658,6 +669,7 @@ function App() {
       setError(err instanceof Error ? err.message : 'Unable to load pull requests.');
       if (!options.preserveResults || options.clearResultsOnError) {
         setPullRequests([]);
+        setAgentReviewQueueItems(null);
         setReviewLastUpdatedAt(null);
         setReviewSnapshotStatus(null);
         setReviewSnapshotError(null);
@@ -682,6 +694,14 @@ function App() {
         pullRequestGroups.flatMap((group) => group.pullRequests),
       );
       setPullRequests((currentPullRequests) => replacePullRequestsByUpdatedAt(currentPullRequests, nextPullRequests));
+      if (pullState === 'open' && settled) {
+        void loadAgentReviewQueue(repositories, abortController.signal);
+      } else {
+        agentReviewQueueRequestVersionRef.current += 1;
+        if (pullState !== 'open') {
+          setAgentReviewQueueItems(null);
+        }
+      }
       setReviewLastUpdatedAt(getPullRequestListLastUpdatedAt(nextPullRequests, pullRequestGroups));
       const snapshotState = getPullRequestSnapshotState(pullRequestGroups);
       setReviewSnapshotStatus(snapshotState.status);
@@ -693,6 +713,30 @@ function App() {
         requestCount,
         staleSnapshotCount: pullRequestGroups.filter((group) => group.snapshot?.stale).length,
       });
+    }
+
+    async function loadAgentReviewQueue(
+      repositories: string[],
+      signal: AbortSignal,
+    ) {
+      const query = new URLSearchParams({ repo: repositories.join(','), limit: '1000' });
+
+      const requestVersion = ++agentReviewQueueRequestVersionRef.current;
+      try {
+        const items = await fetchAgentReviewQueue(`/api/agents/review-queue?${query}`, { signal });
+        if (!isCurrentLoad() || requestVersion !== agentReviewQueueRequestVersionRef.current) {
+          return;
+        }
+
+        setAgentReviewQueueItems(items);
+      } catch (err) {
+        if (!isCurrentLoad() || requestVersion !== agentReviewQueueRequestVersionRef.current || isAbortError(err)) {
+          return;
+        }
+
+        console.warn('Unable to load agent review queue; using client-computed focus queue.', err);
+        setAgentReviewQueueItems(null);
+      }
     }
   }
 
@@ -1032,6 +1076,19 @@ function App() {
           return checks ? { ...pullRequest, checks } : pullRequest;
         }),
       );
+      setAgentReviewQueueItems((current) =>
+        current
+          ? current.map((item) => {
+            const headSha = item.pullRequest.headSha;
+            if (!headSha) {
+              return item;
+            }
+
+            const checks = checksByKey.get(checksRequestKey(item.pullRequest.repository, item.pullRequest.number, headSha));
+            return checks ? { ...item, pullRequest: { ...item.pullRequest, checks } } : item;
+          })
+            .filter((item) => !isChecksFailing(item.pullRequest))
+          : current);
       setShipWeek((current) =>
         current
           ? {
@@ -1391,6 +1448,7 @@ function App() {
             error={error}
             developerPullRequestCounts={developerPullRequestCounts}
             attentionBuckets={attentionBuckets}
+            agentReviewQueueItems={agentReviewQueueItems}
             forMeItems={forMeItems}
             issues={issues}
             issueBuckets={issueBuckets}

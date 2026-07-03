@@ -390,6 +390,266 @@ describe('App navigation', () => {
     await unmountApp(root);
   });
 
+  it('uses the agent review queue endpoint for the homepage Needs attention list', async () => {
+    window.history.replaceState(null, '', '/');
+    const serverQueueWinner = createPullRequest('success', {
+      number: 401,
+      title: 'Server-ranked review item',
+      author: 'karolz-ms',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/401',
+    });
+    const rawClientCandidate = createPullRequest('success', {
+      number: 402,
+      title: 'Raw client candidate',
+      author: 'davidfowl',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/402',
+    });
+    const fetchMock = createAgentReviewQueueFetchMock(serverQueueWinner, rawClientCandidate);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Server-ranked review item');
+    });
+    const focusPanel = document.querySelector('[aria-label="Focused attention queue"]');
+    expect(focusPanel?.textContent).toContain('Server-ranked review item');
+    expect(focusPanel?.textContent).not.toContain('Raw client candidate');
+    const agentQueueUrls = requestUrls(fetchMock, '/api/agents/review-queue');
+    expect(agentQueueUrls).toHaveLength(1);
+    expect(agentQueueUrls[0].searchParams.get('limit')).toBe('1000');
+
+    await unmountApp(root);
+  });
+
+  it('uses an empty successful agent review queue instead of falling back to client focus items', async () => {
+    window.history.replaceState(null, '', '/');
+    const rawClientCandidate = createPullRequest('success', {
+      number: 403,
+      title: 'Client fallback candidate',
+      author: 'davidfowl',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/403',
+    });
+    const fetchMock = createEmptyAgentReviewQueueFetchMock(rawClientCandidate);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(requestUrls(fetchMock, '/api/agents/review-queue')).toHaveLength(1);
+    });
+    const focusPanel = document.querySelector('[aria-label="Focused attention queue"]');
+    expect(focusPanel?.textContent).toContain('No PRs with recent action-relevant activity need attention in the current results.');
+    expect(focusPanel?.textContent).not.toContain('Client fallback candidate');
+
+    await unmountApp(root);
+  });
+
+  it('does not use the open agent review queue while viewing closed pull requests', async () => {
+    window.history.replaceState(null, '', '/');
+    const serverQueueWinner = createPullRequest('success', {
+      number: 404,
+      title: 'Open server queue item',
+      author: 'karolz-ms',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/404',
+    });
+    const rawClientCandidate = createPullRequest('success', {
+      number: 405,
+      title: 'Closed client candidate',
+      state: 'closed',
+      author: 'davidfowl',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/405',
+    });
+    const fetchMock = createAgentReviewQueueFetchMock(serverQueueWinner, rawClientCandidate);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Open server queue item');
+    });
+    await changePullRequestState('closed');
+    await clickButton('Load PRs');
+
+    await waitFor(() => {
+      expect(pullRequestListUrls(fetchMock).some((url) => url.searchParams.get('state') === 'closed')).toBe(true);
+    });
+    const focusPanel = document.querySelector('[aria-label="Focused attention queue"]');
+    expect(focusPanel?.textContent).not.toContain('Open server queue item');
+    expect(requestUrls(fetchMock, '/api/agents/review-queue')).toHaveLength(1);
+
+    await unmountApp(root);
+  });
+
+  it('ignores stale agent review queue responses after a later pull request load starts', async () => {
+    window.history.replaceState(null, '', '/');
+    const agentQueueLoaded = createDeferred<void>();
+    const serverQueueWinner = createPullRequest('success', {
+      number: 406,
+      title: 'Stale server queue item',
+      author: 'karolz-ms',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/406',
+    });
+    const rawClientCandidate = createPullRequest('success', {
+      number: 407,
+      title: 'Current closed row',
+      state: 'closed',
+      author: 'davidfowl',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/407',
+    });
+    const fetchMock = createDelayedAgentReviewQueueFetchMock(
+      agentQueueLoaded.promise,
+      serverQueueWinner,
+      rawClientCandidate,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(requestUrls(fetchMock, '/api/agents/review-queue')).toHaveLength(1);
+    });
+    await changePullRequestState('closed');
+    await clickButton('Load PRs');
+
+    await waitFor(() => {
+      expect(pullRequestListUrls(fetchMock).some((url) => url.searchParams.get('state') === 'closed')).toBe(true);
+    });
+    await act(async () => {
+      agentQueueLoaded.resolve();
+    });
+
+    await waitFor(() => {
+      const focusPanel = document.querySelector('[aria-label="Focused attention queue"]');
+      expect(focusPanel?.textContent).not.toContain('Stale server queue item');
+    });
+
+    await unmountApp(root);
+  });
+
+  it('removes agent review queue rows when visible check enrichment finds failing CI', async () => {
+    window.history.replaceState(null, '', '/');
+    const serverQueueWinner = createPullRequest('unknown', {
+      number: 408,
+      title: 'Server queue item with stale checks',
+      author: 'karolz-ms',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/408',
+      headSha: 'stale-checks-sha',
+    });
+    const rawClientCandidate = createPullRequest('success', {
+      number: 409,
+      title: 'Raw client candidate after checks',
+      author: 'davidfowl',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/409',
+    });
+    const fetchMock = createAgentReviewQueueVisibleChecksFetchMock(
+      serverQueueWinner,
+      rawClientCandidate,
+      'failure',
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Server queue item with stale checks');
+    });
+    await waitFor(() => {
+      expect(requestUrls(fetchMock, '/api/github/pulls/checks')).toHaveLength(1);
+    });
+    await waitFor(() => {
+      const focusPanel = document.querySelector('[aria-label="Focused attention queue"]');
+      expect(focusPanel?.textContent).not.toContain('Server queue item with stale checks');
+    });
+
+    await unmountApp(root);
+  });
+
+  it('keeps visible check enrichment safe before an agent review queue is loaded', async () => {
+    window.history.replaceState(null, '', '/');
+    const fetchMock = createFetchMock({
+      authenticated: true,
+      checksState: 'unknown',
+      visibleChecksState: 'success',
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Fix dashboard navigation');
+      expect(checksRequestUrls(fetchMock)).toHaveLength(1);
+    });
+    expect(requestUrls(fetchMock, '/api/agents/review-queue')).toHaveLength(1);
+
+    await unmountApp(root);
+  });
+
+  it('falls back to client focus when the agent queue has partial repository errors', async () => {
+    window.history.replaceState(null, '', '/');
+    const serverQueueWinner = createPullRequest('success', {
+      number: 410,
+      title: 'Partial server queue item',
+      author: 'karolz-ms',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/410',
+    });
+    const rawClientCandidate = createPullRequest('success', {
+      number: 411,
+      title: 'Client fallback after partial error',
+      author: 'davidfowl',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/411',
+    });
+    const fetchMock = createPartialAgentReviewQueueFetchMock(serverQueueWinner, rawClientCandidate);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(requestUrls(fetchMock, '/api/agents/review-queue')).toHaveLength(1);
+    });
+    const focusPanel = document.querySelector('[aria-label="Focused attention queue"]');
+    expect(focusPanel?.textContent).toContain('Client fallback after partial error');
+    expect(focusPanel?.textContent).not.toContain('Partial server queue item');
+
+    await unmountApp(root);
+  });
+
+  it('loads the agent queue after same-load snapshot polling settles', async () => {
+    window.history.replaceState(null, '', '/');
+    const staleServerQueueWinner = createPullRequest('success', {
+      number: 412,
+      title: 'Older same-load queue item',
+      author: 'karolz-ms',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/412',
+    });
+    const freshServerQueueWinner = createPullRequest('success', {
+      number: 413,
+      title: 'Fresher same-load queue item',
+      author: 'karolz-ms',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/413',
+      updatedAt: '2026-01-04T00:00:00Z',
+    });
+    const fetchMock = createSameLoadAgentReviewQueueRaceFetchMock(
+      staleServerQueueWinner,
+      freshServerQueueWinner,
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(requestUrls(fetchMock, '/api/agents/review-queue')).toHaveLength(1);
+    });
+
+    await waitFor(() => {
+      const focusPanel = document.querySelector('[aria-label="Focused attention queue"]');
+      expect(focusPanel?.textContent).toContain('Fresher same-load queue item');
+      expect(focusPanel?.textContent).not.toContain('Older same-load queue item');
+    });
+
+    await unmountApp(root);
+  });
+
   it('keeps cached rows visible during live refresh and swaps when live rows finish loading', async () => {
     window.history.replaceState(null, '', '/');
     const liveRefresh = createDeferred<void>();
@@ -411,6 +671,7 @@ describe('App navigation', () => {
       expect(document.body.textContent).not.toContain('Live refreshed row');
     });
     expect(pullRequestListUrls(fetchMock).some((url) => url.searchParams.get('refresh') === 'true')).toBe(true);
+    expect(requestUrls(fetchMock, '/api/agents/review-queue')).toHaveLength(1);
 
     await act(async () => {
       liveRefresh.resolve();
@@ -421,6 +682,8 @@ describe('App navigation', () => {
       expect(document.body.textContent).not.toContain('Cached row');
     });
     expect(checksRequestUrls(fetchMock).some((url) => url.searchParams.has('refresh'))).toBe(false);
+    expect(requestUrls(fetchMock, '/api/agents/review-queue').some((url) => url.searchParams.has('refresh'))).toBe(false);
+    expect(requestUrls(fetchMock, '/api/agents/review-queue')).toHaveLength(2);
 
     await unmountApp(root);
   });
@@ -1030,6 +1293,500 @@ function createDelayedVisibleChecksFetchMock() {
   });
 }
 
+function createAgentReviewQueueFetchMock(serverQueueWinner: PullRequestSummary, rawClientCandidate: PullRequestSummary) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/dashboard/config') {
+      return dashboardConfigResponse();
+    }
+
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/agents/review-queue') {
+      return jsonResponse(agentReviewQueue([{
+        repository: serverQueueWinner.repository,
+        pullRequest: serverQueueWinner,
+        bucketLabel: 'Needs review',
+        reason: 'No reviews',
+      }]));
+    }
+
+    if (url.pathname === '/api/github/pulls/graphql') {
+      if (url.searchParams.get('label')) {
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? rawClientCandidate.repository, []));
+      }
+
+      return jsonResponse(pullRequestList(
+        url.searchParams.get('repo') ?? rawClientCandidate.repository,
+        url.searchParams.get('repo') === rawClientCandidate.repository ? [rawClientCandidate] : [],
+      ));
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: rawClientCandidate.repository,
+        pullRequests: [rawClientCandidate, serverQueueWinner].map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createEmptyAgentReviewQueueFetchMock(rawClientCandidate: PullRequestSummary) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/dashboard/config') {
+      return dashboardConfigResponse();
+    }
+
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/agents/review-queue') {
+      return jsonResponse(agentReviewQueue([]));
+    }
+
+    if (url.pathname === '/api/github/pulls/graphql') {
+      if (url.searchParams.get('label')) {
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? rawClientCandidate.repository, []));
+      }
+
+      return jsonResponse(pullRequestList(
+        url.searchParams.get('repo') ?? rawClientCandidate.repository,
+        url.searchParams.get('repo') === rawClientCandidate.repository ? [rawClientCandidate] : [],
+      ));
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: rawClientCandidate.repository,
+        pullRequests: [
+          {
+            number: rawClientCandidate.number,
+            headSha: rawClientCandidate.headSha ?? '',
+            checks: rawClientCandidate.checks,
+          },
+        ],
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createDelayedAgentReviewQueueFetchMock(
+  agentQueueLoaded: Promise<void>,
+  serverQueueWinner: PullRequestSummary,
+  rawClientCandidate: PullRequestSummary,
+) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/dashboard/config') {
+      return dashboardConfigResponse();
+    }
+
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/agents/review-queue') {
+      await agentQueueLoaded;
+      return jsonResponse(agentReviewQueue([{
+        repository: serverQueueWinner.repository,
+        pullRequest: serverQueueWinner,
+        bucketLabel: 'Needs review',
+        reason: 'No reviews',
+      }]));
+    }
+
+    if (url.pathname === '/api/github/pulls/graphql') {
+      if (url.searchParams.get('label')) {
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? rawClientCandidate.repository, []));
+      }
+
+      return jsonResponse(pullRequestList(
+        url.searchParams.get('repo') ?? rawClientCandidate.repository,
+        url.searchParams.get('repo') === rawClientCandidate.repository ? [rawClientCandidate] : [],
+      ));
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: rawClientCandidate.repository,
+        pullRequests: [rawClientCandidate, serverQueueWinner].map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createAgentReviewQueueVisibleChecksFetchMock(
+  serverQueueWinner: PullRequestSummary,
+  rawClientCandidate: PullRequestSummary,
+  visibleChecksState: CheckState,
+) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/dashboard/config') {
+      return dashboardConfigResponse();
+    }
+
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/agents/review-queue') {
+      return jsonResponse(agentReviewQueue([{
+        repository: serverQueueWinner.repository,
+        pullRequest: serverQueueWinner,
+        bucketLabel: 'Needs review',
+        reason: 'No reviews',
+      }]));
+    }
+
+    if (url.pathname === '/api/github/pulls/graphql') {
+      if (url.searchParams.get('label')) {
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? rawClientCandidate.repository, []));
+      }
+
+      return jsonResponse(pullRequestList(
+        url.searchParams.get('repo') ?? rawClientCandidate.repository,
+        url.searchParams.get('repo') === rawClientCandidate.repository ? [rawClientCandidate] : [],
+      ));
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: serverQueueWinner.repository,
+        pullRequests: [
+          {
+            number: serverQueueWinner.number,
+            headSha: serverQueueWinner.headSha ?? '',
+            checks: checksStatus(visibleChecksState),
+          },
+        ],
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createPartialAgentReviewQueueFetchMock(serverQueueWinner: PullRequestSummary, rawClientCandidate: PullRequestSummary) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/dashboard/config') {
+      return dashboardConfigResponse();
+    }
+
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/agents/review-queue') {
+      return jsonResponse({
+        ...agentReviewQueue([{
+          repository: serverQueueWinner.repository,
+          pullRequest: serverQueueWinner,
+          bucketLabel: 'Needs review',
+          reason: 'No reviews',
+        }]),
+        repositories: [
+          {
+            repository: serverQueueWinner.repository,
+            pullRequestCount: 1,
+            snapshot: null,
+            error: null,
+          },
+          {
+            repository: 'microsoft/dcp',
+            pullRequestCount: 0,
+            snapshot: null,
+            error: 'Cannot access microsoft/dcp',
+          },
+        ],
+      });
+    }
+
+    if (url.pathname === '/api/github/pulls/graphql') {
+      if (url.searchParams.get('label')) {
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? rawClientCandidate.repository, []));
+      }
+
+      return jsonResponse(pullRequestList(
+        url.searchParams.get('repo') ?? rawClientCandidate.repository,
+        url.searchParams.get('repo') === rawClientCandidate.repository ? [rawClientCandidate] : [],
+      ));
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: rawClientCandidate.repository,
+        pullRequests: [rawClientCandidate].map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
+function createSameLoadAgentReviewQueueRaceFetchMock(
+  staleServerQueueWinner: PullRequestSummary,
+  freshServerQueueWinner: PullRequestSummary,
+) {
+  let pullListRequestCount = 0;
+  let pullListSettled = false;
+
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/dashboard/config') {
+      return dashboardConfigResponse();
+    }
+
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: true,
+        configured: true,
+        canLogin: true,
+        login: 'octocat',
+        message: 'Signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/agents/review-queue') {
+      return jsonResponse(agentReviewQueue([{
+        repository: pullListSettled ? freshServerQueueWinner.repository : staleServerQueueWinner.repository,
+        pullRequest: pullListSettled ? freshServerQueueWinner : staleServerQueueWinner,
+        bucketLabel: 'Needs review',
+        reason: 'No reviews',
+      }]));
+    }
+
+    if (url.pathname === '/api/github/pulls/graphql') {
+      if (url.searchParams.get('label')) {
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? staleServerQueueWinner.repository, []));
+      }
+
+      pullListRequestCount += 1;
+      if (pullListRequestCount === 1) {
+        return jsonResponse(pullRequestList(staleServerQueueWinner.repository, [staleServerQueueWinner], {
+          source: 'last-good',
+          stale: true,
+          refreshInProgress: true,
+          refreshQueued: true,
+        }));
+      }
+
+      pullListSettled = true;
+      return jsonResponse(pullRequestList(freshServerQueueWinner.repository, [freshServerQueueWinner]));
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: staleServerQueueWinner.repository,
+        pullRequests: [staleServerQueueWinner, freshServerQueueWinner].map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
 function createPullRequest(
   checksState: CheckState,
   overrides: Partial<PullRequestSummary> = {},
@@ -1126,6 +1883,32 @@ function pullRequestList(
   };
 }
 
+function agentReviewQueue(items: Array<{
+  repository: string;
+  pullRequest: PullRequestSummary;
+  bucketLabel: string;
+  reason: string;
+}>) {
+  return {
+    items: items.map((item) => ({
+      repository: item.repository,
+      pullRequest: withoutRepository(item.pullRequest),
+      bucketLabel: item.bucketLabel,
+      reason: item.reason,
+    })),
+    repositories: [
+      {
+        repository: items[0]?.repository ?? 'microsoft/aspire',
+        pullRequestCount: items.length,
+        snapshot: null,
+        error: null,
+      },
+    ],
+    totalCount: items.length,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 async function renderApp() {
   const host = document.createElement('div');
   document.body.append(host);
@@ -1156,6 +1939,21 @@ async function changeDevAccount(login: string) {
 
   await act(async () => {
     select.value = login;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
+async function changePullRequestState(state: string) {
+  const select = Array.from(document.querySelectorAll('select'))
+    .find((candidate): candidate is HTMLSelectElement =>
+      candidate instanceof HTMLSelectElement
+      && Array.from(candidate.options).some((option) => option.value === 'closed'));
+  if (!select) {
+    throw new Error('Unable to find pull request state selector.');
+  }
+
+  await act(async () => {
+    select.value = state;
     select.dispatchEvent(new Event('change', { bubbles: true }));
   });
 }

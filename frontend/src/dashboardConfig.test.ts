@@ -51,6 +51,12 @@ describe('dashboard config store', () => {
           checkNames: [],
           checkNameContains: [],
         },
+        {
+          repository: 'example/repo',
+          label: 'missing matcher',
+          checkNames: [],
+          checkNameContains: [],
+        },
       ],
     });
 

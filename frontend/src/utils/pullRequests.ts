@@ -1,4 +1,10 @@
-import type { CheckState, PullRequestListResponse, PullRequestSummary } from '../types';
+import type {
+  AgentReviewQueueItem,
+  AgentReviewQueueResponse,
+  CheckState,
+  PullRequestListResponse,
+  PullRequestSummary,
+} from '../types';
 import { readJson } from './http';
 
 type PullRequestCollectionItem = {
@@ -29,6 +35,25 @@ export async function fetchPullRequestList(url: string, options: FetchPullReques
     pullRequests: options.filter ? pullRequests.filter(options.filter) : pullRequests,
     snapshot: data.snapshot ?? null,
   };
+}
+
+export async function fetchAgentReviewQueue(url: string, options: Pick<FetchPullRequestsOptions, 'signal'> = {}): Promise<AgentReviewQueueItem[] | null> {
+  const response = await fetch(url, { signal: options.signal });
+  if (response.status === 404) {
+    return null;
+  }
+
+  const data = await readJson<AgentReviewQueueResponse>(response);
+  if (data.repositories.some((repository) => repository.error)) {
+    return null;
+  }
+
+  return data.items.map((item): AgentReviewQueueItem => ({
+    repository: item.repository,
+    pullRequest: normalizePullRequest(item.repository, item.pullRequest),
+    bucketLabel: item.bucketLabel,
+    reason: item.reason,
+  }));
 }
 
 export async function fetchPullRequests(url: string, options: FetchPullRequestsOptions = {}) {

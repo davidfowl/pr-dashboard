@@ -48,6 +48,11 @@ public sealed class DashboardConfigRoutesTests
                 {
                     Repository = "",
                     Label = "missing repository"
+                },
+                new DashboardCheckFailureRuleOptions
+                {
+                    Repository = "example/repo",
+                    Label = "missing matcher"
                 }
             ]
         });
