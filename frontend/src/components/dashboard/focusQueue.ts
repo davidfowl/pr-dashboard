@@ -165,7 +165,7 @@ function createBucketLabelsByPullRequest(buckets: AttentionBucket[]) {
   return labelsByPullRequest;
 }
 
-function focusExclusionReason(
+export function focusExclusionReason(
   pullRequest: PullRequestSummary,
   bucketLabels: string[],
 ): FocusExclusionReason {

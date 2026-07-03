@@ -589,8 +589,11 @@ describe('App navigation', () => {
     });
     await waitFor(() => {
       const focusPanel = document.querySelector('[aria-label="Focused attention queue"]');
-      expect(focusPanel?.textContent).not.toContain('Server queue item with stale checks');
+      expect(focusPanel?.querySelector(':scope > .attention-card-header')?.textContent).toContain('0 shown');
     });
+    const outsidePanel = document.querySelector('[aria-label="Pull requests outside Needs attention"]');
+    expect(outsidePanel?.textContent).toContain('Server queue item with stale checks');
+    expect(outsidePanel?.textContent).toContain('CI failing');
 
     await unmountApp(root);
   });

@@ -51,7 +51,6 @@ import {
   createForMeItems,
   createTimelineStory,
   createTriageModel,
-  isChecksFailing,
   isGeneratedDocsPullRequest,
   needsVisibleCheckDetails,
 } from './utils/models';
@@ -1095,7 +1094,6 @@ function App() {
             const checks = checksByKey.get(checksRequestKey(item.pullRequest.repository, item.pullRequest.number, headSha));
             return checks ? { ...item, pullRequest: { ...item.pullRequest, checks } } : item;
           })
-            .filter((item) => !isChecksFailing(item.pullRequest))
           : current);
       setAgentReviewQueueOutsideNeedsAttentionItems((current) =>
         current

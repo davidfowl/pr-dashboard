@@ -10,7 +10,8 @@ import type {
   VisiblePullRequestHandler,
 } from '../../types';
 import { colorForText, formatCount, formatRelative } from '../../utils/format';
-import { computeCommunityItems, computeFocusExclusionItems, computeFocusItems } from './focusQueue';
+import { isChecksFailing } from '../../utils/models';
+import { computeCommunityItems, computeFocusExclusionItems, computeFocusItems, focusExclusionReason } from './focusQueue';
 import type { CommunityQueueItem, FocusExclusionItem, FocusItem } from './focusQueue';
 import GitHubAvatar from '../GitHubAvatar';
 import HelpTooltip from '../HelpTooltip';
@@ -74,16 +75,40 @@ function QueueOverview({
   const [showAllCoreMembers, setShowAllCoreMembers] = useState(false);
   const [showFilterInfo, setShowFilterInfo] = useState(false);
 
-  const focusItems = useMemo<FocusItem[]>(
+  const agentFocusItems = useMemo<FocusItem[] | null>(
     () => agentReviewQueueItems !== null
       ? agentReviewQueueItems.map((item) => agentReviewQueueFocusItem(item, attentionBuckets))
-      : computeFocusItems(attentionBuckets),
+      : null,
     [agentReviewQueueItems, attentionBuckets],
   );
+  const focusItems = useMemo<FocusItem[]>(
+    () => agentFocusItems !== null
+      ? agentFocusItems.filter((item) => !isChecksFailing(item.pullRequest))
+      : computeFocusItems(attentionBuckets),
+    [agentFocusItems, attentionBuckets],
+  );
   const focusExclusionItems = useMemo<FocusExclusionItem[]>(
-    () => agentReviewQueueOutsideNeedsAttentionItems
-      ?? computeFocusExclusionItems(pullRequests, attentionBuckets, focusItems, login),
-    [agentReviewQueueOutsideNeedsAttentionItems, attentionBuckets, focusItems, login, pullRequests],
+    () => {
+      if (agentReviewQueueOutsideNeedsAttentionItems) {
+        const outsideKeys = new Set(agentReviewQueueOutsideNeedsAttentionItems.map((item) => pullRequestKey(item.pullRequest)));
+        const failingFocusItems = agentFocusItems
+          ?.filter((item) => isChecksFailing(item.pullRequest))
+          .filter((item) => !outsideKeys.has(pullRequestKey(item.pullRequest)))
+          .map((item): FocusExclusionItem => {
+            const bucketLabels = [item.bucketLabel];
+            return {
+              pullRequest: item.pullRequest,
+              bucketLabels,
+              reason: focusExclusionReason(item.pullRequest, bucketLabels),
+            };
+          }) ?? [];
+
+        return [...failingFocusItems, ...agentReviewQueueOutsideNeedsAttentionItems];
+      }
+
+      return computeFocusExclusionItems(pullRequests, attentionBuckets, focusItems, login);
+    },
+    [agentFocusItems, agentReviewQueueOutsideNeedsAttentionItems, attentionBuckets, focusItems, login, pullRequests],
   );
   const communityItems = useMemo<CommunityQueueItem[]>(
     () => computeCommunityItems(pullRequests),
