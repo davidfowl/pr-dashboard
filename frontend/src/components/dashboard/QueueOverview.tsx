@@ -11,7 +11,13 @@ import type {
 } from '../../types';
 import { colorForText, formatCount, formatRelative } from '../../utils/format';
 import { isChecksFailing } from '../../utils/models';
-import { computeCommunityItems, computeFocusExclusionItems, computeFocusItems, focusExclusionReason } from './focusQueue';
+import {
+  compareFocusExclusionItems,
+  computeCommunityItems,
+  computeFocusExclusionItems,
+  computeFocusItems,
+  focusExclusionReason,
+} from './focusQueue';
 import type { CommunityQueueItem, FocusExclusionItem, FocusItem } from './focusQueue';
 import GitHubAvatar from '../GitHubAvatar';
 import HelpTooltip from '../HelpTooltip';
@@ -107,7 +113,7 @@ function QueueOverview({
             };
           }) ?? [];
 
-        return [...failingFocusItems, ...outsideItems];
+        return [...failingFocusItems, ...outsideItems].sort(compareFocusExclusionItems);
       }
 
       return computeFocusExclusionItems(pullRequests, attentionBuckets, focusItems, login);

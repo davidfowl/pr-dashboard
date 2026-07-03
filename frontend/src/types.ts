@@ -130,10 +130,10 @@ export type PullRequestListResponse = {
 
 export type AgentReviewQueueResponse = {
   items: AgentReviewQueueItemResponse[];
-  outsideNeedsAttentionItems: AgentReviewQueueOutsideNeedsAttentionItemResponse[];
+  outsideNeedsAttentionItems?: AgentReviewQueueOutsideNeedsAttentionItemResponse[];
   repositories: AgentReviewQueueRepositoryResult[];
   totalCount: number;
-  outsideNeedsAttentionTotalCount: number;
+  outsideNeedsAttentionTotalCount?: number;
   generatedAt: string;
 };
 
