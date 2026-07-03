@@ -54,6 +54,8 @@ export async function fetchAgentReviewQueue(url: string, options: Pick<FetchPull
     return null;
   }
 
+  const outsideNeedsAttentionItems = data.outsideNeedsAttentionItems ?? [];
+
   return {
     items: data.items.map((item): AgentReviewQueueItem => ({
       repository: item.repository,
@@ -61,7 +63,7 @@ export async function fetchAgentReviewQueue(url: string, options: Pick<FetchPull
       bucketLabel: item.bucketLabel,
       reason: item.reason,
     })),
-    outsideNeedsAttentionItems: data.outsideNeedsAttentionItems.map((item): AgentReviewQueueOutsideNeedsAttentionItem => ({
+    outsideNeedsAttentionItems: outsideNeedsAttentionItems.map((item): AgentReviewQueueOutsideNeedsAttentionItem => ({
       repository: item.repository,
       pullRequest: normalizePullRequest(item.repository, item.pullRequest),
       bucketLabels: item.bucketLabels,

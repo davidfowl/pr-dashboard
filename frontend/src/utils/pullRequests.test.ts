@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CheckState, PullRequestListResponse, PullRequestSummary } from '../types';
 import {
+  fetchAgentReviewQueue,
   fetchPullRequests,
   replacePullRequestsByUpdatedAt,
   upsertPullRequestByUpdatedAt,
@@ -98,6 +99,26 @@ describe('pull request overlays', () => {
 
     expect(result.map((pullRequest) => pullRequest.title)).toEqual(['Live row']);
     expect(result[0].repository).toBe('example/repo');
+  });
+
+  it('loads agent review queue responses that omit outside Needs attention items', async () => {
+    const live = pullRequest({ number: 1, title: 'Live agent row', updatedAt: '2026-01-02T00:00:00Z' });
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
+      items: [{
+        repository: live.repository,
+        pullRequest: withoutRepository(live),
+        bucketLabel: 'Needs review',
+        reason: 'No reviews',
+      }],
+      repositories: [],
+      totalCount: 1,
+      generatedAt: '2026-01-02T00:00:00Z',
+    })));
+
+    const result = await fetchAgentReviewQueue('/api/agents/review-queue?repo=example/repo');
+
+    expect(result?.items.map((item) => item.pullRequest.title)).toEqual(['Live agent row']);
+    expect(result?.outsideNeedsAttentionItems).toEqual([]);
   });
 
   it('filters loaded pull requests after normalizing repository data', async () => {

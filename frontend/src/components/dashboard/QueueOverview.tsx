@@ -90,7 +90,11 @@ function QueueOverview({
   const focusExclusionItems = useMemo<FocusExclusionItem[]>(
     () => {
       if (agentReviewQueueOutsideNeedsAttentionItems) {
-        const outsideKeys = new Set(agentReviewQueueOutsideNeedsAttentionItems.map((item) => pullRequestKey(item.pullRequest)));
+        const outsideItems = agentReviewQueueOutsideNeedsAttentionItems.map((item): FocusExclusionItem => ({
+          ...item,
+          reason: focusExclusionReason(item.pullRequest, item.bucketLabels),
+        }));
+        const outsideKeys = new Set(outsideItems.map((item) => pullRequestKey(item.pullRequest)));
         const failingFocusItems = agentFocusItems
           ?.filter((item) => isChecksFailing(item.pullRequest))
           .filter((item) => !outsideKeys.has(pullRequestKey(item.pullRequest)))
@@ -103,7 +107,7 @@ function QueueOverview({
             };
           }) ?? [];
 
-        return [...failingFocusItems, ...agentReviewQueueOutsideNeedsAttentionItems];
+        return [...failingFocusItems, ...outsideItems];
       }
 
       return computeFocusExclusionItems(pullRequests, attentionBuckets, focusItems, login);
