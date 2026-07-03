@@ -422,6 +422,36 @@ describe('App navigation', () => {
     await unmountApp(root);
   });
 
+  it('shows API outside Needs attention items when logged out', async () => {
+    window.history.replaceState(null, '', '/');
+    const serverQueueWinner = createPullRequest('success', {
+      number: 410,
+      title: 'Focused server item',
+      author: 'karolz-ms',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/410',
+    });
+    const outsideItem = createPullRequest('failure', {
+      number: 411,
+      title: 'Outside server item',
+      author: 'davidfowl',
+      htmlUrl: 'https://github.com/microsoft/aspire/pull/411',
+    });
+    const fetchMock = createLoggedOutAgentReviewQueueFetchMock(serverQueueWinner, outsideItem);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('Focused server item');
+    });
+    const outsidePanel = document.querySelector('[aria-label="Pull requests outside Needs attention"]');
+    expect(outsidePanel?.textContent).toContain('Outside Needs attention');
+    expect(outsidePanel?.textContent).toContain('Outside server item');
+    expect(outsidePanel?.textContent).toContain('Failing checks keep it out until CI is green again.');
+
+    await unmountApp(root);
+  });
+
   it('uses an empty successful agent review queue instead of falling back to client focus items', async () => {
     window.history.replaceState(null, '', '/');
     const rawClientCandidate = createPullRequest('success', {
@@ -1369,6 +1399,94 @@ function createAgentReviewQueueFetchMock(serverQueueWinner: PullRequestSummary, 
   });
 }
 
+function createLoggedOutAgentReviewQueueFetchMock(serverQueueWinner: PullRequestSummary, outsideItem: PullRequestSummary) {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = new URL(input.toString(), window.location.origin);
+    if (url.pathname === '/api/dashboard/config') {
+      return dashboardConfigResponse();
+    }
+
+    if (url.pathname === '/api/github/auth-status') {
+      return jsonResponse<AuthStatus>({
+        authenticated: false,
+        configured: false,
+        canLogin: false,
+        message: 'Not signed in.',
+      });
+    }
+
+    if (url.pathname === '/api/app-info') {
+      return jsonResponse<AppInfoResponse>({
+        commitSha: 'test',
+        shortCommitSha: 'test',
+      });
+    }
+
+    if (url.pathname === '/api/agents/review-queue') {
+      return jsonResponse(agentReviewQueue(
+        [{
+          repository: serverQueueWinner.repository,
+          pullRequest: serverQueueWinner,
+          bucketLabel: 'Needs review',
+          reason: 'No reviews',
+        }],
+        [{
+          repository: outsideItem.repository,
+          pullRequest: outsideItem,
+          bucketLabels: ['CI failing', 'Needs review'],
+          reason: {
+            kind: 'ci-failing',
+            label: 'CI failing',
+            detail: 'Failing checks keep it out until CI is green again.',
+            tone: 'danger',
+          },
+        }],
+      ));
+    }
+
+    if (url.pathname === '/api/github/pulls/graphql') {
+      if (url.searchParams.get('label')) {
+        return jsonResponse(pullRequestList(url.searchParams.get('repo') ?? serverQueueWinner.repository, []));
+      }
+
+      return jsonResponse(pullRequestList(
+        url.searchParams.get('repo') ?? serverQueueWinner.repository,
+        url.searchParams.get('repo') === serverQueueWinner.repository ? [serverQueueWinner, outsideItem] : [],
+      ));
+    }
+
+    if (url.pathname === '/api/github/pulls/checks') {
+      return jsonResponse<PullRequestChecksResponse>({
+        repository: serverQueueWinner.repository,
+        pullRequests: [serverQueueWinner, outsideItem].map((pullRequest) => ({
+          number: pullRequest.number,
+          headSha: pullRequest.headSha ?? '',
+          checks: pullRequest.checks,
+        })),
+      });
+    }
+
+    if (url.pathname === '/api/github/ship-week') {
+      return jsonResponse<ShipWeekResponse>({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        milestone: url.searchParams.get('milestone') ?? '13.4',
+        releaseBranch: '',
+        pullRequests: [],
+        issues: [],
+      });
+    }
+
+    if (url.pathname === '/api/github/issues/focus') {
+      return jsonResponse({
+        repository: url.searchParams.get('repo') ?? 'microsoft/aspire',
+        issues: [],
+      });
+    }
+
+    return jsonResponse({ detail: `Unhandled request: ${url.pathname}` }, 404);
+  });
+}
+
 function createEmptyAgentReviewQueueFetchMock(rawClientCandidate: PullRequestSummary) {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = new URL(input.toString(), window.location.origin);
@@ -1888,7 +2006,27 @@ function agentReviewQueue(items: Array<{
   pullRequest: PullRequestSummary;
   bucketLabel: string;
   reason: string;
-}>) {
+}>, outsideNeedsAttentionItems: Array<{
+  repository: string;
+  pullRequest: PullRequestSummary;
+  bucketLabels: string[];
+  reason: {
+    kind:
+      | 'ci-failing'
+      | 'merge-conflicts'
+      | 'unresolved-feedback'
+      | 'held-by-label'
+      | 'author-response'
+      | 'stale-activity'
+      | 'community-list'
+      | 'specialized-lane'
+      | 'stalled-only'
+      | 'outside-queue';
+    label: string;
+    detail: string;
+    tone: 'danger' | 'warning' | 'success' | 'accent' | 'muted';
+  };
+}> = []) {
   return {
     items: items.map((item) => ({
       repository: item.repository,
@@ -1896,7 +2034,12 @@ function agentReviewQueue(items: Array<{
       bucketLabel: item.bucketLabel,
       reason: item.reason,
     })),
-    outsideNeedsAttentionItems: [],
+    outsideNeedsAttentionItems: outsideNeedsAttentionItems.map((item) => ({
+      repository: item.repository,
+      pullRequest: withoutRepository(item.pullRequest),
+      bucketLabels: item.bucketLabels,
+      reason: item.reason,
+    })),
     repositories: [
       {
         repository: items[0]?.repository ?? 'microsoft/aspire',
@@ -1906,7 +2049,7 @@ function agentReviewQueue(items: Array<{
       },
     ],
     totalCount: items.length,
-    outsideNeedsAttentionTotalCount: 0,
+    outsideNeedsAttentionTotalCount: outsideNeedsAttentionItems.length,
     generatedAt: new Date().toISOString(),
   };
 }

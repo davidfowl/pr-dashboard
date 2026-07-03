@@ -152,10 +152,20 @@ export type AgentReviewQueueOutsideNeedsAttentionItemResponse = {
 };
 
 export type AgentReviewQueueOutsideNeedsAttentionReason = {
-  kind: string;
+  kind:
+    | 'ci-failing'
+    | 'merge-conflicts'
+    | 'unresolved-feedback'
+    | 'held-by-label'
+    | 'author-response'
+    | 'stale-activity'
+    | 'community-list'
+    | 'specialized-lane'
+    | 'stalled-only'
+    | 'outside-queue';
   label: string;
   detail: string;
-  tone: 'danger' | 'warning' | 'success' | 'accent' | 'muted' | string;
+  tone: 'danger' | 'warning' | 'success' | 'accent' | 'muted';
 };
 
 export type AgentReviewQueueItem = {
@@ -163,6 +173,13 @@ export type AgentReviewQueueItem = {
   pullRequest: PullRequestSummary;
   bucketLabel: string;
   reason: string;
+};
+
+export type AgentReviewQueueOutsideNeedsAttentionItem = {
+  repository: string;
+  pullRequest: PullRequestSummary;
+  bucketLabels: string[];
+  reason: AgentReviewQueueOutsideNeedsAttentionReason;
 };
 
 export type AgentReviewQueueRepositoryResult = {

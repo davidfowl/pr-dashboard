@@ -11,6 +11,7 @@ import { emptyDashboardConfig, fetchDashboardConfig, getDashboardConfig } from '
 import type {
   AuthStatus,
   AgentReviewQueueItem,
+  AgentReviewQueueOutsideNeedsAttentionItem,
   DashboardConfig,
   DashboardMode,
   DevelopmentGitHubAccount,
@@ -120,6 +121,7 @@ function App() {
   const [dashboardMode, setDashboardMode] = useState<DashboardMode>(() => parseDashboardMode(window.location.search));
   const [pullRequests, setPullRequests] = useState<PullRequestSummary[]>([]);
   const [agentReviewQueueItems, setAgentReviewQueueItems] = useState<AgentReviewQueueItem[] | null>(null);
+  const [agentReviewQueueOutsideNeedsAttentionItems, setAgentReviewQueueOutsideNeedsAttentionItems] = useState<AgentReviewQueueOutsideNeedsAttentionItem[] | null>(null);
   const [issues, setIssues] = useState<ShipWeekIssueSummary[]>([]);
   const [reviewLastUpdatedAt, setReviewLastUpdatedAt] = useState<string | null>(null);
   const [reviewSnapshotStatus, setReviewSnapshotStatus] = useState<string | null>(null);
@@ -555,6 +557,7 @@ function App() {
   function clearLoadedGitHubData() {
     setPullRequests([]);
     setAgentReviewQueueItems(null);
+    setAgentReviewQueueOutsideNeedsAttentionItems(null);
     setIssues([]);
     setIssuesError(null);
     setReviewLastUpdatedAt(null);
@@ -624,6 +627,7 @@ function App() {
       if (!options.preserveResults) {
         setPullRequests([]);
         setAgentReviewQueueItems(null);
+        setAgentReviewQueueOutsideNeedsAttentionItems(null);
         setReviewLastUpdatedAt(null);
         setReviewSnapshotStatus(null);
         setReviewSnapshotError(null);
@@ -670,6 +674,7 @@ function App() {
       if (!options.preserveResults || options.clearResultsOnError) {
         setPullRequests([]);
         setAgentReviewQueueItems(null);
+        setAgentReviewQueueOutsideNeedsAttentionItems(null);
         setReviewLastUpdatedAt(null);
         setReviewSnapshotStatus(null);
         setReviewSnapshotError(null);
@@ -700,6 +705,7 @@ function App() {
         agentReviewQueueRequestVersionRef.current += 1;
         if (pullState !== 'open') {
           setAgentReviewQueueItems(null);
+          setAgentReviewQueueOutsideNeedsAttentionItems(null);
         }
       }
       setReviewLastUpdatedAt(getPullRequestListLastUpdatedAt(nextPullRequests, pullRequestGroups));
@@ -723,12 +729,13 @@ function App() {
 
       const requestVersion = ++agentReviewQueueRequestVersionRef.current;
       try {
-        const items = await fetchAgentReviewQueue(`/api/agents/review-queue?${query}`, { signal });
+        const queue = await fetchAgentReviewQueue(`/api/agents/review-queue?${query}`, { signal });
         if (!isCurrentLoad() || requestVersion !== agentReviewQueueRequestVersionRef.current) {
           return;
         }
 
-        setAgentReviewQueueItems(items);
+        setAgentReviewQueueItems(queue?.items ?? null);
+        setAgentReviewQueueOutsideNeedsAttentionItems(queue?.outsideNeedsAttentionItems ?? null);
       } catch (err) {
         if (!isCurrentLoad() || requestVersion !== agentReviewQueueRequestVersionRef.current || isAbortError(err)) {
           return;
@@ -736,6 +743,7 @@ function App() {
 
         console.warn('Unable to load agent review queue; using client-computed focus queue.', err);
         setAgentReviewQueueItems(null);
+        setAgentReviewQueueOutsideNeedsAttentionItems(null);
       }
     }
   }
@@ -1088,6 +1096,18 @@ function App() {
             return checks ? { ...item, pullRequest: { ...item.pullRequest, checks } } : item;
           })
             .filter((item) => !isChecksFailing(item.pullRequest))
+          : current);
+      setAgentReviewQueueOutsideNeedsAttentionItems((current) =>
+        current
+          ? current.map((item) => {
+            const headSha = item.pullRequest.headSha;
+            if (!headSha) {
+              return item;
+            }
+
+            const checks = checksByKey.get(checksRequestKey(item.pullRequest.repository, item.pullRequest.number, headSha));
+            return checks ? { ...item, pullRequest: { ...item.pullRequest, checks } } : item;
+          })
           : current);
       setShipWeek((current) =>
         current
@@ -1449,6 +1469,7 @@ function App() {
             developerPullRequestCounts={developerPullRequestCounts}
             attentionBuckets={attentionBuckets}
             agentReviewQueueItems={agentReviewQueueItems}
+            agentReviewQueueOutsideNeedsAttentionItems={agentReviewQueueOutsideNeedsAttentionItems}
             forMeItems={forMeItems}
             issues={issues}
             issueBuckets={issueBuckets}

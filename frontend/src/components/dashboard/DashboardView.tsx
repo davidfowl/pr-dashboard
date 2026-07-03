@@ -2,6 +2,7 @@ import type { FormEventHandler, RefObject } from 'react';
 import type {
   AttentionBucket,
   AgentReviewQueueItem,
+  AgentReviewQueueOutsideNeedsAttentionItem,
   AttentionIssueBucket,
   DashboardMode,
   DeveloperPullRequestCount,
@@ -29,6 +30,7 @@ type DashboardViewProps = {
   developerPullRequestCounts: DeveloperPullRequestCount[];
   attentionBuckets: AttentionBucket[];
   agentReviewQueueItems: AgentReviewQueueItem[] | null;
+  agentReviewQueueOutsideNeedsAttentionItems: AgentReviewQueueOutsideNeedsAttentionItem[] | null;
   forMeItems: PickItem[];
   issues: ShipWeekIssueSummary[];
   issueBuckets: AttentionIssueBucket[];
@@ -77,6 +79,7 @@ function DashboardView({
   developerPullRequestCounts,
   attentionBuckets,
   agentReviewQueueItems,
+  agentReviewQueueOutsideNeedsAttentionItems,
   forMeItems,
   issues,
   issueBuckets,
@@ -209,6 +212,7 @@ function DashboardView({
               pullRequests={pullRequests}
               attentionBuckets={attentionBuckets}
               agentReviewQueueItems={agentReviewQueueItems}
+              agentReviewQueueOutsideNeedsAttentionItems={agentReviewQueueOutsideNeedsAttentionItems}
               forMeItems={forMeItems}
               loading={visiblePullsLoading}
               hasLoaded={hasLoadedData}

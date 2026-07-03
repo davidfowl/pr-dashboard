@@ -3,6 +3,7 @@ import type { CSSProperties } from 'react';
 import type {
   AttentionBucket,
   AgentReviewQueueItem,
+  AgentReviewQueueOutsideNeedsAttentionItem,
   DeveloperPullRequestCount,
   PickItem,
   PullRequestSummary,
@@ -25,6 +26,7 @@ type QueueOverviewProps = {
   pullRequests: PullRequestSummary[];
   attentionBuckets: AttentionBucket[];
   agentReviewQueueItems: AgentReviewQueueItem[] | null;
+  agentReviewQueueOutsideNeedsAttentionItems: AgentReviewQueueOutsideNeedsAttentionItem[] | null;
   forMeItems: PickItem[];
   loading: boolean;
   hasLoaded: boolean;
@@ -59,6 +61,7 @@ function QueueOverview({
   pullRequests,
   attentionBuckets,
   agentReviewQueueItems,
+  agentReviewQueueOutsideNeedsAttentionItems,
   forMeItems,
   loading,
   hasLoaded,
@@ -78,8 +81,9 @@ function QueueOverview({
     [agentReviewQueueItems, attentionBuckets],
   );
   const focusExclusionItems = useMemo<FocusExclusionItem[]>(
-    () => computeFocusExclusionItems(pullRequests, attentionBuckets, focusItems, login),
-    [attentionBuckets, focusItems, login, pullRequests],
+    () => agentReviewQueueOutsideNeedsAttentionItems
+      ?? computeFocusExclusionItems(pullRequests, attentionBuckets, focusItems, login),
+    [agentReviewQueueOutsideNeedsAttentionItems, attentionBuckets, focusItems, login, pullRequests],
   );
   const communityItems = useMemo<CommunityQueueItem[]>(
     () => computeCommunityItems(pullRequests),
@@ -92,6 +96,11 @@ function QueueOverview({
   const focusShownCount = Math.min(focusItems.length, pullRequestListLimit);
   const communityShownCount = Math.min(communityItems.length, pullRequestListLimit);
   const focusExclusionShownCount = Math.min(focusExclusionItems.length, pullRequestListLimit);
+  const hasApiOutsideNeedsAttentionItems = agentReviewQueueOutsideNeedsAttentionItems !== null;
+  const showOutsideFocusList = hasApiOutsideNeedsAttentionItems || Boolean(login);
+  const outsideFocusListLabel = hasApiOutsideNeedsAttentionItems
+    ? 'Pull requests outside Needs attention'
+    : 'Your pull requests outside Needs attention';
   const loadingLabel = hasLoaded ? 'Refreshing' : 'Loading';
   const reviewBuckets = useMemo<AttentionBucket[]>(
     () => forMeItems.length === 0
@@ -223,10 +232,10 @@ function QueueOverview({
           />
         )}
 
-        {login && (
-          <section className="outside-focus-list" aria-label="Your pull requests outside Needs attention">
+        {showOutsideFocusList && (
+          <section className="outside-focus-list" aria-label={outsideFocusListLabel}>
             <div className="attention-card-header">
-              <span>Your PRs outside Needs attention</span>
+              <span>{hasApiOutsideNeedsAttentionItems ? 'Outside Needs attention' : 'Your PRs outside Needs attention'}</span>
               <div className="section-loading-meta">
                 {loading && <LoadingBadge label={loadingLabel} />}
                 <LoadingMetric
@@ -239,7 +248,9 @@ function QueueOverview({
               </div>
             </div>
             <p>
-              Open non-draft PRs authored by {login} that do not currently qualify for the focused queue.
+              {hasApiOutsideNeedsAttentionItems
+                ? 'Open non-draft PRs that do not currently qualify for the focused queue.'
+                : `Open non-draft PRs authored by ${login} that do not currently qualify for the focused queue.`}
             </p>
             {loading && !hasLoaded && focusExclusionItems.length === 0 ? (
               <LoadingCardPlaceholders count={2} label="Loading out-of-queue pull request cards" />
@@ -258,7 +269,11 @@ function QueueOverview({
                   }))}
                   limit={pullRequestListLimit}
                   preserveOrder
-                  emptyState={loading ? 'Loading your out-of-queue PRs...' : 'No open non-draft PRs authored by you are outside Needs attention.'}
+                  emptyState={loading
+                    ? 'Loading out-of-queue PRs...'
+                    : hasApiOutsideNeedsAttentionItems
+                      ? 'No open non-draft PRs are outside Needs attention.'
+                      : 'No open non-draft PRs authored by you are outside Needs attention.'}
                   onSelectPullRequest={onSelectPullRequest}
                   onVisiblePullRequest={onVisiblePullRequest}
                 />

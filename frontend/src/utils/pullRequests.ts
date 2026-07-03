@@ -1,5 +1,6 @@
 import type {
   AgentReviewQueueItem,
+  AgentReviewQueueOutsideNeedsAttentionItem,
   AgentReviewQueueResponse,
   CheckState,
   PullRequestListResponse,
@@ -24,6 +25,11 @@ export type PullRequestListResult = {
   snapshot: PullRequestListResponse['snapshot'] | null;
 };
 
+export type AgentReviewQueueResult = {
+  items: AgentReviewQueueItem[];
+  outsideNeedsAttentionItems: AgentReviewQueueOutsideNeedsAttentionItem[];
+};
+
 export async function fetchPullRequestList(url: string, options: FetchPullRequestsOptions = {}): Promise<PullRequestListResult> {
   const response = await fetch(url, { signal: options.signal });
   const data = await readJson<PullRequestListResponse>(response);
@@ -37,7 +43,7 @@ export async function fetchPullRequestList(url: string, options: FetchPullReques
   };
 }
 
-export async function fetchAgentReviewQueue(url: string, options: Pick<FetchPullRequestsOptions, 'signal'> = {}): Promise<AgentReviewQueueItem[] | null> {
+export async function fetchAgentReviewQueue(url: string, options: Pick<FetchPullRequestsOptions, 'signal'> = {}): Promise<AgentReviewQueueResult | null> {
   const response = await fetch(url, { signal: options.signal });
   if (response.status === 404) {
     return null;
@@ -48,12 +54,20 @@ export async function fetchAgentReviewQueue(url: string, options: Pick<FetchPull
     return null;
   }
 
-  return data.items.map((item): AgentReviewQueueItem => ({
-    repository: item.repository,
-    pullRequest: normalizePullRequest(item.repository, item.pullRequest),
-    bucketLabel: item.bucketLabel,
-    reason: item.reason,
-  }));
+  return {
+    items: data.items.map((item): AgentReviewQueueItem => ({
+      repository: item.repository,
+      pullRequest: normalizePullRequest(item.repository, item.pullRequest),
+      bucketLabel: item.bucketLabel,
+      reason: item.reason,
+    })),
+    outsideNeedsAttentionItems: data.outsideNeedsAttentionItems.map((item): AgentReviewQueueOutsideNeedsAttentionItem => ({
+      repository: item.repository,
+      pullRequest: normalizePullRequest(item.repository, item.pullRequest),
+      bucketLabels: item.bucketLabels,
+      reason: item.reason,
+    })),
+  };
 }
 
 export async function fetchPullRequests(url: string, options: FetchPullRequestsOptions = {}) {
