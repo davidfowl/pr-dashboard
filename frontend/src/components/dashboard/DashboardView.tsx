@@ -121,8 +121,9 @@ function DashboardView({
   const shipModeActive = dashboardMode === 'ship';
   const issuesModeActive = dashboardMode === 'issues';
   const refreshing = shipModeActive ? shipWeekLoading : issuesModeActive ? issuesLoading : pullsLoading;
+  const hasAgentReviewQueue = agentReviewQueueItems !== null || agentReviewQueueOutsideNeedsAttentionItems !== null;
   const hasLoadedData = lastUpdatedAt !== null
-    || (!shipModeActive && !issuesModeActive && pullRequests.length > 0)
+    || (!shipModeActive && !issuesModeActive && (pullRequests.length > 0 || hasAgentReviewQueue))
     || (issuesModeActive && issues.length > 0)
     || (shipModeActive && shipWeek !== null);
   const refreshButtonLoading = refreshing;
@@ -142,7 +143,7 @@ function DashboardView({
   const showQueuePanel = shipModeActive
     || (issuesModeActive
       ? issuesLoading || issues.length > 0 || issueBuckets.length > 0
-      : pullsLoading || pullRequests.length > 0 || attentionBuckets.length > 0);
+      : pullsLoading || pullRequests.length > 0 || attentionBuckets.length > 0 || hasAgentReviewQueue);
   const queuePanelLabel = issuesModeActive ? 'Issue focus' : 'Review queue';
 
   return (
@@ -206,7 +207,7 @@ function DashboardView({
               onSelectBucket={onSelectBucket}
               login={login}
             />
-          ) : (pullsLoading || pullRequests.length > 0) && (
+          ) : (pullsLoading || pullRequests.length > 0 || hasAgentReviewQueue) && (
             <QueueOverview
               counts={developerPullRequestCounts}
               pullRequests={pullRequests}

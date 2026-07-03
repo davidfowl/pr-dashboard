@@ -1451,7 +1451,7 @@ function createLoggedOutAgentReviewQueueFetchMock(serverQueueWinner: PullRequest
 
       return jsonResponse(pullRequestList(
         url.searchParams.get('repo') ?? serverQueueWinner.repository,
-        url.searchParams.get('repo') === serverQueueWinner.repository ? [serverQueueWinner, outsideItem] : [],
+        [],
       ));
     }
 
