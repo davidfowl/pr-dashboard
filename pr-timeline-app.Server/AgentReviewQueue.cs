@@ -82,8 +82,10 @@ static class AgentReviewQueueRoutes
 
         return Results.Ok(new AgentReviewQueueResponse(
             queue.Items,
+            queue.OutsideNeedsAttentionItems,
             repositoryResults,
             queue.TotalCount,
+            queue.OutsideNeedsAttentionTotalCount,
             now));
 
         async Task<(int Index, PullRequestListResponse? Response, AgentReviewQueueRepositoryResult Result)> LoadRepositoryAsync(
@@ -209,6 +211,15 @@ static class AgentReviewQueueBuilder
         "Merge conflicts"
     };
 
+    private static readonly HashSet<string> s_specializedFocusBucketLabels = new(StringComparer.Ordinal)
+    {
+        "Docs",
+        "Community Toolkit",
+        "Bots / automation",
+        "Community",
+        AgedOutCommunityBucketLabel
+    };
+
     private static readonly Dictionary<string, int> s_focusBucketRanks = new(StringComparer.Ordinal)
     {
         [RegressionBucketLabel] = -2,
@@ -301,10 +312,33 @@ static class AgentReviewQueueBuilder
             .Where(item => !IsChecksFailing(new AgentReviewQueueCandidate(item.Repository, item.PullRequest), options))
             .Order(AgentReviewQueueItemComparer.Create(now))
             .ToArray();
+        var focusKeys = new HashSet<string>(
+            orderedItems.Select(item => Key(new AgentReviewQueueCandidate(item.Repository, item.PullRequest))),
+            StringComparer.OrdinalIgnoreCase);
+        var outsideNeedsAttentionItems = candidates
+            .Where(candidate =>
+                candidate.PullRequest.State.Equals("open", StringComparison.OrdinalIgnoreCase)
+                && !candidate.PullRequest.Draft
+                && !focusKeys.Contains(Key(candidate)))
+            .Select(candidate =>
+            {
+                var bucketLabels = bucketLabelsByKey.TryGetValue(Key(candidate), out var labels)
+                    ? labels.ToArray()
+                    : [];
+                return new AgentReviewQueueOutsideNeedsAttentionItem(
+                    candidate.Repository,
+                    candidate.PullRequest,
+                    bucketLabels,
+                    FocusExclusionReason(candidate, bucketLabels, options, now));
+            })
+            .Order(AgentReviewQueueOutsideNeedsAttentionItemComparer.Create())
+            .ToArray();
 
         return new AgentReviewQueue(
             orderedItems.Take(ClampLimit(limit)).ToArray(),
-            orderedItems.Length);
+            outsideNeedsAttentionItems.Take(ClampLimit(limit)).ToArray(),
+            orderedItems.Length,
+            outsideNeedsAttentionItems.Length);
     }
 
     internal static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxQueueLimit);
@@ -498,6 +532,109 @@ static class AgentReviewQueueBuilder
 
     private static bool IsWaitingOnAuthor(IReadOnlyCollection<string> bucketLabels) =>
         bucketLabels.Contains("Author response") && !bucketLabels.Contains("Re-review needed");
+
+    private static AgentReviewQueueOutsideNeedsAttentionReason FocusExclusionReason(
+        AgentReviewQueueCandidate candidate,
+        IReadOnlyCollection<string> bucketLabels,
+        DashboardOptions options,
+        DateTimeOffset now)
+    {
+        if (IsChecksFailing(candidate, options))
+        {
+            return new(
+                "ci-failing",
+                "CI failing",
+                "Failing checks keep it out until CI is green again.",
+                "danger");
+        }
+
+        if (HasMergeConflicts(candidate.PullRequest))
+        {
+            return new(
+                "merge-conflicts",
+                "Merge conflicts",
+                "The author needs to rebase before reviewers or maintainers can finish it.",
+                "danger");
+        }
+
+        if (candidate.PullRequest.Review.UnresolvedThreadCount > 0)
+        {
+            return new(
+                "unresolved-feedback",
+                "Unresolved feedback",
+                "Open review threads make it author-blocked instead of reviewer-blocked.",
+                "danger");
+        }
+
+        if (HasNeedsAuthorActionLabel(candidate.PullRequest, options))
+        {
+            return new(
+                "held-by-label",
+                "Held by label",
+                "A configured hold label keeps it out of the focused queue.",
+                "danger");
+        }
+
+        if (IsWaitingOnAuthor(bucketLabels))
+        {
+            return new(
+                "author-response",
+                "Author response",
+                "Changes were requested, so this is waiting on the author rather than the focused queue.",
+                "danger");
+        }
+
+        if (IsCommunityPullRequest(candidate, options, now) && !IsAgedOutCommunityPullRequest(candidate, options, now))
+        {
+            return new(
+                "community-list",
+                "Community list",
+                "Recently active external-contributor PRs show in the Community list instead of Needs attention.",
+                "accent");
+        }
+
+        var specializedBucketLabel = bucketLabels.FirstOrDefault(label => s_specializedFocusBucketLabels.Contains(label));
+        if (specializedBucketLabel is not null)
+        {
+            return new(
+                "specialized-lane",
+                $"{specializedBucketLabel} lane",
+                $"It is routed to the {specializedBucketLabel} lane instead of Needs attention.",
+                "accent");
+        }
+
+        var focusCandidateBucketLabel = BestFocusCandidateBucketLabel(bucketLabels);
+        if (focusCandidateBucketLabel is not null
+            && !IsPullRequestWithinFocusAgeLimit(candidate.PullRequest, focusCandidateBucketLabel, now))
+        {
+            return new(
+                "stale-activity",
+                "Stale activity",
+                "Its actionable lane has not had fresh activity in the last 14 days.",
+                "warning");
+        }
+
+        if (bucketLabels.Contains("Stalled"))
+        {
+            return new(
+                "stalled-only",
+                "Stalled only",
+                "It has gone quiet and has no fresher actionable lane for Needs attention.",
+                "warning");
+        }
+
+        return new(
+            "outside-queue",
+            "Outside queue",
+            "It does not currently match a focused, actionable Needs attention lane.",
+            "muted");
+    }
+
+    private static string? BestFocusCandidateBucketLabel(IReadOnlyCollection<string> bucketLabels) =>
+        bucketLabels
+            .Where(label => !s_excludedFocusBucketLabels.Contains(label))
+            .OrderBy(FocusBucketRank)
+            .FirstOrDefault();
 
     private static int FocusBucketRank(string label) =>
         s_focusBucketRanks.TryGetValue(label, out var rank) ? rank : int.MaxValue;
@@ -801,23 +938,85 @@ static class AgentReviewQueueBuilder
                 ? pullRequest.Additions + pullRequest.Deletions + (pullRequest.ChangedFiles * 10) + (pullRequest.CommitCount * 5)
                 : 0;
     }
+
+    private sealed class AgentReviewQueueOutsideNeedsAttentionItemComparer : IComparer<AgentReviewQueueOutsideNeedsAttentionItem>
+    {
+        public static AgentReviewQueueOutsideNeedsAttentionItemComparer Create() => new();
+
+        public int Compare(AgentReviewQueueOutsideNeedsAttentionItem? first, AgentReviewQueueOutsideNeedsAttentionItem? second)
+        {
+            if (ReferenceEquals(first, second))
+            {
+                return 0;
+            }
+
+            if (first is null)
+            {
+                return -1;
+            }
+
+            if (second is null)
+            {
+                return 1;
+            }
+
+            return CompareBy(FocusExclusionReasonRank(first.Reason.Kind).CompareTo(FocusExclusionReasonRank(second.Reason.Kind)))
+                ?? CompareBy(second.PullRequest.UpdatedAt.CompareTo(first.PullRequest.UpdatedAt))
+                ?? CompareBy(string.Compare(first.Repository, second.Repository, StringComparison.Ordinal))
+                ?? first.PullRequest.Number.CompareTo(second.PullRequest.Number);
+        }
+
+        private static int? CompareBy(int value) => value == 0 ? null : value;
+
+        private static int FocusExclusionReasonRank(string kind) =>
+            kind switch
+            {
+                "ci-failing" => 0,
+                "merge-conflicts" => 1,
+                "unresolved-feedback" => 2,
+                "held-by-label" => 3,
+                "author-response" => 4,
+                "stale-activity" => 5,
+                "community-list" => 6,
+                "specialized-lane" => 7,
+                "stalled-only" => 8,
+                "outside-queue" => 9,
+                _ => int.MaxValue
+            };
+    }
 }
 
 record AgentReviewQueueResponse(
     IReadOnlyList<AgentReviewQueueItem> Items,
+    IReadOnlyList<AgentReviewQueueOutsideNeedsAttentionItem> OutsideNeedsAttentionItems,
     IReadOnlyList<AgentReviewQueueRepositoryResult> Repositories,
     int TotalCount,
+    int OutsideNeedsAttentionTotalCount,
     DateTimeOffset GeneratedAt);
 
 record AgentReviewQueue(
     IReadOnlyList<AgentReviewQueueItem> Items,
-    int TotalCount);
+    IReadOnlyList<AgentReviewQueueOutsideNeedsAttentionItem> OutsideNeedsAttentionItems,
+    int TotalCount,
+    int OutsideNeedsAttentionTotalCount);
 
 record AgentReviewQueueItem(
     string Repository,
     PullRequestSummary PullRequest,
     string BucketLabel,
     string Reason);
+
+record AgentReviewQueueOutsideNeedsAttentionItem(
+    string Repository,
+    PullRequestSummary PullRequest,
+    IReadOnlyList<string> BucketLabels,
+    AgentReviewQueueOutsideNeedsAttentionReason Reason);
+
+record AgentReviewQueueOutsideNeedsAttentionReason(
+    string Kind,
+    string Label,
+    string Detail,
+    string Tone);
 
 record AgentReviewQueueRepositoryResult(
     string Repository,

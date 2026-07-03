@@ -1896,6 +1896,7 @@ function agentReviewQueue(items: Array<{
       bucketLabel: item.bucketLabel,
       reason: item.reason,
     })),
+    outsideNeedsAttentionItems: [],
     repositories: [
       {
         repository: items[0]?.repository ?? 'microsoft/aspire',
@@ -1905,6 +1906,7 @@ function agentReviewQueue(items: Array<{
       },
     ],
     totalCount: items.length,
+    outsideNeedsAttentionTotalCount: 0,
     generatedAt: new Date().toISOString(),
   };
 }

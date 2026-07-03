@@ -130,8 +130,10 @@ export type PullRequestListResponse = {
 
 export type AgentReviewQueueResponse = {
   items: AgentReviewQueueItemResponse[];
+  outsideNeedsAttentionItems: AgentReviewQueueOutsideNeedsAttentionItemResponse[];
   repositories: AgentReviewQueueRepositoryResult[];
   totalCount: number;
+  outsideNeedsAttentionTotalCount: number;
   generatedAt: string;
 };
 
@@ -140,6 +142,20 @@ export type AgentReviewQueueItemResponse = {
   pullRequest: Omit<PullRequestSummary, 'repository'>;
   bucketLabel: string;
   reason: string;
+};
+
+export type AgentReviewQueueOutsideNeedsAttentionItemResponse = {
+  repository: string;
+  pullRequest: Omit<PullRequestSummary, 'repository'>;
+  bucketLabels: string[];
+  reason: AgentReviewQueueOutsideNeedsAttentionReason;
+};
+
+export type AgentReviewQueueOutsideNeedsAttentionReason = {
+  kind: string;
+  label: string;
+  detail: string;
+  tone: 'danger' | 'warning' | 'success' | 'accent' | 'muted' | string;
 };
 
 export type AgentReviewQueueItem = {
