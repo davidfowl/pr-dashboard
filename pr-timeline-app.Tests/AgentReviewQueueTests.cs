@@ -49,6 +49,34 @@ public sealed class AgentReviewQueueTests
     }
 
     [Fact]
+    public void BuildFoldsIdentityAliasAuthorIntoCoreTeamMember()
+    {
+        var pullRequests = new[] { Pr(1, "Needs review", "alice_msft", updatedAt: s_now.AddHours(-1)) };
+
+        var withoutAlias = AgentReviewQueueBuilder.Build(
+            [new PullRequestListResponse("microsoft/aspire", pullRequests)],
+            new DashboardOptions { CoreTeamMembers = ["alice"] },
+            s_now);
+
+        var withAlias = AgentReviewQueueBuilder.Build(
+            [new PullRequestListResponse("microsoft/aspire", pullRequests)],
+            new DashboardOptions
+            {
+                CoreTeamMembers = ["alice"],
+                IdentityAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["alice_msft"] = "alice"
+                }
+            },
+            s_now);
+
+        // Without the alias, alice_msft is not a core-team member, so the PR is not in the queue.
+        Assert.DoesNotContain(withoutAlias.Items, item => item.PullRequest.Number == 1);
+        // The alias folds alice_msft into core-team member alice, so the PR joins Needs attention.
+        Assert.Contains(withAlias.Items, item => item.PullRequest.Number == 1);
+    }
+
+    [Fact]
     public void BuildIncludesPullRequestsOutsideNeedsAttentionWithReasons()
     {
         var options = new DashboardOptions

@@ -8,7 +8,7 @@ public static class DashboardConfigRoutes
             .GetRequiredService<ILoggerFactory>()
             .CreateLogger("DashboardConfigRoutes");
 
-        endpoints.MapGet("/api/dashboard/config", (IOptions<DashboardOptions> options) =>
+        endpoints.MapGet("/api/dashboard/config", (IOptions<DashboardOptions> options, TeamIdentityMap teamIdentities) =>
         {
             var dashboardOptions = options.Value;
             var repositories = Normalize(dashboardOptions.Repositories);
@@ -51,7 +51,8 @@ public static class DashboardConfigRoutes
                 DocsFromCodeLabel: dashboardOptions.DocsFromCode.Label?.Trim() ?? "",
                 DoNotMergeLabels: Normalize(dashboardOptions.DoNotMergeLabels),
                 BotAuthors: Normalize(dashboardOptions.BotAuthors),
-                NonBlockingCheckFailureRules: Normalize(dashboardOptions.NonBlockingCheckFailureRules)));
+                NonBlockingCheckFailureRules: Normalize(dashboardOptions.NonBlockingCheckFailureRules),
+                IdentityAliases: teamIdentities.AliasToPrimary));
         });
 
         return endpoints;
@@ -131,7 +132,8 @@ record DashboardConfigResponse(
     string DocsFromCodeLabel,
     string[] DoNotMergeLabels,
     string[] BotAuthors,
-    DashboardCheckFailureRuleResponse[] NonBlockingCheckFailureRules);
+    DashboardCheckFailureRuleResponse[] NonBlockingCheckFailureRules,
+    IReadOnlyDictionary<string, string> IdentityAliases);
 
 record DashboardCheckFailureRuleResponse(
     string Repository,

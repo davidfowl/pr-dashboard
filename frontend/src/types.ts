@@ -21,6 +21,7 @@ export type DashboardConfig = {
   doNotMergeLabels: string[];
   botAuthors: string[];
   nonBlockingCheckFailureRules: DashboardCheckFailureRule[];
+  identityAliases?: Record<string, string>;
 };
 
 export type DashboardCheckFailureRule = {

@@ -23,6 +23,13 @@ sealed class DashboardOptions
     public string[] BotAuthors { get; init; } = [];
 
     public DashboardCheckFailureRuleOptions[] NonBlockingCheckFailureRules { get; init; } = [];
+
+    /// <summary>
+    /// Maps an alias GitHub login to the team member's canonical login, so a person's multiple
+    /// identities group as one. Populated at runtime from <see cref="TeamIdentityMap"/>.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> IdentityAliases { get; init; } =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 }
 
 sealed class DashboardDocsFromCodeOptions

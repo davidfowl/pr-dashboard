@@ -84,12 +84,50 @@ public sealed class DashboardConfigRoutesTests
         Assert.Equal(["proof"], rule.CheckNameContains);
     }
 
+    [Fact]
+    public async Task DashboardConfigRouteSurfacesTeamIdentityAliases()
+    {
+        var teamIdentities = new TeamIdentityMap(new TeamIdentityOptions
+        {
+            Members =
+            [
+                new TeamMemberOptions
+                {
+                    Name = "radical",
+                    Identities =
+                    [
+                        new TeamMemberIdentityOptions { Login = "radical", Kind = "public" },
+                        new TeamMemberIdentityOptions { Login = "ankj_microsoft", Kind = "microsoft" }
+                    ]
+                }
+            ]
+        });
+        await using var app = await CreateDashboardConfigAppAsync(new DashboardOptions(), teamIdentities);
+        using var client = CreateHttpClient(app);
+
+        var config = await client.GetFromJsonAsync<DashboardConfigResponse>(
+            "/api/dashboard/config",
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(config);
+        Assert.Equal("radical", config.IdentityAliases["ankj_microsoft"]);
+        Assert.Equal("radical", config.IdentityAliases["radical"]);
+    }
+
     private static async Task<WebApplication> CreateDashboardConfigAppAsync(DashboardOptions options)
+    {
+        return await CreateDashboardConfigAppAsync(options, TeamIdentityMap.Empty);
+    }
+
+    private static async Task<WebApplication> CreateDashboardConfigAppAsync(
+        DashboardOptions options,
+        TeamIdentityMap teamIdentities)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Services.AddRouting();
         builder.Services.AddSingleton(Options.Create(options));
+        builder.Services.AddSingleton(teamIdentities);
 
         var app = builder.Build();
         app.MapDashboardConfigRoutes();

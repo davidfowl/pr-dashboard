@@ -16,6 +16,7 @@ export const emptyDashboardConfig: DashboardConfig = {
   doNotMergeLabels: [],
   botAuthors: [],
   nonBlockingCheckFailureRules: [],
+  identityAliases: {},
 };
 
 let activeDashboardConfig = emptyDashboardConfig;
@@ -53,7 +54,22 @@ function normalizeDashboardConfig(config: DashboardConfig): DashboardConfig {
     doNotMergeLabels: normalizeList(config.doNotMergeLabels),
     botAuthors: normalizeList(config.botAuthors),
     nonBlockingCheckFailureRules: normalizeCheckFailureRules(config.nonBlockingCheckFailureRules),
+    identityAliases: normalizeIdentityAliases(config.identityAliases),
   };
+}
+
+// Lowercases alias keys and primaries so login canonicalization is case-insensitive.
+function normalizeIdentityAliases(aliases: Record<string, string> | undefined) {
+  const normalized: Record<string, string> = {};
+  for (const [alias, primary] of Object.entries(aliases ?? {})) {
+    const key = alias.trim().toLowerCase();
+    const value = primary.trim().toLowerCase();
+    if (key && value) {
+      normalized[key] = value;
+    }
+  }
+
+  return normalized;
 }
 
 function normalizeList(values: string[] | undefined) {

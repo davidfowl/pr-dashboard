@@ -1594,7 +1594,10 @@ export function actorIdentityKey(actor: string) {
   const human = normalized.endsWith('/copilot')
     ? normalized.slice(0, -'/copilot'.length)
     : normalized;
-  return human.replace(/[^a-z0-9]/g, '');
+  // Fold a configured alias login (for example an EMU identity) to the person's canonical login so
+  // all of their identities share one key everywhere grouping and dedupe happen.
+  const canonical = getDashboardConfig().identityAliases?.[human] ?? human;
+  return canonical.replace(/[^a-z0-9]/g, '');
 }
 
 function actorKeysMatch(first: string, second: string) {

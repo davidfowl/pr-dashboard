@@ -14,9 +14,10 @@ static class AgentReviewQueueRoutes
             [FromQuery] int? limit,
             IOptions<DashboardOptions> dashboardOptions,
             GitHubPullRequestService pullRequests,
+            TeamIdentityMap teamIdentities,
             CancellationToken cancellationToken) =>
         {
-            var options = AgentReviewQueueBuilder.NormalizeOptions(dashboardOptions.Value);
+            var options = AgentReviewQueueBuilder.NormalizeOptions(dashboardOptions.Value, teamIdentities.AliasToPrimary);
             if (!TryResolveRepositories(repo, options.Repositories, out var repositories, out var errors))
             {
                 return Results.ValidationProblem(errors);
@@ -344,6 +345,11 @@ static class AgentReviewQueueBuilder
     internal static int ClampLimit(int limit) => Math.Clamp(limit, 1, MaxQueueLimit);
 
     internal static DashboardOptions NormalizeOptions(DashboardOptions options) =>
+        NormalizeOptions(options, options.IdentityAliases);
+
+    internal static DashboardOptions NormalizeOptions(
+        DashboardOptions options,
+        IReadOnlyDictionary<string, string> identityAliases) =>
         new()
         {
             Repositories = NormalizeList(options.Repositories),
@@ -360,7 +366,8 @@ static class AgentReviewQueueBuilder
             },
             DoNotMergeLabels = NormalizeList(options.DoNotMergeLabels),
             BotAuthors = NormalizeList(options.BotAuthors),
-            NonBlockingCheckFailureRules = NormalizeCheckFailureRules(options.NonBlockingCheckFailureRules)
+            NonBlockingCheckFailureRules = NormalizeCheckFailureRules(options.NonBlockingCheckFailureRules),
+            IdentityAliases = identityAliases
         };
 
     private static string[] NormalizeList(IEnumerable<string>? values) =>
@@ -831,7 +838,8 @@ static class AgentReviewQueueBuilder
 
     private static string? MatchingCoreTeamMember(string author, DashboardOptions options)
     {
-        var authorKey = ActorIdentityKey(author);
+        var canonicalAuthor = CanonicalizeIdentityAlias(author, options);
+        var authorKey = ActorIdentityKey(canonicalAuthor);
         var matchingMember = options.CoreTeamMembers.FirstOrDefault(member => ActorIdentityKey(member) == authorKey);
         if (matchingMember is not null)
         {
@@ -846,6 +854,19 @@ static class AgentReviewQueueBuilder
 
         var aliasBaseKey = ActorIdentityKey(aliasBase);
         return options.CoreTeamMembers.FirstOrDefault(member => ActorIdentityKey(member) == aliasBaseKey) ?? author;
+    }
+
+    // Folds a configured alias login (for example an EMU identity) to the member's canonical login so
+    // a person's multiple identities match the same core-team member.
+    private static string CanonicalizeIdentityAlias(string actor, DashboardOptions options)
+    {
+        if (options.IdentityAliases.Count == 0)
+        {
+            return actor;
+        }
+
+        var human = StripCopilotAttribution(actor);
+        return options.IdentityAliases.TryGetValue(human, out var primary) ? primary : actor;
     }
 
     private static string? ConfiguredTeamAliasBase(string author, DashboardOptions options)
