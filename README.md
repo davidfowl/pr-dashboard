@@ -27,6 +27,18 @@ The dashboard repositories, ship-mode repositories, core team, and release/docs 
 
 In development, the server can use an OAuth session, `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`. Outside development, configure `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`; the callback path is `/signin-github`. The OAuth flow requests no GitHub scopes, so it supports public repository API reads without requesting repository or organization permissions.
 
+### Per-repository identities (development)
+
+Some configured repositories are only visible to a different account than the default one you sign in with locally — for example an EMU-only repository such as `devdiv-microsoft/aspire-1p`. The default identity's token returns `404 Not Found` for that repository, so its rows are skipped.
+
+Map individual repositories to a specific `gh` account so the dashboard reads each repository with the right identity while everything else keeps using the default identity. The mapping is per-developer (each contributor's account login differs), so store it in user-secrets on the **Server** project rather than committing it:
+
+```bash
+dotnet user-secrets --project pr-timeline-app.Server set "GitHubRepositoryIdentities:Repositories:devdiv-microsoft/aspire-1p" "your-emu-login"
+```
+
+Sign in to both accounts with `gh auth login` first (`gh auth status` lists them). Repositories without a mapping continue to use the default identity, so a single dashboard load can fetch PRs and issues from repositories that belong to different identities at once. This mechanism is development-only; the identities are local `gh` accounts.
+
 ## App-specific agent schema
 
 Automation can read the app-specific `/api/agents/schema` document to choose the dashboard mode and API endpoint by use case. The schema lists review, issue-focus, and ship-week modes, their use cases, required inputs, and the backing API paths. The dashboard footer links to the same schema.

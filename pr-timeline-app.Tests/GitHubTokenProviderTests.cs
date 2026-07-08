@@ -309,6 +309,104 @@ public sealed class GitHubTokenProviderTests
     }
 
     [Fact]
+    public async Task RepositoryIdentityOverrideResolvesMappedAccountTokenInDevelopment()
+    {
+        var provider = CreateProvider(
+            developmentGitHubCliAuth: PerUserDevelopmentGitHubCliAuth(),
+            repositoryIdentities: new Dictionary<string, string>
+            {
+                ["devdiv-microsoft/aspire-1p"] = "emu-user"
+            });
+        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var overrideRepo));
+        Assert.True(RepositoryName.TryParse("microsoft/aspire", out var defaultRepo));
+
+        var overrideToken = await provider.GetTokenAsync(overrideRepo, TestContext.Current.CancellationToken);
+        var defaultRepoToken = await provider.GetTokenAsync(defaultRepo, TestContext.Current.CancellationToken);
+        var noRepoToken = await provider.GetTokenAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("emu-user-token", overrideToken?.Value);
+        Assert.Equal("gh", overrideToken?.Source);
+        Assert.Equal("default-token", defaultRepoToken?.Value);
+        Assert.Equal("default-token", noRepoToken?.Value);
+    }
+
+    [Fact]
+    public async Task RepositoryIdentityOverrideTakesPrecedenceOverSelectedDevelopmentAccount()
+    {
+        var provider = CreateProvider(
+            developmentGitHubCliAuth: PerUserDevelopmentGitHubCliAuth(),
+            repositoryIdentities: new Dictionary<string, string>
+            {
+                ["devdiv-microsoft/aspire-1p"] = "emu-user"
+            });
+        provider.SetDevelopmentGitHubUser("selected-user");
+        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var overrideRepo));
+        Assert.True(RepositoryName.TryParse("microsoft/aspire", out var defaultRepo));
+
+        var overrideToken = await provider.GetTokenAsync(overrideRepo, TestContext.Current.CancellationToken);
+        var defaultRepoToken = await provider.GetTokenAsync(defaultRepo, TestContext.Current.CancellationToken);
+
+        Assert.Equal("emu-user-token", overrideToken?.Value);
+        Assert.Equal("selected-user-token", defaultRepoToken?.Value);
+    }
+
+    [Fact]
+    public async Task RepositoryIdentityOverrideFallsBackToDefaultWhenAccountTokenUnavailable()
+    {
+        var provider = CreateProvider(
+            developmentGitHubCliAuth: new TestDevelopmentGitHubCliAuth((user, _) =>
+                Task.FromResult(user is null
+                    ? GitHubCliTokenResult.Success("default-token")
+                    : GitHubCliTokenResult.NotFound("gh"))),
+            repositoryIdentities: new Dictionary<string, string>
+            {
+                ["devdiv-microsoft/aspire-1p"] = "emu-user"
+            });
+        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var overrideRepo));
+
+        var overrideToken = await provider.GetTokenAsync(overrideRepo, TestContext.Current.CancellationToken);
+
+        Assert.Equal("default-token", overrideToken?.Value);
+    }
+
+    [Fact]
+    public async Task RepositoryIdentityOverrideIsIgnoredOutsideDevelopment()
+    {
+        var provider = CreateProvider(
+            environmentName: Environments.Production,
+            developmentGitHubCliAuth: ThrowingDevelopmentGitHubCliAuth(),
+            repositoryIdentities: new Dictionary<string, string>
+            {
+                ["devdiv-microsoft/aspire-1p"] = "emu-user"
+            });
+        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var overrideRepo));
+
+        var overrideToken = await provider.GetTokenAsync(overrideRepo, TestContext.Current.CancellationToken);
+
+        Assert.Null(overrideToken);
+    }
+
+    [Fact]
+    public async Task RepositoryIdentityOverrideProducesDistinctCacheKeyFromDefaultIdentity()
+    {
+        var provider = CreateProvider(
+            developmentGitHubCliAuth: PerUserDevelopmentGitHubCliAuth(),
+            repositoryIdentities: new Dictionary<string, string>
+            {
+                ["devdiv-microsoft/aspire-1p"] = "emu-user"
+            });
+        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var overrideRepo));
+        Assert.True(RepositoryName.TryParse("microsoft/aspire", out var defaultRepo));
+
+        var overrideCacheKey = await provider.GetCacheKeyAsync(overrideRepo, TestContext.Current.CancellationToken);
+        var defaultCacheKey = await provider.GetCacheKeyAsync(defaultRepo, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("gh:", overrideCacheKey);
+        Assert.StartsWith("gh:", defaultCacheKey);
+        Assert.NotEqual(defaultCacheKey, overrideCacheKey);
+    }
+
+    [Fact]
     public async Task GetTokenAsyncReportsGitHubCliFailureInDevelopment()
     {
         var provider = CreateProvider(
@@ -441,12 +539,19 @@ public sealed class GitHubTokenProviderTests
         IHttpContextAccessor? httpContextAccessor = null,
         string environmentName = "Development",
         IDevelopmentGitHubCliAuth? developmentGitHubCliAuth = null,
-        IConfiguration? configuration = null) =>
+        IConfiguration? configuration = null,
+        IDictionary<string, string>? repositoryIdentities = null) =>
         new(
             httpContextAccessor ?? new HttpContextAccessor { HttpContext = httpContext },
             new TestHostEnvironment { EnvironmentName = environmentName },
             configuration ?? CreateConfiguration(),
-            developmentGitHubCliAuth ?? new TestDevelopmentGitHubCliAuth());
+            developmentGitHubCliAuth ?? new TestDevelopmentGitHubCliAuth(),
+            Options.Create(new GitHubRepositoryIdentityOptions
+            {
+                Repositories = repositoryIdentities is null
+                    ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    : new Dictionary<string, string>(repositoryIdentities, StringComparer.OrdinalIgnoreCase)
+            }));
 
     private static IConfiguration CreateConfiguration(
         IEnumerable<KeyValuePair<string, string?>>? values = null) =>
@@ -514,6 +619,12 @@ public sealed class GitHubTokenProviderTests
         new(
             getTokenAsync: (_, _) => throw new InvalidOperationException("gh auth should not be called in Production."),
             getAccountsAsync: _ => throw new InvalidOperationException("gh auth status should not be called in Production."));
+
+    // Resolves a distinct gh token per account login so per-repository identity overrides and the
+    // default identity can be told apart. A null user is the default (no --user) account.
+    private static TestDevelopmentGitHubCliAuth PerUserDevelopmentGitHubCliAuth() =>
+        new((user, _) => Task.FromResult(
+            GitHubCliTokenResult.Success(user is null ? "default-token" : $"{user}-token")));
 
     private sealed class TestDevelopmentGitHubCliAuth(
         Func<string?, CancellationToken, Task<GitHubCliTokenResult>>? getTokenAsync = null,

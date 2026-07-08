@@ -14,6 +14,8 @@ builder.Services.Configure<WebPushOptions>(
     builder.Configuration.GetSection(WebPushOptions.SectionName));
 builder.Services.Configure<GitHubReviewPolicyOptions>(
     builder.Configuration.GetSection(GitHubReviewPolicyOptions.SectionName));
+builder.Services.Configure<GitHubRepositoryIdentityOptions>(
+    builder.Configuration.GetSection(GitHubRepositoryIdentityOptions.SectionName));
 builder.Services.AddGitHubApiServices(builder.Environment);
 builder.Services.AddNotificationServices();
 

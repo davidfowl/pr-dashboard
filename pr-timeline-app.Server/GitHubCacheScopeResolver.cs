@@ -28,7 +28,7 @@ sealed class GitHubCacheScopeResolver(
         RepositoryName repositoryName,
         CancellationToken cancellationToken)
     {
-        var authCacheKey = await tokenProvider.GetCacheKeyAsync(cancellationToken);
+        var authCacheKey = await tokenProvider.GetCacheKeyAsync(repositoryName, cancellationToken);
         if (authCacheKey.StartsWith("anonymous:", StringComparison.Ordinal)
             && IsPublicCacheAllowlisted(repositoryName))
         {

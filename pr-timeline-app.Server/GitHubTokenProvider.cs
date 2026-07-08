@@ -3,6 +3,7 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 sealed class GitHubTokenProvider
 {
@@ -14,11 +15,14 @@ sealed class GitHubTokenProvider
     private readonly IConfiguration configuration;
     private readonly IDevelopmentGitHubCliAuth developmentGitHubCliAuth;
     private readonly ILogger<GitHubTokenProvider> logger;
-    private TokenResult? cachedGitHubCliToken;
-    private string? cachedGitHubCliUser;
-    private string? attemptedGitHubCliUser;
+    private readonly IReadOnlyDictionary<string, string> repositoryIdentities;
+
+    // Development gh tokens cached per account login so a default identity and any per-repository
+    // override identities can be resolved and reused concurrently. Key is the normalized login, or
+    // the empty string for the default (no --user) account. A present key with a null value records
+    // a prior failed lookup so we do not re-shell out for a known miss until the cache is reset.
+    private readonly Dictionary<string, TokenResult?> cachedGitHubCliTokens = new(StringComparer.OrdinalIgnoreCase);
     private string? selectedDevelopmentGitHubUser;
-    private bool attemptedGitHubCli;
     private bool suppressFallback;
     private long fallbackGeneration;
 
@@ -27,6 +31,7 @@ sealed class GitHubTokenProvider
         IHostEnvironment environment,
         IConfiguration configuration,
         IDevelopmentGitHubCliAuth developmentGitHubCliAuth,
+        IOptions<GitHubRepositoryIdentityOptions> repositoryIdentityOptions,
         ILogger<GitHubTokenProvider>? logger = null)
     {
         this.httpContextAccessor = httpContextAccessor;
@@ -34,6 +39,8 @@ sealed class GitHubTokenProvider
         this.configuration = configuration;
         this.developmentGitHubCliAuth = developmentGitHubCliAuth;
         this.logger = logger ?? NullLogger<GitHubTokenProvider>.Instance;
+        repositoryIdentities = (repositoryIdentityOptions?.Value ?? new GitHubRepositoryIdentityOptions())
+            .BuildNormalizedMap();
     }
 
     public string? LocalAuthFailureMessage { get; private set; }
@@ -83,7 +90,10 @@ sealed class GitHubTokenProvider
             generation);
     }
 
-    public async Task<TokenResult?> GetTokenAsync(CancellationToken cancellationToken)
+    public Task<TokenResult?> GetTokenAsync(CancellationToken cancellationToken) =>
+        GetTokenAsync(repositoryName: null, cancellationToken);
+
+    public async Task<TokenResult?> GetTokenAsync(RepositoryName? repositoryName, CancellationToken cancellationToken)
     {
         if (httpContextAccessor.HttpContext is { } context)
         {
@@ -124,6 +134,25 @@ sealed class GitHubTokenProvider
             return null;
         }
 
+        // Per-repository development identity override. When a repository is mapped to a specific gh
+        // account (for example an EMU-only repo that the default identity cannot read), resolve that
+        // account's token. This takes precedence over the globally selected dev account and env token
+        // so the same dashboard can read different repositories with different identities at once.
+        if (TryGetRepositoryIdentityLogin(repositoryName, out var overrideLogin))
+        {
+            var overrideToken = await GetCachedGitHubCliTokenAsync(overrideLogin, cancellationToken);
+            if (overrideToken is not null)
+            {
+                logger.LogDebug("Resolving GitHub token from the per-repository identity override.");
+                return overrideToken;
+            }
+
+            // A misconfigured or unavailable override should not silently mask the repository: log
+            // loudly, then fall through to the default resolution so the repository still attempts a load.
+            logger.LogWarning(
+                "Per-repository GitHub identity override is configured but its gh account token was unavailable; falling back to the default identity.");
+        }
+
         if (selectedDevelopmentGitHubUser is not null)
         {
             logger.LogDebug("Resolving GitHub token from the selected development gh account.");
@@ -143,47 +172,55 @@ sealed class GitHubTokenProvider
         return await GetCachedGitHubCliTokenAsync(user: null, cancellationToken);
     }
 
+    private bool TryGetRepositoryIdentityLogin(RepositoryName? repositoryName, out string login)
+    {
+        login = "";
+        if (repositoryName is not { } repository || repositoryIdentities.Count == 0)
+        {
+            return false;
+        }
+
+        if (repositoryIdentities.TryGetValue(repository.ToString(), out var mappedLogin))
+        {
+            login = mappedLogin;
+            return true;
+        }
+
+        return false;
+    }
+
     private async Task<TokenResult?> GetCachedGitHubCliTokenAsync(string? user, CancellationToken cancellationToken)
     {
         var normalizedUser = string.IsNullOrWhiteSpace(user) ? null : user.Trim();
+        var cacheKey = normalizedUser ?? string.Empty;
         await semaphore.WaitAsync(cancellationToken);
         try
         {
-            if (cachedGitHubCliToken is not null &&
-                string.Equals(cachedGitHubCliUser, normalizedUser, StringComparison.OrdinalIgnoreCase))
+            if (cachedGitHubCliTokens.TryGetValue(cacheKey, out var cachedToken))
             {
                 logger.LogDebug(
-                    "Using cached development gh token. SelectedDevelopmentAccount={DevelopmentGitHubAccountSelected}.",
-                    normalizedUser is not null);
-                return cachedGitHubCliToken;
+                    "Using cached development gh token lookup. SelectedDevelopmentAccount={DevelopmentGitHubAccountSelected}, CacheHit={DevelopmentGitHubTokenCacheHit}.",
+                    normalizedUser is not null,
+                    cachedToken is not null);
+                return cachedToken;
             }
 
-            if (attemptedGitHubCli &&
-                string.Equals(attemptedGitHubCliUser, normalizedUser, StringComparison.OrdinalIgnoreCase))
-            {
-                logger.LogDebug(
-                    "Skipping development gh token lookup after prior miss. SelectedDevelopmentAccount={DevelopmentGitHubAccountSelected}.",
-                    normalizedUser is not null);
-                return null;
-            }
-
-            attemptedGitHubCli = true;
-            attemptedGitHubCliUser = normalizedUser;
             var ghToken = await developmentGitHubCliAuth.GetTokenAsync(normalizedUser, cancellationToken);
             if (ghToken.Status == GitHubCliTokenStatus.Success &&
                 !string.IsNullOrWhiteSpace(ghToken.Token))
             {
                 LocalAuthFailureMessage = null;
-                cachedGitHubCliToken = new TokenResult(ghToken.Token.Trim(), "gh", GetFallbackGeneration());
-                cachedGitHubCliUser = normalizedUser;
+                var resolved = new TokenResult(ghToken.Token.Trim(), "gh", GetFallbackGeneration());
+                cachedGitHubCliTokens[cacheKey] = resolved;
                 logger.LogDebug(
                     "Development gh token resolved. SelectedDevelopmentAccount={DevelopmentGitHubAccountSelected}.",
                     normalizedUser is not null);
-                return cachedGitHubCliToken;
+                return resolved;
             }
 
             LocalAuthFailureMessage = ghToken.FailureMessage;
             LogGitHubCliFailure(ghToken, normalizedUser is not null);
+            cachedGitHubCliTokens[cacheKey] = null;
             return null;
         }
         finally
@@ -197,10 +234,7 @@ sealed class GitHubTokenProvider
         semaphore.Wait();
         try
         {
-            cachedGitHubCliToken = null;
-            cachedGitHubCliUser = null;
-            attemptedGitHubCliUser = null;
-            attemptedGitHubCli = false;
+            cachedGitHubCliTokens.Clear();
             return incrementFallbackGeneration
                 ? Interlocked.Increment(ref fallbackGeneration)
                 : Volatile.Read(ref fallbackGeneration);
@@ -252,9 +286,12 @@ sealed class GitHubTokenProvider
         }
     }
 
-    public async Task<string> GetCacheKeyAsync(CancellationToken cancellationToken)
+    public Task<string> GetCacheKeyAsync(CancellationToken cancellationToken) =>
+        GetCacheKeyAsync(repositoryName: null, cancellationToken);
+
+    public async Task<string> GetCacheKeyAsync(RepositoryName? repositoryName, CancellationToken cancellationToken)
     {
-        var token = await GetTokenAsync(cancellationToken);
+        var token = await GetTokenAsync(repositoryName, cancellationToken);
         if (token is null)
         {
             logger.LogDebug(

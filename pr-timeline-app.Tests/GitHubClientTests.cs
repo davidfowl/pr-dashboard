@@ -5617,7 +5617,8 @@ public sealed class GitHubClientTests
             new HttpContextAccessor { HttpContext = CreateHttpContextWithGitHubToken() },
             new TestHostEnvironment(),
             CreateConfiguration(),
-            new TestDevelopmentGitHubCliAuth());
+            new TestDevelopmentGitHubCliAuth(),
+            Options.Create(new GitHubRepositoryIdentityOptions()));
         var cache = new MemoryCache(new MemoryCacheOptions());
         var options = CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
@@ -5647,7 +5648,8 @@ public sealed class GitHubClientTests
             new HttpContextAccessor { HttpContext = CreateHttpContextWithGitHubToken() },
             new TestHostEnvironment(),
             CreateConfiguration(),
-            new TestDevelopmentGitHubCliAuth());
+            new TestDevelopmentGitHubCliAuth(),
+            Options.Create(new GitHubRepositoryIdentityOptions()));
         var cache = new MemoryCache(new MemoryCacheOptions());
         var options = CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
@@ -5776,7 +5778,8 @@ public sealed class GitHubClientTests
             new HttpContextAccessor { HttpContext = CreateHttpContextWithGitHubToken(token) },
             new TestHostEnvironment(),
             CreateConfiguration(),
-            new TestDevelopmentGitHubCliAuth());
+            new TestDevelopmentGitHubCliAuth(),
+            Options.Create(new GitHubRepositoryIdentityOptions()));
         options ??= CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
         publicCacheStore ??= new GitHubPublicCacheStore(cache);
@@ -5801,7 +5804,8 @@ public sealed class GitHubClientTests
             new HttpContextAccessor { HttpContext = CreateAnonymousHttpContext() },
             new TestHostEnvironment(),
             CreateConfiguration(),
-            new TestDevelopmentGitHubCliAuth());
+            new TestDevelopmentGitHubCliAuth(),
+            Options.Create(new GitHubRepositoryIdentityOptions()));
         options ??= CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
         publicCacheStore ??= new GitHubPublicCacheStore(cache);

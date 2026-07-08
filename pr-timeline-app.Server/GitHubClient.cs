@@ -642,7 +642,7 @@ sealed partial class GitHubClient(
                 url,
                 GitHubJsonSerializerContext.Default.GitHubPullRequestDtoArray,
                 scope.RequestAuthorization,
-                cancellationToken);
+                cancellationToken, repositoryName);
             var activePullRequestDtos = pullRequestDtos
                 .Where(pullRequest => !pullRequest.Draft)
                 .ToArray();
@@ -979,7 +979,7 @@ sealed partial class GitHubClient(
         GitHubCacheScope scope,
         CancellationToken cancellationToken)
     {
-        var token = await GetRequiredGraphQlTokenAsync(scope.RequestAuthorization, cancellationToken);
+        var token = await GetRequiredGraphQlTokenAsync(scope.RequestAuthorization, cancellationToken, repositoryName);
         return await FetchPullRequestGraphQlSummariesAsync(
             repositoryName,
             state,
@@ -1014,9 +1014,10 @@ sealed partial class GitHubClient(
 
     private async Task<string> GetRequiredGraphQlTokenAsync(
         GitHubRequestAuthorization requestAuthorization,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        RepositoryName? repositoryName = null)
     {
-        var token = await GetGraphQlTokenAsync(requestAuthorization, cancellationToken);
+        var token = await GetGraphQlTokenAsync(requestAuthorization, cancellationToken, repositoryName);
         if (token is not null)
         {
             return token;
@@ -1102,7 +1103,7 @@ sealed partial class GitHubClient(
             return false;
         }
 
-        var token = await GetGraphQlTokenAsync(scope.RequestAuthorization, cancellationToken);
+        var token = await GetGraphQlTokenAsync(scope.RequestAuthorization, cancellationToken, repositoryName);
         if (token is null)
         {
             graphQlState.SetRefreshError(
@@ -2192,7 +2193,7 @@ sealed partial class GitHubClient(
             url,
             GitHubJsonSerializerContext.Default.GitHubPullRequestDtoArray,
             scope.RequestAuthorization,
-            cancellationToken))
+            cancellationToken, repositoryName))
         {
             if (!pullRequest.Draft)
             {
@@ -2479,7 +2480,7 @@ sealed partial class GitHubClient(
             $"repos/{repositoryName.Owner}/{repositoryName.Name}/milestones?state=all&per_page=100",
             GitHubJsonSerializerContext.Default.GitHubMilestoneDtoArray,
             scope.RequestAuthorization,
-            cancellationToken);
+            cancellationToken, repositoryName);
         return milestones.FirstOrDefault(milestone =>
             string.Equals(milestone.Title?.Trim(), milestoneTitle, StringComparison.OrdinalIgnoreCase));
     }
@@ -2493,7 +2494,7 @@ sealed partial class GitHubClient(
             $"repos/{repositoryName.Owner}/{repositoryName.Name}/git/matching-refs/heads/release/",
             GitHubJsonSerializerContext.Default.GitHubGitReferenceDtoArray,
             scope.RequestAuthorization,
-            cancellationToken);
+            cancellationToken, repositoryName);
 
         return references
             .Select(reference => TryGetBranchName(reference.Ref))
@@ -2537,7 +2538,7 @@ sealed partial class GitHubClient(
                 $"repos/{repositoryName.Owner}/{repositoryName.Name}/branches/{Uri.EscapeDataString(branch)}",
                 GitHubJsonSerializerContext.Default.GitHubBranchDto,
                 scope.RequestAuthorization,
-                cancellationToken);
+                cancellationToken, repositoryName);
             return true;
         }
         catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
@@ -2602,7 +2603,7 @@ sealed partial class GitHubClient(
         var issues = await SendPagedGitHubIssueSearchRequestAsync(
             CreateIssueSearchUrl(repositoryName, state, searchTerm),
             scope.RequestAuthorization,
-            cancellationToken);
+            cancellationToken, repositoryName);
 
         return issues
             .Where(issue => issue.PullRequest is null
@@ -2628,7 +2629,7 @@ sealed partial class GitHubClient(
             return new Dictionary<int, IReadOnlyList<LinkedOpenPullRequestSummary>>();
         }
 
-        var token = await GetGraphQlTokenAsync(scope.RequestAuthorization, cancellationToken);
+        var token = await GetGraphQlTokenAsync(scope.RequestAuthorization, cancellationToken, repositoryName);
         if (token is null)
         {
             return new Dictionary<int, IReadOnlyList<LinkedOpenPullRequestSummary>>();
@@ -2707,10 +2708,11 @@ sealed partial class GitHubClient(
 
     private async Task<string?> GetGraphQlTokenAsync(
         GitHubRequestAuthorization authorization,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        RepositoryName? repositoryName = null) =>
         authorization switch
         {
-            GitHubRequestAuthorization.Token => (await tokenProvider.GetTokenAsync(cancellationToken))?.Value,
+            GitHubRequestAuthorization.Token => (await tokenProvider.GetTokenAsync(repositoryName, cancellationToken))?.Value,
             GitHubRequestAuthorization.PublicCacheToken => publicCacheIdentity.GetToken()?.Value,
             _ => null,
         };
@@ -2739,7 +2741,7 @@ sealed partial class GitHubClient(
                 $"repos/{repositoryName.Owner}/{repositoryName.Name}/labels?per_page=100",
                 GitHubJsonSerializerContext.Default.GitHubLabelDtoArray,
                 scope.RequestAuthorization,
-                cancellationToken);
+                cancellationToken, repositoryName);
             return labels
                 .Select(label => label.Name)
                 .Where(label => !string.IsNullOrWhiteSpace(label))
@@ -2816,7 +2818,7 @@ sealed partial class GitHubClient(
             CreateIssuesUrl(repositoryName, state, label, milestoneNumber, sort, direction, assignee, creator),
             GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
             scope.RequestAuthorization,
-            cancellationToken);
+            cancellationToken, repositoryName);
 
     private static string CreateIssueSearchUrl(
         RepositoryName repositoryName,
@@ -2861,7 +2863,7 @@ sealed partial class GitHubClient(
                 creator: null),
             GitHubJsonSerializerContext.Default.GitHubIssueDtoArray,
             scope.RequestAuthorization,
-            cancellationToken))
+            cancellationToken, repositoryName))
         {
             yield return issue;
         }
@@ -2926,7 +2928,7 @@ sealed partial class GitHubClient(
             $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls?state=open&base={Uri.EscapeDataString(baseRef)}&sort=created&direction=asc&per_page={PullRequestPageSize}",
             GitHubJsonSerializerContext.Default.GitHubPullRequestDtoArray,
             scope.RequestAuthorization,
-            cancellationToken);
+            cancellationToken, repositoryName);
 
     private async Task<GitHubPullRequestDto?> GetPullRequestDtoOrNullAsync(
         RepositoryName repositoryName,
@@ -2940,7 +2942,7 @@ sealed partial class GitHubClient(
                 $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}",
                 GitHubJsonSerializerContext.Default.GitHubPullRequestDto,
                 scope.RequestAuthorization,
-                cancellationToken);
+                cancellationToken, repositoryName);
         }
         catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
@@ -3482,7 +3484,7 @@ sealed partial class GitHubClient(
                     url,
                     GitHubJsonSerializerContext.Default.GitHubCheckRunsResponseDto,
                     scope.RequestAuthorization,
-                    cancellationToken);
+                    cancellationToken, repositoryName);
                 var page = pageResponse.Value;
 
                 if (page.CheckRuns is { Length: > 0 } pageRuns)
@@ -3531,7 +3533,7 @@ sealed partial class GitHubClient(
                     url,
                     GitHubJsonSerializerContext.Default.GitHubCombinedStatusDto,
                     scope.RequestAuthorization,
-                    cancellationToken);
+                    cancellationToken, repositoryName);
                 var page = pageResponse.Value;
 
                 if (page.Statuses is { Length: > 0 } pageStatuses)
@@ -3602,7 +3604,7 @@ sealed partial class GitHubClient(
                     $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}/reviews?per_page=100",
                     GitHubJsonSerializerContext.Default.GitHubReviewDtoArray,
                     scope.RequestAuthorization,
-                    cancellationToken);
+                    cancellationToken, repositoryName);
             }
             catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
             {
@@ -3693,7 +3695,7 @@ sealed partial class GitHubClient(
         GitHubRequestAuthorization authorization,
         CancellationToken cancellationToken)
     {
-        var token = await GetGraphQlTokenAsync(authorization, cancellationToken);
+        var token = await GetGraphQlTokenAsync(authorization, cancellationToken, repositoryName);
         if (token is null)
         {
             return 0;
@@ -3997,7 +3999,7 @@ sealed partial class GitHubClient(
                     url,
                     GitHubJsonSerializerContext.Default.GitHubTimelineItemDtoArray,
                     scope.RequestAuthorization,
-                    cancellationToken);
+                    cancellationToken, repositoryName);
 
                 items.AddRange(pageResponse.Value);
                 url = pageResponse.NextUrl;
@@ -4066,7 +4068,7 @@ sealed partial class GitHubClient(
                 $"repos/{repositoryName.Owner}/{repositoryName.Name}/pulls/{number}",
                 GitHubJsonSerializerContext.Default.GitHubPullRequestDto,
                 scope.RequestAuthorization,
-                cancellationToken);
+                cancellationToken, repositoryName);
 
             return PullRequestDetails.FromDto(pullRequest);
         },
@@ -4132,7 +4134,7 @@ sealed partial class GitHubClient(
                         url,
                         GitHubJsonSerializerContext.Default.GitHubPullRequestCommitDtoArray,
                         scope.RequestAuthorization,
-                        cancellationToken);
+                        cancellationToken, repositoryName);
                     pageCommits = pageResponse.Value;
                     url = pageResponse.NextUrl;
                 }
@@ -4176,7 +4178,7 @@ sealed partial class GitHubClient(
                     url,
                     GitHubJsonSerializerContext.Default.GitHubPullRequestCommitDtoArray,
                     scope.RequestAuthorization,
-                    cancellationToken);
+                    cancellationToken, repositoryName);
                 pageCommits = pageResponse.Value;
                 url = pageResponse.NextUrl;
             }
@@ -4289,7 +4291,7 @@ sealed partial class GitHubClient(
                     $"repos/{repositoryName.Owner}/{repositoryName.Name}/issues/{number}",
                     GitHubJsonSerializerContext.Default.GitHubIssueDto,
                     scope.RequestAuthorization,
-                    cancellationToken);
+                    cancellationToken, repositoryName);
             }
             catch (GitHubApiException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
             {
@@ -4319,9 +4321,10 @@ sealed partial class GitHubClient(
         string url,
         JsonTypeInfo<T> jsonTypeInfo,
         GitHubRequestAuthorization authorization,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        RepositoryName? repositoryName = null)
     {
-        var page = await SendGitHubPageAsync(url, jsonTypeInfo, authorization, cancellationToken);
+        var page = await SendGitHubPageAsync(url, jsonTypeInfo, authorization, cancellationToken, repositoryName);
         return page.Value;
     }
 
@@ -4329,13 +4332,14 @@ sealed partial class GitHubClient(
         string url,
         JsonTypeInfo<T[]> jsonTypeInfo,
         GitHubRequestAuthorization authorization,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        RepositoryName? repositoryName = null)
     {
         var items = new List<T>();
         string? nextUrl = url;
         while (nextUrl is not null)
         {
-            var page = await SendGitHubPageAsync(nextUrl, jsonTypeInfo, authorization, cancellationToken);
+            var page = await SendGitHubPageAsync(nextUrl, jsonTypeInfo, authorization, cancellationToken, repositoryName);
 
             items.AddRange(page.Value);
             nextUrl = page.NextUrl;
@@ -4347,7 +4351,8 @@ sealed partial class GitHubClient(
     private async Task<IReadOnlyList<GitHubIssueDto>> SendPagedGitHubIssueSearchRequestAsync(
         string url,
         GitHubRequestAuthorization authorization,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        RepositoryName? repositoryName = null)
     {
         var items = new List<GitHubIssueDto>();
         string? nextUrl = url;
@@ -4357,7 +4362,8 @@ sealed partial class GitHubClient(
                 nextUrl,
                 GitHubJsonSerializerContext.Default.GitHubIssueSearchResponseDto,
                 authorization,
-                cancellationToken);
+                cancellationToken,
+                repositoryName);
 
             items.AddRange(page.Value.Items);
             nextUrl = page.NextUrl;
@@ -4370,13 +4376,14 @@ sealed partial class GitHubClient(
         string url,
         JsonTypeInfo<T[]> jsonTypeInfo,
         GitHubRequestAuthorization authorization,
-        [EnumeratorCancellation] CancellationToken cancellationToken)
+        [EnumeratorCancellation] CancellationToken cancellationToken,
+        RepositoryName? repositoryName = null)
     {
         string? nextUrl = url;
 
         while (nextUrl is not null)
         {
-            var page = await SendGitHubPageAsync(nextUrl, jsonTypeInfo, authorization, cancellationToken);
+            var page = await SendGitHubPageAsync(nextUrl, jsonTypeInfo, authorization, cancellationToken, repositoryName);
 
             foreach (var item in page.Value)
             {
@@ -4392,12 +4399,13 @@ sealed partial class GitHubClient(
         string url,
         JsonTypeInfo<T> jsonTypeInfo,
         GitHubRequestAuthorization authorization,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        RepositoryName? repositoryName = null)
     {
         await s_githubRequestThrottle.WaitAsync(cancellationToken);
         try
         {
-            using var response = await SendGitHubRequestAsync(url, authorization, cancellationToken);
+            using var response = await SendGitHubRequestAsync(url, authorization, cancellationToken, repositoryName);
             var value = await ReadGitHubJsonAsync(response, jsonTypeInfo, cancellationToken);
             return new GitHubPage<T>(value, GetNextPageUrl(response));
         }
@@ -4416,12 +4424,13 @@ sealed partial class GitHubClient(
     private async Task<HttpResponseMessage> SendGitHubRequestAsync(
         string url,
         GitHubRequestAuthorization authorization,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        RepositoryName? repositoryName = null)
     {
         TokenResult? token = null;
         if (authorization == GitHubRequestAuthorization.Token)
         {
-            token = await tokenProvider.GetTokenAsync(cancellationToken);
+            token = await tokenProvider.GetTokenAsync(repositoryName, cancellationToken);
             if (token is null)
             {
                 throw new GitHubApiException(
