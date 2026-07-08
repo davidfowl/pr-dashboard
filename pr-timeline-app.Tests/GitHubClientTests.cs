@@ -5618,7 +5618,7 @@ public sealed class GitHubClientTests
             new TestHostEnvironment(),
             CreateConfiguration(),
             new TestDevelopmentGitHubCliAuth(),
-            Options.Create(new GitHubRepositoryIdentityOptions()));
+            TeamIdentityMap.Empty);
         var cache = new MemoryCache(new MemoryCacheOptions());
         var options = CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
@@ -5649,7 +5649,7 @@ public sealed class GitHubClientTests
             new TestHostEnvironment(),
             CreateConfiguration(),
             new TestDevelopmentGitHubCliAuth(),
-            Options.Create(new GitHubRepositoryIdentityOptions()));
+            TeamIdentityMap.Empty);
         var cache = new MemoryCache(new MemoryCacheOptions());
         var options = CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
@@ -5690,6 +5690,7 @@ public sealed class GitHubClientTests
             BaseAddress = new Uri("https://api.github.com/")
         });
         builder.Services.AddSingleton<IDevelopmentGitHubCliAuth, TestDevelopmentGitHubCliAuth>();
+        builder.Services.AddSingleton(TeamIdentityMap.Empty);
         builder.Services.AddSingleton<GitHubTokenProvider>();
         builder.Services.AddSingleton<GitHubPublicCacheIdentity>();
         builder.Services.AddSingleton<GitHubPublicCacheStore>();
@@ -5779,7 +5780,7 @@ public sealed class GitHubClientTests
             new TestHostEnvironment(),
             CreateConfiguration(),
             new TestDevelopmentGitHubCliAuth(),
-            Options.Create(new GitHubRepositoryIdentityOptions()));
+            TeamIdentityMap.Empty);
         options ??= CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
         publicCacheStore ??= new GitHubPublicCacheStore(cache);
@@ -5805,7 +5806,7 @@ public sealed class GitHubClientTests
             new TestHostEnvironment(),
             CreateConfiguration(),
             new TestDevelopmentGitHubCliAuth(),
-            Options.Create(new GitHubRepositoryIdentityOptions()));
+            TeamIdentityMap.Empty);
         options ??= CreateWarmupOptions();
         var publicCacheIdentity = new GitHubPublicCacheIdentity(options);
         publicCacheStore ??= new GitHubPublicCacheStore(cache);

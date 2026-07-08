@@ -309,101 +309,97 @@ public sealed class GitHubTokenProviderTests
     }
 
     [Fact]
-    public async Task RepositoryIdentityOverrideResolvesMappedAccountTokenInDevelopment()
+    public async Task TeamIdentityRoutesRepositoryToKindIdentityInDevelopment()
     {
         var provider = CreateProvider(
             developmentGitHubCliAuth: PerUserDevelopmentGitHubCliAuth(),
-            repositoryIdentities: new Dictionary<string, string>
-            {
-                ["devdiv-microsoft/aspire-1p"] = "emu-user"
-            });
-        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var overrideRepo));
-        Assert.True(RepositoryName.TryParse("microsoft/aspire", out var defaultRepo));
+            teamIdentities: CreateRadicalTeamIdentities());
+        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var microsoftRepo));
+        Assert.True(RepositoryName.TryParse("microsoft/aspire", out var publicRepo));
 
-        var overrideToken = await provider.GetTokenAsync(overrideRepo, TestContext.Current.CancellationToken);
-        var defaultRepoToken = await provider.GetTokenAsync(defaultRepo, TestContext.Current.CancellationToken);
+        var microsoftToken = await provider.GetTokenAsync(microsoftRepo, TestContext.Current.CancellationToken);
+        var publicToken = await provider.GetTokenAsync(publicRepo, TestContext.Current.CancellationToken);
         var noRepoToken = await provider.GetTokenAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal("emu-user-token", overrideToken?.Value);
-        Assert.Equal("gh", overrideToken?.Source);
-        Assert.Equal("default-token", defaultRepoToken?.Value);
-        Assert.Equal("default-token", noRepoToken?.Value);
+        Assert.Equal("ankj_microsoft-token", microsoftToken?.Value);
+        Assert.Equal("gh", microsoftToken?.Source);
+        Assert.Equal("radical-token", publicToken?.Value);
+        Assert.Equal("radical-token", noRepoToken?.Value);
     }
 
     [Fact]
-    public async Task RepositoryIdentityOverrideTakesPrecedenceOverSelectedDevelopmentAccount()
+    public async Task SelectedDevelopmentAccountOverridesTeamIdentityRouting()
     {
         var provider = CreateProvider(
             developmentGitHubCliAuth: PerUserDevelopmentGitHubCliAuth(),
-            repositoryIdentities: new Dictionary<string, string>
-            {
-                ["devdiv-microsoft/aspire-1p"] = "emu-user"
-            });
+            teamIdentities: CreateRadicalTeamIdentities());
         provider.SetDevelopmentGitHubUser("selected-user");
-        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var overrideRepo));
-        Assert.True(RepositoryName.TryParse("microsoft/aspire", out var defaultRepo));
+        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var microsoftRepo));
+        Assert.True(RepositoryName.TryParse("microsoft/aspire", out var publicRepo));
 
-        var overrideToken = await provider.GetTokenAsync(overrideRepo, TestContext.Current.CancellationToken);
-        var defaultRepoToken = await provider.GetTokenAsync(defaultRepo, TestContext.Current.CancellationToken);
+        var microsoftToken = await provider.GetTokenAsync(microsoftRepo, TestContext.Current.CancellationToken);
+        var publicToken = await provider.GetTokenAsync(publicRepo, TestContext.Current.CancellationToken);
 
-        Assert.Equal("emu-user-token", overrideToken?.Value);
-        Assert.Equal("selected-user-token", defaultRepoToken?.Value);
+        Assert.Equal("selected-user-token", microsoftToken?.Value);
+        Assert.Equal("selected-user-token", publicToken?.Value);
     }
 
     [Fact]
-    public async Task RepositoryIdentityOverrideFallsBackToDefaultWhenAccountTokenUnavailable()
+    public async Task TeamIdentityFallsBackToDefaultKindWhenMemberLacksRepositoryKind()
     {
+        var teamIdentities = new TeamIdentityMap(new TeamIdentityOptions
+        {
+            DefaultKind = "public",
+            RepositoryKinds = new Dictionary<string, string> { ["devdiv-microsoft/aspire-1p"] = "microsoft" },
+            CurrentDeveloper = "radical",
+            Members =
+            [
+                new TeamMemberOptions
+                {
+                    Name = "radical",
+                    Identities = [new TeamMemberIdentityOptions { Login = "radical", Kind = "public" }]
+                }
+            ]
+        });
         var provider = CreateProvider(
-            developmentGitHubCliAuth: new TestDevelopmentGitHubCliAuth((user, _) =>
-                Task.FromResult(user is null
-                    ? GitHubCliTokenResult.Success("default-token")
-                    : GitHubCliTokenResult.NotFound("gh"))),
-            repositoryIdentities: new Dictionary<string, string>
-            {
-                ["devdiv-microsoft/aspire-1p"] = "emu-user"
-            });
-        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var overrideRepo));
+            developmentGitHubCliAuth: PerUserDevelopmentGitHubCliAuth(),
+            teamIdentities: teamIdentities);
+        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var microsoftRepo));
 
-        var overrideToken = await provider.GetTokenAsync(overrideRepo, TestContext.Current.CancellationToken);
+        var token = await provider.GetTokenAsync(microsoftRepo, TestContext.Current.CancellationToken);
 
-        Assert.Equal("default-token", overrideToken?.Value);
+        Assert.Equal("radical-token", token?.Value);
     }
 
     [Fact]
-    public async Task RepositoryIdentityOverrideIsIgnoredOutsideDevelopment()
+    public async Task TeamIdentityRoutingIsIgnoredOutsideDevelopment()
     {
         var provider = CreateProvider(
             environmentName: Environments.Production,
             developmentGitHubCliAuth: ThrowingDevelopmentGitHubCliAuth(),
-            repositoryIdentities: new Dictionary<string, string>
-            {
-                ["devdiv-microsoft/aspire-1p"] = "emu-user"
-            });
-        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var overrideRepo));
+            teamIdentities: CreateRadicalTeamIdentities());
+        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var microsoftRepo));
 
-        var overrideToken = await provider.GetTokenAsync(overrideRepo, TestContext.Current.CancellationToken);
+        var token = await provider.GetTokenAsync(microsoftRepo, TestContext.Current.CancellationToken);
 
-        Assert.Null(overrideToken);
+        Assert.Null(token);
     }
 
     [Fact]
-    public async Task RepositoryIdentityOverrideProducesDistinctCacheKeyFromDefaultIdentity()
+    public async Task TeamIdentityRoutingProducesDistinctCacheKeyPerRepositoryIdentity()
     {
         var provider = CreateProvider(
             developmentGitHubCliAuth: PerUserDevelopmentGitHubCliAuth(),
-            repositoryIdentities: new Dictionary<string, string>
-            {
-                ["devdiv-microsoft/aspire-1p"] = "emu-user"
-            });
-        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var overrideRepo));
-        Assert.True(RepositoryName.TryParse("microsoft/aspire", out var defaultRepo));
+            teamIdentities: CreateRadicalTeamIdentities());
+        Assert.True(RepositoryName.TryParse("devdiv-microsoft/aspire-1p", out var microsoftRepo));
+        Assert.True(RepositoryName.TryParse("microsoft/aspire", out var publicRepo));
 
-        var overrideCacheKey = await provider.GetCacheKeyAsync(overrideRepo, TestContext.Current.CancellationToken);
-        var defaultCacheKey = await provider.GetCacheKeyAsync(defaultRepo, TestContext.Current.CancellationToken);
+        var microsoftCacheKey = await provider.GetCacheKeyAsync(microsoftRepo, TestContext.Current.CancellationToken);
+        var publicCacheKey = await provider.GetCacheKeyAsync(publicRepo, TestContext.Current.CancellationToken);
 
-        Assert.StartsWith("gh:", overrideCacheKey);
-        Assert.StartsWith("gh:", defaultCacheKey);
-        Assert.NotEqual(defaultCacheKey, overrideCacheKey);
+        Assert.StartsWith("gh:", microsoftCacheKey);
+        Assert.StartsWith("gh:", publicCacheKey);
+        Assert.NotEqual(publicCacheKey, microsoftCacheKey);
     }
 
     [Fact]
@@ -540,18 +536,13 @@ public sealed class GitHubTokenProviderTests
         string environmentName = "Development",
         IDevelopmentGitHubCliAuth? developmentGitHubCliAuth = null,
         IConfiguration? configuration = null,
-        IDictionary<string, string>? repositoryIdentities = null) =>
+        TeamIdentityMap? teamIdentities = null) =>
         new(
             httpContextAccessor ?? new HttpContextAccessor { HttpContext = httpContext },
             new TestHostEnvironment { EnvironmentName = environmentName },
             configuration ?? CreateConfiguration(),
             developmentGitHubCliAuth ?? new TestDevelopmentGitHubCliAuth(),
-            Options.Create(new GitHubRepositoryIdentityOptions
-            {
-                Repositories = repositoryIdentities is null
-                    ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-                    : new Dictionary<string, string>(repositoryIdentities, StringComparer.OrdinalIgnoreCase)
-            }));
+            teamIdentities ?? TeamIdentityMap.Empty);
 
     private static IConfiguration CreateConfiguration(
         IEnumerable<KeyValuePair<string, string?>>? values = null) =>
@@ -625,6 +616,28 @@ public sealed class GitHubTokenProviderTests
     private static TestDevelopmentGitHubCliAuth PerUserDevelopmentGitHubCliAuth() =>
         new((user, _) => Task.FromResult(
             GitHubCliTokenResult.Success(user is null ? "default-token" : $"{user}-token")));
+
+    // Team identity for the developer "radical" with a public identity (radical) and a microsoft
+    // identity (ankj_microsoft), routing devdiv-microsoft/aspire-1p to the microsoft kind.
+    private static TeamIdentityMap CreateRadicalTeamIdentities(string? currentDeveloper = "radical") =>
+        new(new TeamIdentityOptions
+        {
+            DefaultKind = "public",
+            RepositoryKinds = new Dictionary<string, string> { ["devdiv-microsoft/aspire-1p"] = "microsoft" },
+            CurrentDeveloper = currentDeveloper,
+            Members =
+            [
+                new TeamMemberOptions
+                {
+                    Name = "radical",
+                    Identities =
+                    [
+                        new TeamMemberIdentityOptions { Login = "radical", Kind = "public" },
+                        new TeamMemberIdentityOptions { Login = "ankj_microsoft", Kind = "microsoft" }
+                    ]
+                }
+            ]
+        });
 
     private sealed class TestDevelopmentGitHubCliAuth(
         Func<string?, CancellationToken, Task<GitHubCliTokenResult>>? getTokenAsync = null,

@@ -3,7 +3,6 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 
 sealed class GitHubTokenProvider
 {
@@ -15,7 +14,7 @@ sealed class GitHubTokenProvider
     private readonly IConfiguration configuration;
     private readonly IDevelopmentGitHubCliAuth developmentGitHubCliAuth;
     private readonly ILogger<GitHubTokenProvider> logger;
-    private readonly IReadOnlyDictionary<string, string> repositoryIdentities;
+    private readonly TeamIdentityMap teamIdentities;
 
     // Development gh tokens cached per account login so a default identity and any per-repository
     // override identities can be resolved and reused concurrently. Key is the normalized login, or
@@ -31,16 +30,15 @@ sealed class GitHubTokenProvider
         IHostEnvironment environment,
         IConfiguration configuration,
         IDevelopmentGitHubCliAuth developmentGitHubCliAuth,
-        IOptions<GitHubRepositoryIdentityOptions> repositoryIdentityOptions,
+        TeamIdentityMap teamIdentities,
         ILogger<GitHubTokenProvider>? logger = null)
     {
         this.httpContextAccessor = httpContextAccessor;
         this.environment = environment;
         this.configuration = configuration;
         this.developmentGitHubCliAuth = developmentGitHubCliAuth;
+        this.teamIdentities = teamIdentities ?? TeamIdentityMap.Empty;
         this.logger = logger ?? NullLogger<GitHubTokenProvider>.Instance;
-        repositoryIdentities = (repositoryIdentityOptions?.Value ?? new GitHubRepositoryIdentityOptions())
-            .BuildNormalizedMap();
     }
 
     public string? LocalAuthFailureMessage { get; private set; }
@@ -134,29 +132,30 @@ sealed class GitHubTokenProvider
             return null;
         }
 
-        // Per-repository development identity override. When a repository is mapped to a specific gh
-        // account (for example an EMU-only repo that the default identity cannot read), resolve that
-        // account's token. This takes precedence over the globally selected dev account and env token
-        // so the same dashboard can read different repositories with different identities at once.
-        if (TryGetRepositoryIdentityLogin(repositoryName, out var overrideLogin))
-        {
-            var overrideToken = await GetCachedGitHubCliTokenAsync(overrideLogin, cancellationToken);
-            if (overrideToken is not null)
-            {
-                logger.LogDebug("Resolving GitHub token from the per-repository identity override.");
-                return overrideToken;
-            }
-
-            // A misconfigured or unavailable override should not silently mask the repository: log
-            // loudly, then fall through to the default resolution so the repository still attempts a load.
-            logger.LogWarning(
-                "Per-repository GitHub identity override is configured but its gh account token was unavailable; falling back to the default identity.");
-        }
-
+        // A specific dev-account dropdown pick is a raw "act as this exact account for every
+        // repository" override, used for debugging what a given account can see.
         if (selectedDevelopmentGitHubUser is not null)
         {
             logger.LogDebug("Resolving GitHub token from the selected development gh account.");
             return await GetCachedGitHubCliTokenAsync(selectedDevelopmentGitHubUser, cancellationToken);
+        }
+
+        // Team-identity routing: the current developer reads each repository with the identity whose
+        // kind can see it (for example an EMU-only repo via their "microsoft" identity), while every
+        // other repository uses their default-kind identity. This makes the default identity persistent
+        // and lets one dashboard load read repositories owned by different identities at once.
+        if (teamIdentities.CurrentDeveloper is { } currentDeveloper &&
+            teamIdentities.TryResolveLoginForRepository(currentDeveloper, repositoryName, out var routedLogin, out var usedDefaultKindFallback))
+        {
+            if (usedDefaultKindFallback)
+            {
+                logger.LogWarning(
+                    "The current developer has no '{RepositoryIdentityKind}' identity for the requested repository; using their default-kind identity instead.",
+                    teamIdentities.ResolveKind(repositoryName));
+            }
+
+            logger.LogDebug("Resolving GitHub token from the current developer's team identity.");
+            return await GetCachedGitHubCliTokenAsync(routedLogin, cancellationToken);
         }
 
         var environmentToken = configuration["GITHUB_TOKEN"]
@@ -170,23 +169,6 @@ sealed class GitHubTokenProvider
 
         logger.LogDebug("Resolving GitHub token from the default development gh account.");
         return await GetCachedGitHubCliTokenAsync(user: null, cancellationToken);
-    }
-
-    private bool TryGetRepositoryIdentityLogin(RepositoryName? repositoryName, out string login)
-    {
-        login = "";
-        if (repositoryName is not { } repository || repositoryIdentities.Count == 0)
-        {
-            return false;
-        }
-
-        if (repositoryIdentities.TryGetValue(repository.ToString(), out var mappedLogin))
-        {
-            login = mappedLogin;
-            return true;
-        }
-
-        return false;
     }
 
     private async Task<TokenResult?> GetCachedGitHubCliTokenAsync(string? user, CancellationToken cancellationToken)

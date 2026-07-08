@@ -27,17 +27,31 @@ The dashboard repositories, ship-mode repositories, core team, and release/docs 
 
 In development, the server can use an OAuth session, `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`. Outside development, configure `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`; the callback path is `/signin-github`. The OAuth flow requests no GitHub scopes, so it supports public repository API reads without requesting repository or organization permissions.
 
-### Per-repository identities (development)
+### Team identities (development)
 
-Some configured repositories are only visible to a different account than the default one you sign in with locally — for example an EMU-only repository such as `devdiv-microsoft/aspire-1p`. The default identity's token returns `404 Not Found` for that repository, so its rows are skipped.
+Some configured repositories are only visible to a different account than the one you sign in with locally — for example an EMU-only repository such as `devdiv-microsoft/aspire-1p`. A public identity's token returns `404 Not Found` for it, so its rows are skipped.
 
-Map individual repositories to a specific `gh` account so the dashboard reads each repository with the right identity while everything else keeps using the default identity. The mapping is per-developer (each contributor's account login differs), so store it in user-secrets on the **Server** project rather than committing it:
+A team member owns multiple identities, each tagged with a **kind** (for example `public` and `microsoft`), and repositories are routed to a kind. The kind → repository mapping is team-wide and lives in `appsettings.json`:
 
-```bash
-dotnet user-secrets --project pr-timeline-app.Server set "GitHubRepositoryIdentities:Repositories:devdiv-microsoft/aspire-1p" "your-emu-login"
+```jsonc
+"TeamIdentity": {
+  "DefaultKind": "public",
+  "RepositoryKinds": { "devdiv-microsoft/aspire-1p": "microsoft" }
+}
 ```
 
-Sign in to both accounts with `gh auth login` first (`gh auth status` lists them). Repositories without a mapping continue to use the default identity, so a single dashboard load can fetch PRs and issues from repositories that belong to different identities at once. This mechanism is development-only; the identities are local `gh` accounts.
+Your own identities and which member you are are per-developer, so they go in user-secrets on the **Server** project (`gh auth login` to each account first; `gh auth status` lists them):
+
+```bash
+dotnet user-secrets --project pr-timeline-app.Server set "TeamIdentity:CurrentDeveloper" "radical"
+dotnet user-secrets --project pr-timeline-app.Server set "TeamIdentity:Members:0:name" "radical"
+dotnet user-secrets --project pr-timeline-app.Server set "TeamIdentity:Members:0:identities:0:login" "radical"
+dotnet user-secrets --project pr-timeline-app.Server set "TeamIdentity:Members:0:identities:0:kind" "public"
+dotnet user-secrets --project pr-timeline-app.Server set "TeamIdentity:Members:0:identities:1:login" "your-emu-login"
+dotnet user-secrets --project pr-timeline-app.Server set "TeamIdentity:Members:0:identities:1:kind" "microsoft"
+```
+
+The current developer then reads each repository with the identity whose kind can see it, and every other repository with their default-kind identity — so one dashboard load fetches PRs and issues across repositories owned by different identities at once, without switching accounts. Picking a specific account in the **Dev account** dropdown remains a raw "act as this exact account" override for debugging. This mechanism is development-only; the identities are local `gh` accounts. See [docs/team-identities.md](docs/team-identities.md) for the design.
 
 ## App-specific agent schema
 

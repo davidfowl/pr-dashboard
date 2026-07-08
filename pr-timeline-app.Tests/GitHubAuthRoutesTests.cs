@@ -38,6 +38,7 @@ public sealed class GitHubAuthRoutesTests
         builder.Services.AddHttpContextAccessor();
         builder.Services.AddSingleton<IConfiguration>(new ConfigurationBuilder().Build());
         builder.Services.AddSingleton<IDevelopmentGitHubCliAuth, ThrowingDevelopmentGitHubCliAuth>();
+        builder.Services.AddSingleton(TeamIdentityMap.Empty);
         builder.Services.AddSingleton<GitHubTokenProvider>();
         builder.Services.AddScoped<GitHubAuthService>();
 
