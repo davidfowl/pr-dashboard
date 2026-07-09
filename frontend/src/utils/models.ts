@@ -52,6 +52,7 @@ const afscromeIssueAuthor = 'afscrome';
 const myIssuesBucketLabel = 'My issues';
 const myDraftPullRequestsBucketLabel = 'My draft PRs';
 const agedOutCommunityBucketLabel = 'Aged out community';
+const allCommunityBucketLabel = 'All community PRs';
 const ctiTeamTitleMarker = '[aspiree2e]';
 const releaseBlockingLabelMarker = 'blocking-release';
 
@@ -359,6 +360,14 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[], login
       items: [],
     },
     {
+      label: allCommunityBucketLabel,
+      summary: 'Every open external-contributor PR, including drafts, held, aged-out, and author-blocked ones, so nothing is dropped from view.',
+      tone: 'accent',
+      metric: 'community backlog',
+      items: [],
+      preserveItemOrder: true,
+    },
+    {
       label: 'Quick wins',
       summary: 'Small recently updated core-team PRs that should be easy to drain.',
       tone: 'success',
@@ -438,6 +447,24 @@ export function createAttentionBuckets(pullRequests: PullRequestSummary[], login
         });
       }
     }
+  }
+
+  // The complete community backlog is populated from every open external-contributor PR, not just the
+  // reviewer-visible set, so drafts and held (do-not-merge) community PRs that the main loop skips are
+  // still represented here. Pre-sorted newest-first with preserveItemOrder so the bucket reads as a
+  // stable recency-ordered list.
+  const allCommunityBucket = bucketsByLabel.get(allCommunityBucketLabel);
+  const allCommunityPullRequests = pullRequests
+    .filter((pullRequest) => pullRequest.state === 'open' && isCommunityPullRequest(pullRequest))
+    .sort((first, second) =>
+      new Date(second.updatedAt).getTime() - new Date(first.updatedAt).getTime()
+      || first.repository.localeCompare(second.repository)
+      || first.number - second.number);
+  for (const pullRequest of allCommunityPullRequests) {
+    allCommunityBucket?.items.push({
+      pullRequest,
+      reason: reviewSignal(pullRequest, allCommunityBucketLabel),
+    });
   }
 
   return buckets.filter((bucket) => bucket.items.length > 0);
@@ -824,6 +851,10 @@ function reviewSignal(pullRequest: PullRequestSummary, bucketLabel: string) {
         : 'community';
     case agedOutCommunityBucketLabel:
       return agedOutCommunityBucketLabel;
+    case allCommunityBucketLabel:
+      return isCommunityWaiting(pullRequest)
+        ? `Community · waiting ${formatAge(pullRequest.createdAt)}`
+        : 'community';
     case 'Quick wins':
       return reviewFootprint(pullRequest);
     case 'Needs review':
@@ -939,7 +970,7 @@ function approvalAgeAt(pullRequest: PullRequestSummary) {
   return pullRequest.review.lastApprovedAt ?? pullRequest.review.lastReviewedAt;
 }
 
-function needsReReview(pullRequest: PullRequestSummary) {
+export function needsReReview(pullRequest: PullRequestSummary) {
   return pullRequest.review.lastReviewedAt != null
     && pullRequest.lastCommitAt != null
     && (pullRequest.review.state === 'reviewed' || pullRequest.review.state === 'changes_requested')
