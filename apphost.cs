@@ -3,6 +3,7 @@
 #:package Aspire.Hosting.JavaScript
 #:sdk Aspire.AppHost.Sdk@13.4.6
 #:project pr-timeline-app.Server/pr-timeline-app.Server.csproj
+#:property UserSecretsId=D90E46CD-0B9F-44AF-A419-43107D23677B
 
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Azure;
@@ -49,9 +50,36 @@ var server = builder.AddProject<Projects.pr_timeline_app_Server>("server")
         app.Template.Scale.MaxReplicas = 1;
     });
 
-if (builder.ExecutionContext.IsRunMode)
+// Production-parity local preview (opt in with ProdParity=true, see scripts/run-prod-parity.sh):
+// run the server exactly as a deployed instance behaves — OAuth-only with the local gh/token
+// fallback disabled, served single-origin from wwwroot — so you can exercise the real GitHub
+// sign-in flow an end user hits once deployed.
+var prodParity = builder.ExecutionContext.IsRunMode
+    && builder.Configuration.GetValue("ProdParity", false);
+
+if (builder.ExecutionContext.IsRunMode && !prodParity)
 {
+    // The server's Development gh CLI fallback shells out to `gh`, which needs the developer's
+    // PATH/HOME. Production parity turns that fallback off, so it deliberately does not forward these.
     ForwardLocalEnvironment(server, "PATH", "HOME", "XDG_CONFIG_HOME", "GH_CONFIG_DIR");
+}
+
+if (prodParity)
+{
+    // A fixed port keeps the GitHub OAuth App callback URL (http://localhost:7080/signin-github)
+    // stable across runs. IsProxied=false lets Kestrel own the port directly so the request host the
+    // OAuth handler sees — and thus the redirect_uri it builds — matches that callback exactly.
+    const int prodParityPort = 7080;
+    server
+        .WithEnvironment("ASPNETCORE_ENVIRONMENT", "Production")
+        .WithEnvironment("GITHUB_CLIENT_ID", builder.AddParameter("github-client-id"))
+        .WithEnvironment("GITHUB_CLIENT_SECRET", builder.AddParameter("github-client-secret", secret: true))
+        .WithEndpoint("http", endpoint =>
+        {
+            endpoint.Port = prodParityPort;
+            endpoint.TargetPort = prodParityPort;
+            endpoint.IsProxied = false;
+        });
 }
 
 if (builder.ExecutionContext.IsPublishMode)
@@ -80,7 +108,9 @@ if (builder.ExecutionContext.IsPublishMode)
         .WithEnvironment("WebPush__KeyId", webPushKeyId);
 }
 
-if (builder.Configuration.GetValue("IncludeFrontend", true))
+// In production parity the server serves the built SPA from wwwroot single-origin (like the
+// deployed container), so the Vite dev server is intentionally not started.
+if (!prodParity && builder.Configuration.GetValue("IncludeFrontend", true))
 {
     var webfrontend = builder.AddViteApp("webfrontend", "frontend")
         .WithReference(server)

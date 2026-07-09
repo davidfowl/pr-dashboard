@@ -27,6 +27,33 @@ The dashboard repositories, ship-mode repositories, core team, and release/docs 
 
 In development, the server can use an OAuth session, `GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth token`. Outside development, configure `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`; the callback path is `/signin-github`. The OAuth flow requests no GitHub scopes, so it supports public repository API reads without requesting repository or organization permissions.
 
+### Preview the deployed OAuth experience (production parity)
+
+By default, local development uses the `gh`/token fallback, so you never see the OAuth sign-in a deployed user hits. Production-parity mode runs the server as `Production` (fallback **off**, OAuth-only) and serves the built SPA single-origin at `http://localhost:7080`, matching the deployed container.
+
+One-time setup:
+
+1. Register a GitHub OAuth App at <https://github.com/settings/developers>:
+   - **Homepage URL:** `http://localhost:7080`
+   - **Authorization callback URL:** `http://localhost:7080/signin-github`
+
+   No scopes are requested, so the consent screen asks only for your identity.
+
+2. Store its credentials in the **AppHost** user-secrets store (the AppHost is file-based, so target it by id):
+
+   ```bash
+   dotnet user-secrets --id D90E46CD-0B9F-44AF-A419-43107D23677B set "Parameters:github-client-id" "<client id>"
+   dotnet user-secrets --id D90E46CD-0B9F-44AF-A419-43107D23677B set "Parameters:github-client-secret" "<client secret>"
+   ```
+
+Then run:
+
+```bash
+./scripts/run-prod-parity.sh
+```
+
+The script builds the frontend into `pr-timeline-app.Server/wwwroot` and starts the AppHost with `ProdParity=true`. Open <http://localhost:7080/> and use **Sign in** to run the real GitHub OAuth flow. Because the token is scopeless like production, only public repositories load; private/EMU repositories are skipped, and logged-out users see the shared public cache (configure `GITHUB_PUBLIC_CACHE_TOKEN` to populate it).
+
 ### Team identities (development)
 
 Some configured repositories are only visible to a different account than the one you sign in with locally — for example an EMU-only repository such as `devdiv-microsoft/aspire-1p`. A public identity's token returns `404 Not Found` for it, so its rows are skipped.
