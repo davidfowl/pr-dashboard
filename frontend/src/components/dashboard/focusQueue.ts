@@ -7,6 +7,7 @@ import {
   isChecksFailing,
   isCommunityPullRequest,
   isPullRequestWithinFocusAgeLimit,
+  needsReReview,
 } from '../../utils/models';
 
 export type FocusItem = AttentionItem & {
@@ -105,13 +106,15 @@ export function computeCommunityItems(pullRequests: PullRequestSummary[]): Commu
 
 // Every open external-contributor PR, regardless of blocked state, draft status, or age, is surfaced
 // through the "All community PRs" attention bucket (see createAttentionBuckets), so the actionable
-// queue here can stay narrow without dropping any community PR from view.
+// queue here can stay narrow without dropping any community PR from view. changes_requested counts as
+// author-blocked only until the author pushes a new commit; after that the PR is reviewer-actionable
+// again (mirrors Needs attention's "Re-review needed" carve-out via needsReReview).
 function isCommunityActionBlocked(pullRequest: PullRequestSummary) {
   return isChecksFailing(pullRequest)
     || hasMergeConflicts(pullRequest)
     || pullRequest.review.unresolvedThreadCount > 0
     || hasNeedsAuthorActionLabel(pullRequest)
-    || pullRequest.review.state === 'changes_requested';
+    || (pullRequest.review.state === 'changes_requested' && !needsReReview(pullRequest));
 }
 
 export function computeFocusExclusionItems(

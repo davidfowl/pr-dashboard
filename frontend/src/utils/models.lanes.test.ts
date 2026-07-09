@@ -706,6 +706,20 @@ describe('createAttentionBuckets All community PRs bucket', () => {
     expect(bucketOrder(buckets, 'All community PRs')).toEqual([94, 91, 92, 90, 93]);
   });
 
+  it('breaks updatedAt ties by repository then number', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const sameTime = '2026-06-23T22:00:00Z';
+    const buckets = createAttentionBuckets([
+      pr({ number: 20, author: 'external-contributor', repository: 'example/beta', updatedAt: sameTime }),
+      pr({ number: 12, author: 'external-contributor', repository: 'example/alpha', updatedAt: sameTime }),
+      pr({ number: 11, author: 'external-contributor', repository: 'example/alpha', updatedAt: sameTime }),
+    ]);
+
+    expect(bucketOrder(buckets, 'All community PRs')).toEqual([11, 12, 20]);
+  });
+
   it('includes a held community PR that appears in no review bucket', () => {
     const buckets = createAttentionBuckets([
       pr({ number: 95, author: 'external-contributor', labels: ['no-merge'] }),

@@ -325,6 +325,26 @@ describe('computeCommunityItems', () => {
 
     expect(numbers).toEqual([85]);
   });
+
+  it('keeps changes-requested community PRs once the author pushes a response, matching Needs attention re-review', () => {
+    const stillBlocked = {
+      ...pr(90, 'success', { state: 'changes_requested' }),
+      author: 'external-contributor',
+    };
+    const responded = {
+      ...pr(91, 'success', {
+        state: 'changes_requested',
+        changesRequestedCount: 1,
+        lastReviewedAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      }),
+      author: 'external-contributor',
+      lastCommitAt: new Date().toISOString(),
+    };
+
+    const numbers = computeCommunityItems([stillBlocked, responded]).map((item) => item.pullRequest.number);
+
+    expect(numbers).toEqual([91]);
+  });
 });
 
 describe('computeFocusExclusionItems', () => {

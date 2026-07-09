@@ -970,7 +970,7 @@ function approvalAgeAt(pullRequest: PullRequestSummary) {
   return pullRequest.review.lastApprovedAt ?? pullRequest.review.lastReviewedAt;
 }
 
-function needsReReview(pullRequest: PullRequestSummary) {
+export function needsReReview(pullRequest: PullRequestSummary) {
   return pullRequest.review.lastReviewedAt != null
     && pullRequest.lastCommitAt != null
     && (pullRequest.review.state === 'reviewed' || pullRequest.review.state === 'changes_requested')
