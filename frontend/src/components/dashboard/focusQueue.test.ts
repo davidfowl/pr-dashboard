@@ -299,6 +299,32 @@ describe('computeCommunityItems', () => {
 
     expect(computeCommunityItems([teamAlias])).toHaveLength(0);
   });
+
+  it('excludes author-blocked community PRs the same way Needs attention does', () => {
+    const failingCi = { ...pr(80, 'failure'), author: 'external-contributor' };
+    const mergeConflict = { ...pr(81, 'success'), author: 'external-contributor', mergeableState: 'dirty' as const };
+    const unresolvedFeedback = {
+      ...pr(82, 'success', { unresolvedThreadCount: 1 }),
+      author: 'external-contributor',
+    };
+    const held = { ...pr(83, 'success'), author: 'external-contributor', labels: ['no-merge'] };
+    const changesRequested = {
+      ...pr(84, 'success', { state: 'changes_requested' }),
+      author: 'external-contributor',
+    };
+    const actionable = { ...pr(85, 'success'), author: 'external-contributor' };
+
+    const numbers = computeCommunityItems([
+      failingCi,
+      mergeConflict,
+      unresolvedFeedback,
+      held,
+      changesRequested,
+      actionable,
+    ]).map((item) => item.pullRequest.number);
+
+    expect(numbers).toEqual([85]);
+  });
 });
 
 describe('computeFocusExclusionItems', () => {
