@@ -562,8 +562,10 @@ describe('createAttentionBuckets lane routing', () => {
       }),
     ]);
 
-    expect(buckets.every((bucket) => bucket.items.every((item) => item.pullRequest.number !== 36))).toBe(true);
+    const reviewBuckets = buckets.filter((bucket) => bucket.label !== 'All community PRs');
+    expect(reviewBuckets.every((bucket) => bucket.items.every((item) => item.pullRequest.number !== 36))).toBe(true);
     expect(inBucket(buckets, 'Aged out community', 36)).toBe(false);
+    expect(inBucket(buckets, 'All community PRs', 36)).toBe(true);
   });
 
   it('routes karolz-ms PRs as core-team review work', () => {
@@ -677,6 +679,67 @@ describe('createAttentionBuckets lane routing', () => {
 
     expect(pullRequestFocusActivityAt(pullRequest, 'CI failing')).toBe('2026-06-22T21:00:00Z');
     expect(createAttentionSignals({ pullRequest, reason: '' }).map((signal) => signal.label)).not.toContain('review debt');
+  });
+});
+
+describe('createAttentionBuckets All community PRs bucket', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function bucketOrder(buckets: ReturnType<typeof createAttentionBuckets>, label: string) {
+    return buckets.find((bucket) => bucket.label === label)?.items.map((item) => item.pullRequest.number) ?? [];
+  }
+
+  it('lists every open community PR newest-first, including blocked, draft, held, and aged-out ones', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const buckets = createAttentionBuckets([
+      pr({ number: 90, author: 'external-contributor', updatedAt: '2026-06-23T20:00:00Z' }),
+      pr({ number: 91, author: 'another-contributor', mergeableState: 'dirty', updatedAt: '2026-06-23T22:00:00Z' }),
+      pr({ number: 92, author: 'external-contributor', draft: true, updatedAt: '2026-06-23T21:00:00Z' }),
+      pr({ number: 94, author: 'external-contributor', labels: ['no-merge'], updatedAt: '2026-06-23T22:30:00Z' }),
+      pr({ number: 93, author: 'external-contributor', updatedAt: '2026-06-01T00:00:00Z' }),
+    ]);
+
+    expect(bucketOrder(buckets, 'All community PRs')).toEqual([94, 91, 92, 90, 93]);
+  });
+
+  it('breaks updatedAt ties by repository then number', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-23T23:31:40Z'));
+
+    const sameTime = '2026-06-23T22:00:00Z';
+    const buckets = createAttentionBuckets([
+      pr({ number: 20, author: 'external-contributor', repository: 'example/beta', updatedAt: sameTime }),
+      pr({ number: 12, author: 'external-contributor', repository: 'example/alpha', updatedAt: sameTime }),
+      pr({ number: 11, author: 'external-contributor', repository: 'example/alpha', updatedAt: sameTime }),
+    ]);
+
+    expect(bucketOrder(buckets, 'All community PRs')).toEqual([11, 12, 20]);
+  });
+
+  it('includes a held community PR that appears in no review bucket', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 95, author: 'external-contributor', labels: ['no-merge'] }),
+    ]);
+
+    expect(inBucket(buckets, 'All community PRs', 95)).toBe(true);
+    const otherBuckets = buckets.filter((bucket) => bucket.label !== 'All community PRs');
+    expect(otherBuckets.some((bucket) => bucket.items.some((item) => item.pullRequest.number === 95))).toBe(false);
+  });
+
+  it('excludes core-team, bot, configured community-repository, and closed PRs', () => {
+    const buckets = createAttentionBuckets([
+      pr({ number: 96, author: 'davidfowl' }),
+      pr({ number: 97, author: 'dotnet-maestro' }),
+      pr({ number: 98, author: 'external-contributor', repository: 'CommunityToolkit/Aspire' }),
+      pr({ number: 99, author: 'external-contributor', state: 'closed' }),
+      pr({ number: 100, author: 'external-contributor' }),
+    ]);
+
+    expect(bucketOrder(buckets, 'All community PRs')).toEqual([100]);
   });
 });
 

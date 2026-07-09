@@ -7,6 +7,7 @@ import {
   isChecksFailing,
   isCommunityPullRequest,
   isPullRequestWithinFocusAgeLimit,
+  needsReReview,
 } from '../../utils/models';
 
 export type FocusItem = AttentionItem & {
@@ -44,8 +45,8 @@ export type FocusExclusionItem = {
   bucketLabels: string[];
 };
 
-const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Aged out community', 'Unresolved feedback', 'Merge conflicts', 'CI failing', 'Author response']);
-const disqualifyingFocusBucketLabels = new Set(['Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Aged out community', 'Unresolved feedback', 'Merge conflicts']);
+const excludedFocusBucketLabels = new Set(['Stalled', 'Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Aged out community', 'All community PRs', 'Unresolved feedback', 'Merge conflicts', 'CI failing', 'Author response']);
+const disqualifyingFocusBucketLabels = new Set(['Draft', 'My draft PRs', 'Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Aged out community', 'All community PRs', 'Unresolved feedback', 'Merge conflicts']);
 const specializedFocusBucketLabels = new Set(['Docs', 'Community Toolkit', 'Bots / automation', 'Community', 'Aged out community']);
 const focusBucketRanks = new Map([
   ['Regression', -2],
@@ -79,14 +80,18 @@ export function computeFocusItems(attentionBuckets: AttentionBucket[]): FocusIte
     .filter((item) => !isChecksFailing(item.pullRequest));
 }
 
+// The actionable Community PRs queue lists reviewer-actionable external-contributor PRs. Blocked
+// PRs (failing CI, merge conflicts, unresolved feedback, held labels, or changes requested) are
+// author-owned rather than reviewer-owned, so they are excluded here just like Needs attention and
+// instead surface in the full "All community PRs" list.
 export function computeCommunityItems(pullRequests: PullRequestSummary[]): CommunityQueueItem[] {
   return pullRequests
     .filter((pullRequest) =>
       pullRequest.state === 'open'
       && !pullRequest.draft
-      && !hasNeedsAuthorActionLabel(pullRequest)
       && isCommunityPullRequest(pullRequest)
-      && !isAgedOutCommunityPullRequest(pullRequest))
+      && !isAgedOutCommunityPullRequest(pullRequest)
+      && !isCommunityActionBlocked(pullRequest))
     .map((pullRequest): CommunityQueueItem => ({
       pullRequest,
       reason: 'Community',
@@ -97,6 +102,19 @@ export function computeCommunityItems(pullRequests: PullRequestSummary[]): Commu
       updatedTime(second.pullRequest) - updatedTime(first.pullRequest)
       || first.pullRequest.repository.localeCompare(second.pullRequest.repository)
       || first.pullRequest.number - second.pullRequest.number);
+}
+
+// Every open external-contributor PR, regardless of blocked state, draft status, or age, is surfaced
+// through the "All community PRs" attention bucket (see createAttentionBuckets), so the actionable
+// queue here can stay narrow without dropping any community PR from view. changes_requested counts as
+// author-blocked only until the author pushes a new commit; after that the PR is reviewer-actionable
+// again (mirrors Needs attention's "Re-review needed" carve-out via needsReReview).
+function isCommunityActionBlocked(pullRequest: PullRequestSummary) {
+  return isChecksFailing(pullRequest)
+    || hasMergeConflicts(pullRequest)
+    || pullRequest.review.unresolvedThreadCount > 0
+    || hasNeedsAuthorActionLabel(pullRequest)
+    || (pullRequest.review.state === 'changes_requested' && !needsReReview(pullRequest));
 }
 
 export function computeFocusExclusionItems(
