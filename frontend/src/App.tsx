@@ -93,9 +93,26 @@ const autoRefreshJitterMs = 60_000;
 const pullRequestSnapshotPollIntervalMs = 750;
 const pullRequestSnapshotMaxPolls = 40;
 const clipboardWriteTimeoutMs = 10_000;
+const githubAuthErrorParam = 'githubAuthError';
 
 function getAutoRefreshDelayMs() {
   return autoRefreshIntervalMs + Math.floor(Math.random() * autoRefreshJitterMs);
+}
+
+function readGitHubAuthErrorFromLocation() {
+  const value = new URLSearchParams(window.location.search).get(githubAuthErrorParam);
+  return value?.trim() || null;
+}
+
+function clearGitHubAuthErrorFromLocation() {
+  const url = new URL(window.location.href);
+  if (!url.searchParams.has(githubAuthErrorParam)) {
+    return;
+  }
+
+  url.searchParams.delete(githubAuthErrorParam);
+  const nextPath = `${url.pathname}${url.search}${url.hash}`;
+  window.history.replaceState(window.history.state, '', nextPath);
 }
 
 const emptyShipWeekLoadingState: ShipWeekLoadingState = {
@@ -142,6 +159,7 @@ function App() {
   const [shipWeekSectionLoading, setShipWeekSectionLoading] = useState<ShipWeekLoadingState>(emptyShipWeekLoadingState);
   const [loginLoading, setLoginLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [authError, setAuthError] = useState<string | null>(() => readGitHubAuthErrorFromLocation());
   const [issuesError, setIssuesError] = useState<string | null>(null);
   const [shipWeekError, setShipWeekError] = useState<string | null>(null);
   const [shipWeekSnapshotStatus, setShipWeekSnapshotStatus] = useState<string | null>(null);
@@ -394,6 +412,7 @@ function App() {
   }, [locationHash]);
 
   async function initializeApp() {
+    clearGitHubAuthErrorFromLocation();
     const config = await loadDashboardConfiguration();
     if (!config) {
       return;
@@ -469,6 +488,7 @@ function App() {
 
   async function startGitHubLogin() {
     setLoginLoading(true);
+    setAuthError(null);
     setError(null);
 
     const returnUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
@@ -476,6 +496,7 @@ function App() {
   }
 
   async function logoutGitHub() {
+    setAuthError(null);
     setError(null);
     cancelVisibleChecksRequests();
 
@@ -521,6 +542,7 @@ function App() {
     const previousDevelopmentAccount = selectedDevelopmentAccount;
     setSelectedDevelopmentAccount(login);
     setDevelopmentAccountLoading(true);
+    setAuthError(null);
     setError(null);
     cancelVisibleChecksRequests();
 
@@ -1382,6 +1404,12 @@ function App() {
       </header>
 
       <main className={`workspace ${viewMode}`}>
+        {authError && (
+          <div className="auth-error-banner" role="alert">
+            <strong>GitHub sign-in failed</strong>
+            <span>{authError}</span>
+          </div>
+        )}
         {viewMode === 'dashboard' && (
           <DashboardView
             dashboardMode={dashboardMode}

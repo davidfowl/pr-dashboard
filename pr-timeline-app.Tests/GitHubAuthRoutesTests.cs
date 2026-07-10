@@ -12,6 +12,38 @@ namespace pr_timeline_app.Tests;
 
 public sealed class GitHubAuthRoutesTests
 {
+    [Fact]
+    public void NormalizeOAuthFailureMessageUsesClearFallbackForEmptyFailure()
+    {
+        var message = GitHubServiceCollectionExtensions.NormalizeOAuthFailureMessage("   ");
+
+        Assert.Equal(
+            "GitHub sign-in failed. Your GitHub account or organization may not allow this OAuth app.",
+            message);
+    }
+
+    [Fact]
+    public void NormalizeOAuthFailureMessageTrimsLineEndingsAndTruncatesLongValues()
+    {
+        var message = GitHubServiceCollectionExtensions.NormalizeOAuthFailureMessage(
+            $"  GitHub denied access.{Environment.NewLine}{new string('x', 260)}  ");
+
+        Assert.Equal(240, message.Length);
+        Assert.DoesNotContain(Environment.NewLine, message);
+        Assert.StartsWith("GitHub denied access. ", message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("/?mode=ship#pr/test%2Frepo/123", "/?mode=ship&githubAuthError=GitHub%20denied%20access.#pr/test%2Frepo/123")]
+    [InlineData("/dashboard", "/dashboard?githubAuthError=GitHub%20denied%20access.")]
+    [InlineData("//evil.test/callback", "/?githubAuthError=GitHub%20denied%20access.")]
+    public void CreateOAuthFailureRedirectPathPreservesOnlyLocalReturnUrl(string? redirectUri, string expected)
+    {
+        var path = GitHubServiceCollectionExtensions.CreateOAuthFailureRedirectPath(redirectUri, "GitHub denied access.");
+
+        Assert.Equal(expected, path);
+    }
+
     [Theory]
     [InlineData("/api/github/dev/accounts")]
     [InlineData("/api/github/dev/account")]

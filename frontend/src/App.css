@@ -379,6 +379,28 @@ select:focus-visible {
   color: var(--muted);
 }
 
+.auth-error-banner {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, var(--border));
+  border-radius: var(--radius-lg);
+  padding: 0.8rem 0.9rem;
+  color: var(--text);
+  background: color-mix(in srgb, var(--danger) 15%, var(--panel));
+  box-shadow: var(--shadow);
+}
+
+.auth-error-banner strong {
+  flex: 0 0 auto;
+}
+
+.auth-error-banner span {
+  color: var(--muted);
+  line-height: 1.45;
+}
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(22rem, 0.75fr) minmax(0, 1.25fr);
@@ -2748,14 +2770,13 @@ select:focus-visible {
 
 .pull-card {
   width: 100%;
-  border: 1px solid var(--border);
+  border: 1px solid var(--review-state-color, var(--border));
   border-radius: 1rem;
   padding: 0.85rem;
   color: var(--text);
   background: var(--panel);
   cursor: pointer;
   text-align: left;
-  border-left: 3px solid var(--review-state-color, var(--accent));
 }
 
 .pull-card:hover,
@@ -3263,8 +3284,7 @@ select:focus-visible {
 }
 
 .developer-card {
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--developer-accent, var(--accent));
+  border: 1px solid color-mix(in srgb, var(--developer-accent, var(--accent)) 55%, var(--border));
   border-radius: 0.85rem;
   padding: 0.65rem;
   background: var(--surface-sunken);
@@ -3349,7 +3369,6 @@ img.avatar-dot {
 
 .checks-card {
   border: 1px solid var(--checks-color, var(--border));
-  border-left-width: 3px;
   border-radius: 0.9rem;
   padding: 0.8rem 0.9rem;
   background: var(--surface-sunken);
@@ -3442,7 +3461,6 @@ img.avatar-dot {
 
 .milestone-card {
   border: 1px solid var(--milestone-color, var(--border));
-  border-left-width: 3px;
   border-radius: 0.9rem;
   padding: 0.8rem 0.9rem;
   background: var(--surface-sunken);
@@ -4086,8 +4104,7 @@ img.avatar-dot {
     grid-template-columns: minmax(0, 1fr);
     gap: 0.45rem;
     align-items: start;
-    border: 1px solid var(--hairline);
-    border-left: 3px solid var(--attention-color, var(--border-strong));
+    border: 1px solid color-mix(in srgb, var(--attention-color, var(--border-strong)) 55%, var(--hairline));
     border-radius: var(--radius-lg);
     padding: 0.75rem;
     background: rgba(24, 21, 45, 0.5);

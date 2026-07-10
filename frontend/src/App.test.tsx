@@ -248,6 +248,20 @@ describe('App navigation', () => {
     await unmountApp(root);
   });
 
+  it('shows GitHub sign-in failures from the OAuth callback and clears the URL marker', async () => {
+    window.history.replaceState(null, '', '/?githubAuthError=Access%20was%20denied%20by%20the%20resource%20owner.');
+    vi.stubGlobal('fetch', createFetchMock());
+    const { root } = await renderApp();
+
+    await waitFor(() => {
+      expect(document.body.textContent).toContain('GitHub sign-in failed');
+      expect(document.body.textContent).toContain('Access was denied by the resource owner.');
+    });
+    expect(window.location.search).toBe('');
+
+    await unmountApp(root);
+  });
+
   it('uses live PR-list refresh without forcing visible checks', async () => {
     window.history.replaceState(null, '', '/');
     const fetchMock = createFetchMock({

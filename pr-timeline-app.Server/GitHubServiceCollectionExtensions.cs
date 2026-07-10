@@ -80,13 +80,16 @@ public static class GitHubServiceCollectionExtensions
                 };
                 options.Events.OnRemoteFailure = context =>
                 {
+                    var failureMessage = NormalizeOAuthFailureMessage(context.Failure?.Message);
                     context.HttpContext.RequestServices
                         .GetRequiredService<ILoggerFactory>()
                         .CreateLogger("GitHubOAuth")
                         .LogWarning(
                             "GitHub OAuth remote failure. FailureType={GitHubOAuthFailureType}, FailureMessage={GitHubOAuthFailureMessage}.",
                             context.Failure?.GetType().Name ?? "unknown",
-                            context.Failure?.Message ?? "");
+                            failureMessage);
+                    context.HandleResponse();
+                    context.Response.Redirect(CreateOAuthFailureRedirectPath(context.Properties?.RedirectUri, failureMessage));
                     return Task.CompletedTask;
                 };
             });
@@ -120,4 +123,32 @@ public static class GitHubServiceCollectionExtensions
             AllowAutoRedirect = false,
             MaxConnectionsPerServer = GitHubClient.MaxConcurrentGitHubRequests
         };
+
+    internal static string NormalizeOAuthFailureMessage(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return "GitHub sign-in failed. Your GitHub account or organization may not allow this OAuth app.";
+        }
+
+        var normalized = message.ReplaceLineEndings(" ").Trim();
+        return normalized.Length <= 240 ? normalized : normalized[..240];
+    }
+
+    internal static string CreateOAuthFailureRedirectPath(string? redirectUri, string failureMessage)
+    {
+        var path = IsLocalRedirectPath(redirectUri) ? redirectUri! : "/";
+        var hashIndex = path.IndexOf('#', StringComparison.Ordinal);
+        var hash = hashIndex >= 0 ? path[hashIndex..] : "";
+        var pathAndQuery = hashIndex >= 0 ? path[..hashIndex] : path;
+        var separator = pathAndQuery.Contains('?', StringComparison.Ordinal) ? "&" : "?";
+        return $"{pathAndQuery}{separator}githubAuthError={Uri.EscapeDataString(failureMessage)}{hash}";
+    }
+
+    private static bool IsLocalRedirectPath(string? redirectUri) =>
+        !string.IsNullOrWhiteSpace(redirectUri)
+        && Uri.TryCreate(redirectUri, UriKind.Relative, out _)
+        && redirectUri.StartsWith("/", StringComparison.Ordinal)
+        && !redirectUri.StartsWith("//", StringComparison.Ordinal)
+        && !redirectUri.Contains('\\', StringComparison.Ordinal);
 }
